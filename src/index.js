@@ -1426,13 +1426,122 @@ if (routeLayers.length > 0) {
                     // Add event listener to refresh 3D imagery when queries are added
                     console.log('🎯 Adding first tagQueryAdded event listener');
                     window.addEventListener('tagQueryAdded', function(event) {
-                        console.log('🎯 FIRST tagQueryAdded event fired:', event.detail);
-                        if (window.ol3d && window.ol3d.getEnabled()) {
-                            console.log('🎯 In 3D mode, checking for models...');
-                            refresh3DImagery();
-                        } else {
-                            console.log('🎯 Not in 3D mode yet');
-                        }
+                        // Defer model adding to ensure ol3d is ready
+                        setTimeout(() => {
+                            if (window.ol3d && window.ol3d.getEnabled()) {
+                                console.log('🎯 Manually adding 3D models to Cesium scene...');
+                                if (!window.ol3d) {
+                                    console.log('🎯 window.ol3d is null, cannot add models');
+                                    return;
+                                }
+                                // Add retry mechanism to wait for ol3d to be available
+                                let retryCount = 0;
+                                const maxRetries = 10;
+                                const retryDelay = 100;
+                                function addModels() {
+                                    if (window.ol3d && window.ol3d.getCesiumScene()) {
+                                        console.log('🎯 Adding 3D models to Cesium scene...');
+                                        const cesiumScene = window.ol3d.getCesiumScene();
+                                        if (cesiumScene && cesiumScene.primitives) {
+                                            // Clear any existing models first
+                                            const primitivesToRemove = [];
+                                            cesiumScene.primitives._primitives.forEach((primitive, idx) => {
+                                                if (primitive instanceof Cesium.Model) {
+                                                    primitivesToRemove.push(primitive);
+                                                }
+                                            });
+                                            primitivesToRemove.forEach(primitive => {
+                                                cesiumScene.primitives.remove(primitive);
+                                            });
+                                            console.log(`🎯 Cleared ${primitivesToRemove.length} existing models`);
+
+                                            // Manually add 3D models to Cesium scene
+                                            try {
+                                                // Enable depth testing against terrain (important for 3D models)
+                                                cesiumScene.globe.depthTestAgainstTerrain = true;
+                                                console.log('🎯 Enabled depth test against terrain');
+
+                                                // Add models for features with model properties
+                                                let modelsAdded = 0;
+                                                function addModelsFromLayer(layer) {
+                                                    if (layer.getSource && typeof layer.getSource === 'function' && layer.get && layer.get('id') && layer.get('id').startsWith('tag_')) {
+                                                        const source = layer.getSource();
+                                                        if (source && source.getFeatures) {
+                                                            const features = source.getFeatures();
+                                                            features.forEach((feature, fidx) => {
+                                                                const model = feature.get('model');
+                                                                if (model && typeof model === 'object' && model.uri) {
+                                                                    try {
+                                                                        const geometry = feature.getGeometry();
+                                                                        const coordinates = geometry.getCoordinates();
+                                                                        const lonLat = ol.proj.toLonLat(coordinates);
+                                                                        
+                                                                        // Create model matrix for positioning (from Stack Exchange approach)
+                                                                        const modelMatrix = Cesium.Transforms.eastNorthUpToFixedFrame(
+                                                                            Cesium.Cartesian3.fromDegrees(lonLat[0], lonLat[1], 0.0) // On ground level
+                                                                        );
+                                                                        
+                                                                        // Add the model using the working approach
+                                                                        const cesiumModel = cesiumScene.primitives.add(Cesium.Model.fromGltf({
+                                                                            url: model.uri, // Use 'url' as in Stack Exchange example
+                                                                            modelMatrix: modelMatrix,
+                                                                            scale: (model.scale || 1.0) * 10.0, // Make models visible
+                                                                            show: true
+                                                                        }));
+                                                                        
+                                                                        console.log(`🎯 Added GLTF model ${fidx} using Stack Exchange approach at:`, lonLat);
+                                                                        modelsAdded++;
+                                                                        
+                                                                        // Listen for loading
+                                                                        cesiumModel.readyPromise.then(function(model) {
+                                                                            console.log(`🎯 GLTF Model ${fidx} loaded successfully:`, model);
+                                                                        }).catch(function(error) {
+                                                                            console.error(`🎯 GLTF Model ${fidx} failed to load:`, error);
+                                                                        });
+                                                                        
+                                                                    } catch (modelError) {
+                                                                        console.error(`🎯 Error adding GLTF model ${fidx}:`, modelError);
+                                                                    }
+                                                                }
+                                                            });
+                                                        }
+                                                    }
+                                                    // Check group children
+                                                    else if (layer.getLayers && typeof layer.getLayers === 'function') {
+                                                        const childLayers = layer.getLayers().getArray();
+                                                        childLayers.forEach(childLayer => {
+                                                            addModelsFromLayer(childLayer);
+                                                        });
+                                                    }
+                                                }
+
+                                                const allLayers = window.map.getLayers().getArray();
+                                                allLayers.forEach(layer => {
+                                                    addModelsFromLayer(layer);
+                                                });
+
+                                                console.log(`🎯 Added ${modelsAdded} GLTF models using Stack Exchange approach`);
+                                            } catch (stackExchangeError) {
+                                                console.error('🎯 Error with Stack Exchange GLTF approach:', stackExchangeError);
+                                            }
+                                        } else {
+                                            console.log('🎯 Cesium scene not available for manual model addition');
+                                        }
+                                    } else {
+                                        retryCount++;
+                                        if (retryCount < maxRetries) {
+                                            console.log(`🎯 Waiting for ol3d to be available... (retry ${retryCount}/${maxRetries})`);
+                                            setTimeout(addModels, retryDelay);
+                                        } else {
+                                            console.log('🎯 Failed to add 3D models after max retries');
+                                        }
+                                    }
+                                }
+                                addModels();
+                            } else {
+                                console.log('🎯 Not in 3D mode yet');
+                            }
+                        }, 100); // Small delay to ensure ol3d is ready
                     });
                     console.log('🎯 First event listener added successfully');
 
@@ -1494,144 +1603,63 @@ if (routeLayers.length > 0) {
                 // Immediately check for existing features with models
                 console.log('🎯 Checking for existing features with models...');
                 const allLayers = window.map.getLayers().getArray();
-                console.log(`🎯 Total layers in map: ${allLayers.length}`);
-
-                // Recursive function to check layers including groups
-                function checkLayerForModels(layer, layerIndex, depth = 0) {
-                    const indent = '  '.repeat(depth);
-                    console.log(`${indent}🎯 Layer ${layerIndex}:`, {
-                        type: layer.get ? layer.get('type') : 'no type',
-                        title: layer.get ? layer.get('title') : 'no title',
-                        id: layer.get ? layer.get('id') : 'no id',
-                        hasGetSource: !!(layer.getSource && typeof layer.getSource === 'function'),
-                        layerType: layer.constructor.name
-                    });
-
-                    // Check if this is a tag-query vector layer
+                
+                // Function to recursively check layers including groups
+                function checkLayerForModels(layer) {
                     if (layer.getSource && typeof layer.getSource === 'function' && layer.get && layer.get('id') && layer.get('id').startsWith('tag_')) {
                         const source = layer.getSource();
                         if (source && source.getFeatures) {
                             const features = source.getFeatures();
-                            console.log(`${indent}🎯 Found tag-query vector layer with ${features.length} features`);
                             features.forEach((feature, fidx) => {
                                 const model = feature.get('model');
-                                console.log(`${indent}🎯 Feature ${fidx} model property:`, model);
-                                if (model) {
-                                    console.log(`${indent}🎯 Found feature ${fidx} with model:`, typeof model === 'object' ? model.uri : model);
-                                    console.log(`${indent}🎯 Feature geometry:`, feature.getGeometry().getType());
-                                    console.log(`${indent}🎯 Feature coordinates:`, feature.getGeometry().getCoordinates());
+                                if (model && typeof model === 'object' && model.uri) {
+                                    try {
+                                        const geometry = feature.getGeometry();
+                                        const coordinates = geometry.getCoordinates();
+                                        const lonLat = ol.proj.toLonLat(coordinates);
+                                        
+                                        // Create model matrix for positioning (from Stack Exchange approach)
+                                        const modelMatrix = Cesium.Transforms.eastNorthUpToFixedFrame(
+                                            Cesium.Cartesian3.fromDegrees(lonLat[0], lonLat[1], 0.0) // On ground level
+                                        );
+                                        
+                                        // Add the model using the working approach
+                                        const cesiumModel = scene.primitives.add(Cesium.Model.fromGltf({
+                                            url: model.uri, // Use 'url' as in Stack Exchange example
+                                            modelMatrix: modelMatrix,
+                                            scale: (model.scale || 1.0) * 10.0, // Make models visible
+                                            show: true
+                                        }));
+                                        
+                                        console.log(`🎯 Added GLTF model ${fidx} using Stack Exchange approach at:`, lonLat);
+                                        
+                                        // Listen for loading
+                                        cesiumModel.readyPromise.then(function(model) {
+                                            console.log(`🎯 GLTF Model ${fidx} loaded successfully:`, model);
+                                        }).catch(function(error) {
+                                            console.error(`🎯 GLTF Model ${fidx} failed to load:`, error);
+                                        });
+                                        
+                                    } catch (modelError) {
+                                        console.error(`🎯 Error adding GLTF model ${fidx}:`, modelError);
+                                    }
                                 }
                             });
                         }
                     }
-                    // If this is a group layer, check its children
+                    // Check group children
                     else if (layer.getLayers && typeof layer.getLayers === 'function') {
                         const childLayers = layer.getLayers().getArray();
-                        console.log(`${indent}🎯 Group layer with ${childLayers.length} children`);
-                        childLayers.forEach((childLayer, childIndex) => {
-                            checkLayerForModels(childLayer, `${layerIndex}.${childIndex}`, depth + 1);
+                        childLayers.forEach(childLayer => {
+                            checkLayerForModels(childLayer);
                         });
                     }
                 }
 
-                allLayers.forEach((layer, idx) => {
-                    checkLayerForModels(layer, idx);
+                allLayers.forEach(layer => {
+                    checkLayerForModels(layer);
                 });
 
-                // Manually add 3D models to Cesium scene
-                console.log('🎯 Manually adding 3D models to Cesium scene...');
-                if (!window.ol3d) {
-                    console.log('🎯 window.ol3d is null, cannot add models');
-                    return;
-                }
-                const cesiumScene = window.ol3d.getCesiumScene();
-                if (cesiumScene && cesiumScene.primitives) {
-                    // Clear any existing models first
-                    const primitivesToRemove = [];
-                    cesiumScene.primitives._primitives.forEach((primitive, idx) => {
-                        if (primitive instanceof Cesium.Model) {
-                            primitivesToRemove.push(primitive);
-                        }
-                    });
-                    primitivesToRemove.forEach(primitive => {
-                        cesiumScene.primitives.remove(primitive);
-                    });
-                    console.log(`🎯 Cleared ${primitivesToRemove.length} existing models`);
-
-                    // Manually add 3D models to Cesium scene
-                    try {
-                        // Enable depth testing against terrain (important for 3D models)
-                        cesiumScene.globe.depthTestAgainstTerrain = true;
-                        console.log('🎯 Enabled depth test against terrain');
-
-                        // Add models for features with model properties
-                        let modelsAdded = 0;
-                        function addModelsFromLayer(layer) {
-                            if (layer.getSource && typeof layer.getSource === 'function' && layer.get && layer.get('id') && layer.get('id').startsWith('tag_')) {
-                                const source = layer.getSource();
-                                if (source && source.getFeatures) {
-                                    const features = source.getFeatures();
-                                    features.forEach((feature, fidx) => {
-                                        const model = feature.get('model');
-                                        if (model && typeof model === 'object' && model.uri) {
-                                            try {
-                                                const geometry = feature.getGeometry();
-                                                const coordinates = geometry.getCoordinates();
-                                                const lonLat = ol.proj.toLonLat(coordinates);
-                                                
-                                                // Create model matrix for positioning (from Stack Exchange approach)
-                                                const modelMatrix = Cesium.Transforms.eastNorthUpToFixedFrame(
-                                                    Cesium.Cartesian3.fromDegrees(lonLat[0], lonLat[1], 0.0) // On ground level
-                                                );
-                                                
-                                                // Add the model using the working approach
-                                                const cesiumModel = cesiumScene.primitives.add(Cesium.Model.fromGltf({
-                                                    url: model.uri, // Use 'url' as in Stack Exchange example
-                                                    modelMatrix: modelMatrix,
-                                                    scale: (model.scale || 1.0) * 10.0, // Make models visible
-                                                    show: true
-                                                }));
-                                                
-                                                console.log(`🎯 Added GLTF model ${fidx} using Stack Exchange approach at:`, lonLat);
-                                                modelsAdded++;
-                                                
-                                                // Listen for loading
-                                                cesiumModel.readyPromise.then(function(model) {
-                                                    console.log(`🎯 GLTF Model ${fidx} loaded successfully:`, model);
-                                                }).catch(function(error) {
-                                                    console.error(`🎯 GLTF Model ${fidx} failed to load:`, error);
-                                                });
-                                                
-                                            } catch (modelError) {
-                                                console.error(`🎯 Error adding GLTF model ${fidx}:`, modelError);
-                                            }
-                                        }
-                                    });
-                                }
-                            }
-                            // Check group children
-                            else if (layer.getLayers && typeof layer.getLayers === 'function') {
-                                const childLayers = layer.getLayers().getArray();
-                                childLayers.forEach(childLayer => {
-                                    addModelsFromLayer(childLayer);
-                                });
-                            }
-                        }
-
-                        allLayers.forEach(layer => {
-                            addModelsFromLayer(layer);
-                        });
-
-                        console.log(`🎯 Added ${modelsAdded} GLTF models using Stack Exchange approach`);
-                    } catch (stackExchangeError) {
-                        console.error('🎯 Error with Stack Exchange GLTF approach:', stackExchangeError);
-                    }
-                } else {
-                    console.log('🎯 Cesium scene not available for manual model addition');
-                }
-                
-                console.log('3D mode enabled with synchronized layers');
-                
                 // Show return to 2D button
                 showReturnTo2DButton();
                 
