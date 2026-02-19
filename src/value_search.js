@@ -247,7 +247,16 @@ function processQueryResults(allFeatures, key, value) {
                     const modelConfig = window.models ? window.models.getModelConfig(modelFilename) : null;
 
                     // Set the model property for ol-cesium to use - use Cesium Model options object
-                    const modelUrl = `${window.location.origin}/models/${modelFilename}`;
+                    // Compute base path correctly for GitHub Pages (project repositories)
+                    let basePath = window.location.pathname;
+                    if (basePath.includes('.html')) {
+                        // Remove filename from path
+                        basePath = basePath.substring(0, basePath.lastIndexOf('/') + 1);
+                    } else if (!basePath.endsWith('/')) {
+                        // Ensure trailing slash
+                        basePath += '/';
+                    }
+                    const modelUrl = `${window.location.origin}${basePath}models/${modelFilename}`;
                     const modelOptions = {
                         uri: modelUrl,
                         scale: modelConfig ? modelConfig.scale : 1.0,
