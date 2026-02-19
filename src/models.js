@@ -19,7 +19,7 @@ const availableModels = [
 const modelMappings = {
     'natural=tree': 'tree.gltf',  // Tree model for natural=tree
     'natural=wood': 'test.gltf', // Could use forest model
-    'wikidata=Q782200': 'hotelarts.gltf', // Could use forest model
+    'wikidata=Q1425790': 'hotelarts.gltf', // Could use forest model
     // Add more mappings as needed
 };
 
