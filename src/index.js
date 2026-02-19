@@ -1444,7 +1444,7 @@ if (routeLayers.length > 0) {
                             console.log('🎯 Checking for features with 3D models in 3D mode...');
                             // Check all layers for features with models
                             window.map.getLayers().forEach(layer => {
-                                if (layer.get && layer.get('type') === 'tag-query' && layer.getSource && typeof layer.getSource === 'function') {
+                                if (layer.get && layer.get('type') === 'tag-query') {
                                     const source = layer.getSource();
                                     if (source && source.getFeatures) {
                                         const features = source.getFeatures();

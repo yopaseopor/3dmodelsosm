@@ -9,9 +9,7 @@ const availableModels = [
     'test.gltf',
     'test.bin',
     'tree.gltf',
-    'tree.bin',
-    'hotelarts.gltf',
-    'hotelarts.bin'
+    'tree.bin'
 ];
 
 // Model mapping for OSM tags
@@ -19,7 +17,6 @@ const availableModels = [
 const modelMappings = {
     'natural=tree': 'tree.gltf',  // Tree model for natural=tree
     'natural=wood': 'test.gltf', // Could use forest model
-    'wikidata=Q1425790': 'hotelarts.gltf', // Could use forest model
     // Add more mappings as needed
 };
 
@@ -31,11 +28,6 @@ const modelConfigs = {
         rotation: [0, 0, 0]
     },
     'tree.gltf': {
-        scale: 1.0,
-        heightOffset: 0.0,
-        rotation: [0, 0, 0]
-    },
-    'hotelarts.gltf': {
         scale: 1.0,
         heightOffset: 0.0,
         rotation: [0, 0, 0]
