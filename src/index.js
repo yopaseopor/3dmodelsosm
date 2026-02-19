@@ -1324,20 +1324,6 @@ if (routeLayers.length > 0) {
                         // Disable Cesium ion features that require authentication
                         Cesium.Ion.defaultAccessToken = null;
                         
-                        // Add terrain provider for 3D globe
-                        try {
-                            const terrainProvider = new Cesium.CesiumTerrainProvider({
-                                url: Cesium.IonResource.fromAssetId(1), // World Terrain
-                                requestVertexNormals: true
-                            });
-                            scene.terrainProvider = terrainProvider;
-                            console.log('🎯 Terrain provider enabled');
-                        } catch (terrainError) {
-                            console.warn('🎯 Terrain provider failed to load:', terrainError);
-                            // Fallback to default ellipsoid terrain
-                            scene.terrainProvider = new Cesium.EllipsoidTerrainProvider();
-                        }
-                        
                         // Add global error handling for tile loading issues (only if events exist)
                         if (scene.globe && scene.globe.tileLoadProgressEvent && scene.globe.tileLoadProgressEvent.addEventListener) {
                             scene.globe.tileLoadProgressEvent.addEventListener(function(queued, processing, ready) {
@@ -1360,10 +1346,8 @@ if (routeLayers.length > 0) {
                         const center = ol.proj.toLonLat(view.getCenter());
                         const zoom = view.getZoom();
                         
-                        // Convert OpenLayers zoom to Cesium height (much closer to ground)
-                        // Use a more reasonable height calculation for better model visibility
-                        const height = Math.max(500, Math.min(5000, 50000 / Math.pow(2, zoom)));
-                        console.log(`🎯 Camera height for zoom ${zoom}: ${height} meters`);
+                        // Convert OpenLayers zoom to Cesium height
+                        const height = 10000000 / Math.pow(1.5, zoom);
                         
                         // Set initial camera position
                         scene.camera.flyTo({
@@ -1501,7 +1485,7 @@ if (routeLayers.length > 0) {
                                                                         const cesiumModel = cesiumScene.primitives.add(Cesium.Model.fromGltf({
                                                                             url: model.uri, // Use 'url' as in Stack Exchange example
                                                                             modelMatrix: modelMatrix,
-                                                                            scale: (model.scale || 1.0) * 500.0, // Much larger scale for visibility
+                                                                            scale: (model.scale || 1.0) * 10.0, // Make models visible
                                                                             show: true
                                                                         }));
                                                                         
@@ -1643,7 +1627,7 @@ if (routeLayers.length > 0) {
                                         const cesiumModel = scene.primitives.add(Cesium.Model.fromGltf({
                                             url: model.uri, // Use 'url' as in Stack Exchange example
                                             modelMatrix: modelMatrix,
-                                            scale: (model.scale || 1.0) * 500.0, // Much larger scale for visibility
+                                            scale: (model.scale || 1.0) * 10.0, // Make models visible
                                             show: true
                                         }));
                                         
