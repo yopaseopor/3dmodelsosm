@@ -9,16 +9,13 @@ const availableModels = [
     'test.gltf',
     'test.bin',
     'tree.gltf',
-    'tree.bin',
-    'hotelarts.gltf',
-    'hotelarts.bin'
+    'tree.bin'
 ];
 
 // Model mapping for OSM tags
 // Maps OSM key=value pairs to 3D model filenames
 const modelMappings = {
     'natural=tree': 'tree.gltf',  // Tree model for natural=tree
-    'wikidata=Q1425790': 'test.gltf',  // Tree model for natural=tree
     'natural=wood': 'test.gltf', // Could use forest model
     // Add more mappings as needed
 };
@@ -26,11 +23,6 @@ const modelMappings = {
 // Model configurations (optional scaling, rotation, etc.)
 const modelConfigs = {
     'test.gltf': {
-        scale: 1.0,
-        heightOffset: 0.0,
-        rotation: [0, 0, 0]
-        },
-    'hotelarts.gltf': {
         scale: 1.0,
         heightOffset: 0.0,
         rotation: [0, 0, 0]
