@@ -380,7 +380,7 @@ query: '(nwr({{bbox}});<;);out meta;',
 /*   abrir */							{
     group: 'Test',
     title: 'geojson (z20)',
-geojson: './src/test.geojson',
+geojson: '/src/test.geojson',
     iconSrc: imgSrc + 'icones/maxspeed_empty.svg',
     iconStyle: 'background-color:rgba(255,255,255,0.4)',
     style: function (feature) {
@@ -585,7 +585,7 @@ geojson: './src/vng2.geojson',
 
    group: 'Test',
    title: 'all trees geojson',
-   geojson: './src/test.geojson',
+   geojson: '/src/test.geojson',
    iconSrc:'https://raw.githubusercontent.com/yopaseopor/beta_preset_josm/master/ES/traffic_signs/ES/ES_B1a.png',
    iconStyle: 'background-color:rgba(255,255,255,0.4)',
    style: function (feature) {
