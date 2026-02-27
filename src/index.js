@@ -1726,7 +1726,7 @@ if (routeLayers.length > 0) {
                                         const features = source.getFeatures();
                                         features.forEach((feature, fidx) => {
                                             const model = feature.model;
-                                            if (model && typeof model === 'object' && model.uri) {
+                                            if (model && typeof model === 'object' && model.uri && !model.uri.includes('undefined')) {
                                                 try {
                                                     const geometry = feature.getGeometry();
                                                     const extent = geometry.getExtent();
