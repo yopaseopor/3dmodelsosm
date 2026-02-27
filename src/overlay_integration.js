@@ -197,7 +197,7 @@ function assignModelToFeature(feature) {
         const modelConfig = window.models ? window.models.getModelConfig(modelFilename) : null;
 
         // Set the model property for ol-cesium to use - use Cesium Model options object
-        const modelUrl = `/3dmodelsosm/src/models/${modelFilename}`;
+        const modelUrl = `src/models/${modelFilename}`;
         const modelOptions = {
             uri: modelUrl,
             scale: modelConfig ? modelConfig.scale : 1.0,
@@ -348,7 +348,7 @@ function parseFeatureForModel(feature) {
     const modelFilename = window.models ? window.models.getModelForTags(tagsObj) : null;
     if (modelFilename) {
         const modelConfig = window.models ? window.models.getModelConfig(modelFilename) : null;
-        const modelUrl = `/3dmodelsosm/src/models/${modelFilename}`;
+        const modelUrl = `src/models/${modelFilename}`;
         return {
             uri: modelUrl,
             scale: modelConfig ? modelConfig.scale : 1.0,
