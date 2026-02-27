@@ -243,17 +243,18 @@ function processQueryResults(allFeatures, key, value) {
         });
 
         // Check if the tags match any model mapping
-        const modelFilename = window.models ? window.models.getModelForTags(tagsObj) : null;
-        if (modelFilename) {
-            // Get model configuration first
-            const modelConfig = window.models ? window.models.getModelConfig(modelFilename) : null;
+        const mapping = window.models ? window.models.getModelForTags(tagsObj) : null;
+        if (mapping) {
+            // Get model configuration from mapping
+            const modelFilename = mapping.model;
+            const modelConfig = mapping.config;
 
             // Set the model property for ol-cesium to use - use Cesium Model options object
-            const modelUrl = `${window.location.origin}/3dmodelsosm/models/${modelFilename}`;
+            const modelUrl = `./src/assets/models/${modelFilename}`;
             const modelOptions = {
                 uri: modelUrl,
                 scale: modelConfig ? modelConfig.scale : 1.0,
-                heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+                heightReference: Cesium.HeightReference.NONE,
                 // Add height offset by setting the position
                 // The height offset will be handled by the feature's geometry elevation
             };
@@ -263,11 +264,11 @@ function processQueryResults(allFeatures, key, value) {
             // Set additional model configuration for positioning
             if (modelConfig) {
                 // Add height offset so models appear above ground
-                feature.set('modelHeightOffset', modelConfig.heightOffset + 10); // Add 10 meters above ground
+                feature.set('modelHeightOffset', modelConfig.heightOffset);
                 feature.set('modelRotation', modelConfig.rotation);
             } else {
                 // Default height offset if no config
-                feature.set('modelHeightOffset', 10);
+                feature.set('modelHeightOffset', 0);
             }
 
             console.log(`🎯 SUCCESS: Assigned 3D model ${modelFilename} (${modelUrl}) to feature with tags:`, tagsObj);

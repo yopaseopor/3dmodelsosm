@@ -491,7 +491,7 @@ $(function () {
 									const modelConfig = window.models ? window.models.getModelConfig(modelFilename) : null;
 
 									// Set the model property for ol-cesium to use - use Cesium Model options object
-									const modelUrl = `${window.location.origin}/src/assets/models/${modelFilename}`;
+									const modelUrl = `./src/assets/models/${modelFilename}`;
 									const modelOptions = {
 										uri: modelUrl,
 										scale: modelConfig ? modelConfig.scale : 1.0,
@@ -1647,9 +1647,10 @@ if (routeLayers.length > 0) {
                                         });
 
                                         // Check if the tags match any model mapping
-                                        const modelFilename = window.models ? window.models.getModelForTags(tagsObj) : null;
-                                        if (modelFilename) {
-                                            const modelConfig = window.models ? window.models.getModelConfig(modelFilename) : null;
+                                        const mapping = window.models ? window.models.getModelForTags(tagsObj) : null;
+                                        if (mapping) {
+                                            const modelFilename = mapping.model;
+                                            const modelConfig = mapping.config;
                                             const modelUrl = `/src/models/${modelFilename}`;
                                             const modelOptions = {
                                                 uri: modelUrl,
