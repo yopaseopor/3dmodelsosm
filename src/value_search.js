@@ -245,6 +245,9 @@ function processQueryResults(allFeatures, key, value) {
         // Check if the tags match any model mapping
         const modelFilename = window.models ? window.models.getModelForTags(tagsObj) : null;
         if (modelFilename) {
+            // Clear any existing model property first
+            feature.unset('model');
+
             // Get model configuration from mapping
             const modelConfig = window.models ? window.models.getModelConfig(modelFilename) : null;
 
