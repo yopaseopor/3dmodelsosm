@@ -469,6 +469,57 @@ $(function () {
 					featureProjection: map.getView().getProjection()
 				});
 							me.addFeatures(features);
+
+							// Assign 3D models to features based on OSM tags
+							console.log(`🎯 Processing ${features.length} overlay features for model assignment`);
+							features.forEach((feature, index) => {
+								const properties = feature.getProperties();
+								const osmTags = Object.keys(properties).filter(prop =>
+									!['geometry', 'id', 'type', 'originalType', 'fixedGeometry', 'members', 'memberOf', 'member', 'membership', 'role', 'version', 'timestamp', 'changeset', 'user', 'uid', 'visible'].includes(prop)
+								);
+
+								// Collect all OSM tags into an object
+								const tagsObj = {};
+								osmTags.forEach(tag => {
+									tagsObj[tag] = properties[tag];
+								});
+
+								// Check if the tags match any model mapping
+								const modelFilename = window.models ? window.models.getModelForTags(tagsObj) : null;
+								if (modelFilename) {
+									// Get model configuration first
+									const modelConfig = window.models ? window.models.getModelConfig(modelFilename) : null;
+
+									// Set the model property for ol-cesium to use - use Cesium Model options object
+									const modelUrl = `${window.location.origin}/src/assets/models/${modelFilename}`;
+									const modelOptions = {
+										uri: modelUrl,
+										scale: modelConfig ? modelConfig.scale : 1.0,
+										heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+									};
+
+									feature.set('model', modelOptions);
+
+									// Set additional model configuration for positioning
+									if (modelConfig) {
+										// Add height offset so models appear above ground
+										feature.set('modelHeightOffset', modelConfig.heightOffset + 10); // Add 10 meters above ground
+										feature.set('modelRotation', modelConfig.rotation);
+									} else {
+										// Default height offset if no config
+										feature.set('modelHeightOffset', 10);
+									}
+
+									console.log(`🎯 SUCCESS: Assigned 3D model ${modelFilename} to overlay feature with tags:`, tagsObj);
+								} else {
+									if (osmTags.length > 0) {
+										console.log(`❌ No model assigned to overlay feature ${index + 1} with tags:`, osmTags);
+									}
+								}
+							});
+
+							// Dispatch event to trigger global summary update
+							window.dispatchEvent(new CustomEvent('overlayFeaturesLoaded'));
 						}
 					} else {
 						client.onerror.call(this);
@@ -1197,7 +1248,7 @@ if (routeLayers.length > 0) {
                         const scene = ol3d.getCesiumScene();
                         
                         // Configure scene
-                        scene.globe.enableLighting = true;
+                        scene.globe.enableLighting = false;
                         scene.globe.depthTestAgainstTerrain = false; // Disable terrain depth test for better performance
                        
                         // Restore any route layers that were hidden for initialization
@@ -1347,7 +1398,7 @@ if (routeLayers.length > 0) {
                         const zoom = view.getZoom();
                         
                         // Convert OpenLayers zoom to Cesium height
-                        const height = 10000000 / Math.pow(1.5, zoom);
+                        const height = 2000; // Fixed height for better visibility
                         
                         // Set initial camera position
                         scene.camera.flyTo({
@@ -1444,22 +1495,26 @@ if (routeLayers.length > 0) {
                             console.log('🎯 Checking for features with 3D models in 3D mode...');
                             // Check all layers for features with models
                             window.map.getLayers().forEach(layer => {
-                                if (layer.get && layer.get('type') === 'tag-query') {
-                                    const source = layer.getSource();
-                                    if (source && source.getFeatures) {
-                                        const features = source.getFeatures();
-                                        console.log(`🎯 Found ${features.length} features in tag-query layer`);
-                                        features.forEach((feature, idx) => {
-                                            const model = feature.get('model');
-                                            if (model) {
-                                                console.log(`🎯 Found feature ${idx} with model: ${model}`);
-                                                console.log(`🎯 Feature geometry:`, feature.getGeometry().getType());
-                                                console.log(`🎯 Feature coordinates:`, feature.getGeometry().getCoordinates());
-                                                console.log(`🎯 Model scale:`, feature.get('modelScale'));
-                                                console.log(`🎯 Model height offset:`, feature.get('modelHeightOffset'));
-                                                console.log(`🎯 Model rotation:`, feature.get('modelRotation'));
-                                            }
-                                        });
+                                if (layer.get && (layer.get('id') && layer.get('id').startsWith('tag_') || layer.get('type') === 'overlay')) {
+                                    try {
+                                        const source = layer.getSource();
+                                        if (source && source.getFeatures) {
+                                            const features = source.getFeatures();
+                                            console.log(`🎯 Found ${features.length} features in ${layer.get('type')} layer`);
+                                            features.forEach((feature, idx) => {
+                                                const model = feature.model;
+                                                if (model) {
+                                                    console.log(`🎯 Found feature ${idx} with model: ${model}`);
+                                                    console.log(`🎯 Feature geometry:`, feature.getGeometry().getType());
+                                                    console.log(`🎯 Feature coordinates:`, feature.getGeometry().getCoordinates());
+                                                    console.log(`🎯 Model scale:`, feature.get('modelScale'));
+                                                    console.log(`🎯 Model height offset:`, feature.get('modelHeightOffset'));
+                                                    console.log(`🎯 Model rotation:`, feature.get('modelRotation'));
+                                                }
+                                            });
+                                        }
+                                    } catch (e) {
+                                        console.log('Error accessing source for layer:', e);
                                     }
                                 }
                             });
@@ -1491,51 +1546,147 @@ if (routeLayers.length > 0) {
                 }
                 console.log('🎯 Event listeners setup complete');
 
-                // Immediately check for existing features with models
-                console.log('🎯 Checking for existing features with models...');
-                const allLayers = window.map.getLayers().getArray();
-                console.log(`🎯 Total layers in map: ${allLayers.length}`);
+                // Add listener for overlay features loaded to add models in 3D
+                window.addEventListener('overlayFeaturesLoaded', () => {
+                    if (window.is3d && window.ol3d) {
+                        console.log('🎯 Overlay features loaded in 3D mode, adding models...');
+                        const cesiumScene = window.ol3d.getCesiumScene();
+                        if (cesiumScene && cesiumScene.primitives) {
+                            // Enable depth testing
+                            cesiumScene.globe.depthTestAgainstTerrain = true;
+                            console.log('🎯 Enabled depth test against terrain for overlays');
 
-                // Recursive function to check layers including groups
-                function checkLayerForModels(layer, layerIndex, depth = 0) {
-                    const indent = '  '.repeat(depth);
-                    console.log(`${indent}🎯 Layer ${layerIndex}:`, {
-                        type: layer.get ? layer.get('type') : 'no type',
-                        title: layer.get ? layer.get('title') : 'no title',
-                        id: layer.get ? layer.get('id') : 'no id',
-                        hasGetSource: !!(layer.getSource && typeof layer.getSource === 'function'),
-                        layerType: layer.constructor.name
-                    });
+                            let modelsAdded = 0;
+                            function addModelsFromLayer(layer) {
+                                if (layer.getSource && typeof layer.getSource === 'function') {
+                                    try {
+                                        const source = layer.getSource();
+                                        if (source && source.getFeatures) {
+                                            const features = source.getFeatures();
+                                            features.forEach((feature, fidx) => {
+                                                const model = feature.model;
+                                                if (model && typeof model === 'object' && model.uri) {
+                                                    try {
+                                                        const geometry = feature.getGeometry();
+                                                        const extent = geometry.getExtent();
+                                                        const center = ol.extent.getCenter(extent);
+                                                        const lonLat = ol.proj.toLonLat(center);
 
-                    // Check if this is a tag-query vector layer
-                    if (layer.getSource && typeof layer.getSource === 'function' && layer.get && layer.get('id') && layer.get('id').startsWith('tag_')) {
-                        const source = layer.getSource();
-                        if (source && source.getFeatures) {
-                            const features = source.getFeatures();
-                            console.log(`${indent}🎯 Found tag-query vector layer with ${features.length} features`);
-                            features.forEach((feature, fidx) => {
-                                const model = feature.get('model');
-                                console.log(`${indent}🎯 Feature ${fidx} model property:`, model);
-                                if (model) {
-                                    console.log(`${indent}🎯 Found feature ${fidx} with model:`, typeof model === 'object' ? model.uri : model);
-                                    console.log(`${indent}🎯 Feature geometry:`, feature.getGeometry().getType());
-                                    console.log(`${indent}🎯 Feature coordinates:`, feature.getGeometry().getCoordinates());
+                                                        // Create model matrix for positioning
+                                                        const modelMatrix = Cesium.Transforms.eastNorthUpToFixedFrame(
+                                                            Cesium.Cartesian3.fromDegrees(lonLat[0], lonLat[1], 0.0)
+                                                        );
+
+                                                        // Add the model
+                                                        const cesiumModel = cesiumScene.primitives.add(Cesium.Model.fromGltf({
+                                                            url: model.uri,
+                                                            modelMatrix: modelMatrix,
+                                                            scale: (model.scale || 1.0) * 10.0,
+                                                            show: true
+                                                        }));
+
+                                                        console.log(`🎯 Added GLTF model ${fidx} from overlay at:`, lonLat);
+                                                        modelsAdded++;
+
+                                                        // Listen for loading
+                                                        cesiumModel.readyPromise.then(function(model) {
+                                                            console.log(`🎯 GLTF Model ${fidx} loaded successfully:`, model);
+                                                        }).catch(function(error) {
+                                                            console.error(`🎯 GLTF Model ${fidx} failed to load:`, error);
+                                                        });
+
+                                                    } catch (modelError) {
+                                                        console.error(`🎯 Error adding GLTF model ${fidx}:`, modelError);
+                                                    }
+                                                }
+                                            });
+                                        }
+                                    } catch (e) {
+                                        console.log('Error accessing layer source in addModelsFromLayer:', e);
+                                    }
                                 }
+                                // Check group children recursively
+                                else if (layer.getLayers && typeof layer.getLayers === 'function') {
+                                    const childLayers = layer.getLayers().getArray();
+                                    childLayers.forEach(childLayer => {
+                                        addModelsFromLayer(childLayer);
+                                    });
+                                }
+                            }
+
+                            const allLayers = window.map.getLayers().getArray();
+                            allLayers.forEach(layer => {
+                                addModelsFromLayer(layer);
                             });
+                            console.log(`🎯 Added ${modelsAdded} models from overlays`);
                         }
                     }
-                    // If this is a group layer, check its children
+                });
+
+                // Check layers for existing features and assign models if needed
+                console.log('🎯 Checking for existing features and assigning models...');
+                function assignModelsToExistingFeatures(layer) {
+                    if (layer.getSource && typeof layer.getSource === 'function') {
+                        try {
+                            const source = layer.getSource();
+                            if (source && source.getFeatures) {
+                                const features = source.getFeatures();
+                                let modelsAssigned = 0;
+                                features.forEach(feature => {
+                                    if (!feature.model) { // Only assign if no model already
+                                        // Try to assign model based on properties
+                                        const properties = feature.getProperties();
+                                        const osmTags = Object.keys(properties).filter(prop =>
+                                            !['geometry', 'id', 'type', 'originalType', 'fixedGeometry', 'members', 'memberOf', 'member', 'membership', 'role', 'version', 'timestamp', 'changeset', 'user', 'uid', 'visible'].includes(prop)
+                                        );
+
+                                        // Collect all OSM tags into an object
+                                        const tagsObj = {};
+                                        osmTags.forEach(tag => {
+                                            tagsObj[tag] = properties[tag];
+                                        });
+
+                                        // Check if the tags match any model mapping
+                                        const modelFilename = window.models ? window.models.getModelForTags(tagsObj) : null;
+                                        if (modelFilename) {
+                                            const modelConfig = window.models ? window.models.getModelConfig(modelFilename) : null;
+                                            const modelUrl = `/src/models/${modelFilename}`;
+                                            const modelOptions = {
+                                                uri: modelUrl,
+                                                scale: modelConfig ? modelConfig.scale : 1.0,
+                                                heightReference: Cesium.HeightReference.NONE,
+                                            };
+                                            feature.model = modelOptions;
+                                            if (modelConfig) {
+                                                feature.set('modelHeightOffset', modelConfig.heightOffset);
+                                                feature.set('modelRotation', modelConfig.rotation);
+                                            } else {
+                                                feature.set('modelHeightOffset', 0);
+                                            }
+                                            modelsAssigned++;
+                                            console.log(`🎯 Assigned model ${modelFilename} to existing feature with tags:`, tagsObj);
+                                        }
+                                    }
+                                });
+                                if (modelsAssigned > 0) {
+                                    console.log(`🎯 Assigned models to ${modelsAssigned} existing features in layer`);
+                                }
+                            }
+                        } catch (e) {
+                            console.log('Error assigning models to existing features:', e.message);
+                        }
+                    }
+                    // Check group children recursively
                     else if (layer.getLayers && typeof layer.getLayers === 'function') {
                         const childLayers = layer.getLayers().getArray();
-                        console.log(`${indent}🎯 Group layer with ${childLayers.length} children`);
-                        childLayers.forEach((childLayer, childIndex) => {
-                            checkLayerForModels(childLayer, `${layerIndex}.${childIndex}`, depth + 1);
+                        childLayers.forEach(childLayer => {
+                            assignModelsToExistingFeatures(childLayer);
                         });
                     }
                 }
 
-                allLayers.forEach((layer, idx) => {
-                    checkLayerForModels(layer, idx);
+                window.map.getLayers().getArray().forEach(layer => {
+                    assignModelsToExistingFeatures(layer);
                 });
 
                 // Manually add 3D models to Cesium scene
@@ -1567,49 +1718,58 @@ if (routeLayers.length > 0) {
                         // Add models for features with model properties
                         let modelsAdded = 0;
                         function addModelsFromLayer(layer) {
-                            if (layer.getSource && typeof layer.getSource === 'function' && layer.get && layer.get('id') && layer.get('id').startsWith('tag_')) {
-                                const source = layer.getSource();
-                                if (source && source.getFeatures) {
-                                    const features = source.getFeatures();
-                                    features.forEach((feature, fidx) => {
-                                        const model = feature.get('model');
-                                        if (model && typeof model === 'object' && model.uri) {
-                                            try {
-                                                const geometry = feature.getGeometry();
-                                                const coordinates = geometry.getCoordinates();
-                                                const lonLat = ol.proj.toLonLat(coordinates);
-                                                
-                                                // Create model matrix for positioning (from Stack Exchange approach)
-                                                const modelMatrix = Cesium.Transforms.eastNorthUpToFixedFrame(
-                                                    Cesium.Cartesian3.fromDegrees(lonLat[0], lonLat[1], 0.0) // On ground level
-                                                );
-                                                
-                                                // Add the model using the working approach
-                                                const cesiumModel = cesiumScene.primitives.add(Cesium.Model.fromGltf({
-                                                    url: model.uri, // Use 'url' as in Stack Exchange example
-                                                    modelMatrix: modelMatrix,
-                                                    scale: (model.scale || 1.0) * 10.0, // Make models visible
-                                                    show: true
-                                                }));
-                                                
-                                                console.log(`🎯 Added GLTF model ${fidx} using Stack Exchange approach at:`, lonLat);
-                                                modelsAdded++;
-                                                
-                                                // Listen for loading
-                                                cesiumModel.readyPromise.then(function(model) {
-                                                    console.log(`🎯 GLTF Model ${fidx} loaded successfully:`, model);
-                                                }).catch(function(error) {
-                                                    console.error(`🎯 GLTF Model ${fidx} failed to load:`, error);
-                                                });
-                                                
-                                            } catch (modelError) {
-                                                console.error(`🎯 Error adding GLTF model ${fidx}:`, modelError);
+                            if (layer.getSource && typeof layer.getSource === 'function') {
+                                try {
+                                    const source = layer.getSource();
+                                    if (source && source.getFeatures) {
+                                        const features = source.getFeatures();
+                                        features.forEach((feature, fidx) => {
+                                            const model = feature.model;
+                                            if (model && typeof model === 'object' && model.uri) {
+                                                try {
+                                                    const geometry = feature.getGeometry();
+                                                    const extent = geometry.getExtent();
+                                                    const center = ol.extent.getCenter(extent);
+                                                    const lonLat = ol.proj.toLonLat(center);
+                                                    
+                                                    // Create model matrix for positioning (improved for buildings)
+                                                    const heightOffset = feature.get('modelHeightOffset') || 0.0;
+                                                    const modelMatrix = Cesium.Transforms.eastNorthUpToFixedFrame(
+                                                        Cesium.Cartesian3.fromDegrees(lonLat[0], lonLat[1], heightOffset)
+                                                    );
+                                                    
+                                                    console.log(`🎯 Model url: ${model.uri}`);
+                                                    const cesiumModel = cesiumScene.primitives.add(Cesium.Model.fromGltf({
+                                                        url: model.uri, // Use 'url' as in Stack Exchange example
+                                                        modelMatrix: modelMatrix,
+                                                        scale: model.scale || 1.0, // Use model's scale or default to 1.0
+                                                        show: true
+                                                    }));
+                                                    
+                                                    // Set height reference to clamp to ground
+                                                    cesiumModel.heightReference = model.heightReference;
+                                                    
+                                                    console.log(`🎯 Added GLTF model ${fidx} using Stack Exchange approach at:`, lonLat);
+                                                    modelsAdded++;
+                                                    
+                                                    // Listen for loading
+                                                    cesiumModel.readyPromise.then(function(model) {
+                                                        console.log(`🎯 GLTF Model ${fidx} loaded successfully:`, model);
+                                                    }).catch(function(error) {
+                                                        console.error(`🎯 GLTF Model ${fidx} failed to load:`, error);
+                                                    });
+                                                    
+                                                } catch (modelError) {
+                                                    console.error(`🎯 Error adding GLTF model ${fidx}:`, modelError);
+                                                }
                                             }
-                                        }
-                                    });
+                                        });
+                                    }
+                                } catch (e) {
+                                    console.log('Error accessing layer source in addModelsFromLayer:', e);
                                 }
                             }
-                            // Check group children
+                            // Check group children recursively
                             else if (layer.getLayers && typeof layer.getLayers === 'function') {
                                 const childLayers = layer.getLayers().getArray();
                                 childLayers.forEach(childLayer => {
@@ -1618,7 +1778,7 @@ if (routeLayers.length > 0) {
                             }
                         }
 
-                        allLayers.forEach(layer => {
+                        window.map.getLayers().getArray().forEach(layer => {
                             addModelsFromLayer(layer);
                         });
 
@@ -1642,7 +1802,7 @@ if (routeLayers.length > 0) {
                 const view = map.getView();
                 const center = ol.proj.toLonLat(view.getCenter());
                 const zoom = view.getZoom();
-                const height = 10000000 / Math.pow(1.5, zoom);
+                const height = 500; // Reduced from 2000m to 500m for better building visibility
                 
                 scene.camera.flyTo({
                     destination: Cesium.Cartesian3.fromDegrees(
@@ -1677,6 +1837,9 @@ if (routeLayers.length > 0) {
                 // IMPORTANT: Update the is3d state to false
                 is3d = false;
                 console.log('Updated is3d state to false');
+                
+                // Reset initialization flag to allow reinitialization on next 3D toggle
+                cesiumInitialized = false;
                 
                 // Comprehensive cleanup of ol-cesium to prevent SynchronizedOverlay errors
                 if (window.ol3d) {

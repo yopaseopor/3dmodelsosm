@@ -1,13 +1,9 @@
-import { setLanguage, getCurrentLanguage } from './i18n/index.js';
-import config from './config.js';
-import { overlayConfig } from './config_overlay.js';
-import './overlay_integration.js';
+// Initialize configuration (config.js is loaded as a script)
+// import config from './config.js';
+// import { overlayConfig } from './config_overlay.js';
 
-// Initialize configuration
-window.config = config;
-
-// Initialize overlays
-window.config.overlays = overlayConfig.overlays;
+// Initialize overlays (overlayConfig is loaded as a script)
+// window.config.overlays = overlayConfig.overlays;
 
 // Function to parse and load shared URLs
 function loadSharedUrl() {

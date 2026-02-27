@@ -7,21 +7,40 @@
 const availableModels = [
     'Untitled.glb',
     'test.gltf',
-    'test.bin',
-    'tree.gltf',
-    'tree.bin',
-    'hotelarts.gltf',
-    'hotelarts.bin'
+    'w_amenity_bicycle_parking.glb',
+    'w_highway_street_lamp',
+    'w_highway_street_lamp_straight_mast.glb',
+    'w_highway_traffic_signals.glb',
+    'w_natural_tree.glb',
+    'ES_CAT_BCN_casa_batllo.glb',
+    'ES_CAT_BCN_casa_mila.glb',
+   'ES_CAT_BCN_hotel_arts.glb',
+   'ES_CAT_BCN_sagrada_familia.glb',
+    'ES_CAT_BCN_torre_glories.glb',
+    'ES_CAT_BCN_torre_mapfre.glb'
 ];
 
-// Model mapping for OSM tags
-// Maps OSM key=value pairs to 3D model filenames
-const modelMappings = {
-    'natural=tree': 'tree.gltf',  // Tree model for natural=tree
-    'wikidata=Q1425790': 'test.gltf',  // Tree model for natural=tree
-    'natural=wood': 'test.gltf', // Could use forest model
+// Model mapping for OSM tags (array of objects to support multiple tags per mapping) - Maps arrays of OSM key=value pairs to 3D model filenames
+const modelMappings = [
+    { tags: ['amenity=bicycle_parking'], model: 'w_amenity_bicycle_parking.glb' },  // Bicycle parking model for amenity=bicycle_parking
+    { tags: ['highway=street_lamp', 'lamp_mount=straight_mast'], model: 'w_highway_street_lamp_straight_mast.glb' },
+    { tags: ['highway=street_lamp'], model: 'w_highway_street_lamp.glb' },  // Street lamp model for highway=street_lamp
+    { tags: ['highway=traffic_signals'], model: 'w_highway_traffic_signals.glb' },  // Traffic signals model for highway=traffic_signals
+    { tags: ['natural=tree'], model: 'w_natural_tree.glb' },  // Tree model for natural=tree
+    { tags: ['natural=wood'], model: 'test.gltf' }, // Could use forest model
+    { tags: ['wikidata=Q575953'], model: 'ES_CAT_BCN_casa_batllo.glb' }, // Casa Batlló
+    { tags: ['wikidata=Q207870'], model: 'ES_CAT_BCN_casa_mila.glb' }, // Casa Mila
+    { tags: ['wikidata=Q1425790'], model: 'ES_CAT_BCN_hotel_arts.glb' }, // Hotel Arts Barcelona model
+    { tags: ['wikidata=Q336246'], model: 'ES_CAT_BCN_torre_glories.glb' }, // Glories model
+    { tags: ['wikidata=Q2689231'], model: 'ES_CAT_BCN_torre_mapfre.glb' }, // Mapfre tower
+    { tags: ['wikidata=Q48435'], model: 'ES_CAT_BCN_sagrada_familia.glb' }, // Sagrada Familia Barcelona
+    { tags: ['name=La Pedrera'], model: 'ES_CAT_BCN_casa_mila.glb' }, // Casa Milà by name
+    { tags: ['name=Casa Batlló'], model: 'ES_CAT_BCN_casa_batllo.glb' }, // Casa Batlló by name
+    { tags: ['name=Torre Mapfre'], model: 'ES_CAT_BCN_torre_mapfre.glb' }, // Torre Mapfre by name
+    // Example mapping with two tags: requires both natural=tree and leaf_type=broadleaved
+    
     // Add more mappings as needed
-};
+];
 
 // Model configurations (optional scaling, rotation, etc.)
 const modelConfigs = {
@@ -29,13 +48,28 @@ const modelConfigs = {
         scale: 1.0,
         heightOffset: 0.0,
         rotation: [0, 0, 0]
-        },
-    'hotelarts.gltf': {
+     },
+    'w_amenity_bicycle_parking.glb': {
         scale: 1.0,
         heightOffset: 0.0,
         rotation: [0, 0, 0]
     },
-    'tree.gltf': {
+    'w_highway_street_lamp.glb': {
+        scale: 1.0,
+        heightOffset: 0.0,
+        rotation: [0, 0, 0]
+    },
+    'w_highway_street_lamp_straight_mast.glb': {
+        scale: 1.0,
+        heightOffset: 0.0,
+        rotation: [0, 0, 0]
+     },
+    'w_highway_traffic_signals.glb': {
+        scale: 1.0,
+        heightOffset: 0.0,
+        rotation: [0, 0, 0]
+    },
+    'w_natural_tree.glb': {
         scale: 1.0,
         heightOffset: 0.0,
         rotation: [0, 0, 0]
@@ -44,20 +78,57 @@ const modelConfigs = {
         scale: 1.0,
         heightOffset: 0.0,
         rotation: [0, 0, 0]
+    },
+    'ES_CAT_BCN_casa_batllo.glb': {
+        scale: 1.0,
+        heightOffset: 0.0,
+        rotation: [0, 0, 0]
+    },
+    'ES_CAT_BCN_casa_mila.glb': {
+        scale: 1.0,
+        heightOffset: 0.0,
+        rotation: [0, 0, 0]
+    },
+    'ES_CAT_BCN_hotel_arts.glb': {
+        scale: 1.0,
+        heightOffset: 0.0,
+        rotation: [0, 0, 0]
+    },
+    'ES_CAT_BCN_sagrada_familia.glb': {
+        scale: 1.0,
+        heightOffset: 0.0,
+        rotation: [0, 0, 0]
+    },
+    'ES_CAT_BCN_torre_glories.glb': {
+        scale: 1.0,
+        heightOffset: 0.0,
+        rotation: [0, 0, 0]
+    },
+    'ES_CAT_BCN_torre_mapfre.glb': {
+        scale: 1.0,
+        heightOffset: 0.0,
+        rotation: [0, 0, 0]
     }
 };
 
 /**
- * Get the model filename for a given OSM tag combination
- * @param {string} key - OSM key
- * @param {string} value - OSM value
+ * Get the model filename for a given set of OSM tags
+ * @param {object} tags - Object with OSM key-value pairs
  * @returns {string|null} Model filename or null if no mapping exists
  */
-function getModelForTag(key, value) {
-    const tagCombination = `${key}=${value}`;
-    const model = modelMappings[tagCombination] || null;
-    console.log(`🔍 Checking model for tag ${tagCombination}: ${model ? 'Found ' + model : 'No mapping found'}`);
-    return model;
+function getModelForTags(tags) {
+    for (const mapping of modelMappings) {
+        const allMatch = mapping.tags.every(tag => {
+            const [key, value] = tag.split('=');
+            return tags[key] === value;
+        });
+        if (allMatch) {
+            console.log(`🔍 Found matching model ${mapping.model} for tags:`, mapping.tags);
+            return mapping.model;
+        }
+    }
+    console.log(`🔍 No model mapping found for tags:`, tags);
+    return null;
 }
 
 /**
@@ -91,7 +162,7 @@ window.models = {
     availableModels,
     modelMappings,
     modelConfigs,
-    getModelForTag,
+    getModelForTags,
     getModelConfig,
     modelExists
 };

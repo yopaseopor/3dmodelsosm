@@ -236,51 +236,49 @@ function processQueryResults(allFeatures, key, value) {
             console.log(`🔍 Feature ${index + 1} full properties:`, properties);
         }
 
-        // Check each property to see if it matches a model mapping
-        let modelAssigned = false;
-        for (const prop in properties) {
-            if (properties.hasOwnProperty(prop) && !['geometry', 'id', 'type', 'originalType', 'fixedGeometry', 'members', 'memberOf', 'member', 'membership', 'role', 'version', 'timestamp', 'changeset', 'user', 'uid', 'visible'].includes(prop)) {
-                console.log(`🔍 Checking property ${prop} = ${properties[prop]}`);
-                const modelFilename = window.models ? window.models.getModelForTag(prop, properties[prop]) : null;
-                if (modelFilename) {
-                    // Get model configuration first
-                    const modelConfig = window.models ? window.models.getModelConfig(modelFilename) : null;
+        // Collect all OSM tags into an object
+        const tagsObj = {};
+        osmTags.forEach(tag => {
+            tagsObj[tag] = properties[tag];
+        });
 
-                    // Set the model property for ol-cesium to use - use Cesium Model options object
-                    const modelUrl = `${window.location.origin}/3dmodelsosm/models/${modelFilename}`;
-                    const modelOptions = {
-                        uri: modelUrl,
-                        scale: modelConfig ? modelConfig.scale : 1.0,
-                        heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
-                        // Add height offset by setting the position
-                        // The height offset will be handled by the feature's geometry elevation
-                    };
+        // Check if the tags match any model mapping
+        const modelFilename = window.models ? window.models.getModelForTags(tagsObj) : null;
+        if (modelFilename) {
+            // Get model configuration first
+            const modelConfig = window.models ? window.models.getModelConfig(modelFilename) : null;
 
-                    feature.set('model', modelOptions);
+            // Set the model property for ol-cesium to use - use Cesium Model options object
+            const modelUrl = `${window.location.origin}/src/assets/models/${modelFilename}`;
+            const modelOptions = {
+                uri: modelUrl,
+                scale: modelConfig ? modelConfig.scale : 1.0,
+                heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+                // Add height offset by setting the position
+                // The height offset will be handled by the feature's geometry elevation
+            };
 
-                    // Set additional model configuration for positioning
-                    if (modelConfig) {
-                        // Add height offset so models appear above ground
-                        feature.set('modelHeightOffset', modelConfig.heightOffset + 10); // Add 10 meters above ground
-                        feature.set('modelRotation', modelConfig.rotation);
-                    } else {
-                        // Default height offset if no config
-                        feature.set('modelHeightOffset', 10);
-                    }
+            feature.set('model', modelOptions);
 
-                    console.log(`🎯 SUCCESS: Assigned 3D model ${modelFilename} (${modelUrl}) to feature with ${prop}=${properties[prop]}`);
-                    console.log(`🎯 Model options:`, modelOptions);
-                    console.log(`🎯 Feature now has model property:`, feature.get('model'));
-                    console.log(`🎯 Feature geometry type:`, feature.getGeometry().getType());
-                    console.log(`🎯 Feature coordinates:`, feature.getGeometry().getCoordinates());
-                    modelAssigned = true;
-                    break; // Only assign one model per feature
-                }
+            // Set additional model configuration for positioning
+            if (modelConfig) {
+                // Add height offset so models appear above ground
+                feature.set('modelHeightOffset', modelConfig.heightOffset + 10); // Add 10 meters above ground
+                feature.set('modelRotation', modelConfig.rotation);
+            } else {
+                // Default height offset if no config
+                feature.set('modelHeightOffset', 10);
             }
-        }
 
-        if (!modelAssigned && osmTags.length > 0) {
-            console.log(`❌ No model assigned to feature ${index + 1} with tags:`, osmTags);
+            console.log(`🎯 SUCCESS: Assigned 3D model ${modelFilename} (${modelUrl}) to feature with tags:`, tagsObj);
+            console.log(`🎯 Model options:`, modelOptions);
+            console.log(`🎯 Feature now has model property:`, feature.get('model'));
+            console.log(`🎯 Feature geometry type:`, feature.getGeometry().getType());
+            console.log(`🎯 Feature coordinates:`, feature.getGeometry().getCoordinates());
+        } else {
+            if (osmTags.length > 0) {
+                console.log(`❌ No model assigned to feature ${index + 1} with tags:`, osmTags);
+            }
         }
     });
 
@@ -2589,6 +2587,35 @@ function generateQueryColor(overlayId, isFixed = false) {
 
         waitForMap();
     });
+
+// Function to show the execute button with the query
+function showExecuteButton(key, value) {
+    const executeBtn = $('#execute-query-btn');
+    const clearBtn = $('#clear-search-btn');
+
+    executeBtn
+        .show()
+        .prop('disabled', false)
+        .text(`${window.getTranslation ? window.getTranslation('executeQuery') : 'Execute Query'}: ${key}=${value}`);
+
+    clearBtn.show();
+}
+
+// Function to remove diacritics for better search matching
+function removeDiacritics(str) {
+    if (!str) return '';
+    return str.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+
+// Stub function for selectValueResult - implement if needed
+function selectValueResult() {
+    console.warn('selectValueResult function not implemented');
+}
+
+// Stub function for makeRequestWithRetry - implement if needed
+function makeRequestWithRetry() {
+    console.warn('makeRequestWithRetry function not implemented');
+}
 
 // Export for use in other modules
 window.initValueSearch = initValueSearch;

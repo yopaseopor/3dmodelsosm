@@ -327,6 +327,337 @@ style: function (feature) {
 
 /*@@ fin-inicio de copia */			},
 /*   abrir */							{
+    group: 'Test',
+    title: 'All (z20)',
+query: '(nwr({{bbox}});<;);out meta;',
+    iconSrc: imgSrc + 'icones/maxspeed_empty.svg',
+    iconStyle: 'background-color:rgba(255,255,255,0.4)',
+    style: function (feature) {
+        var key_regex = /^name$/;
+        var name_key = feature.getKeys().filter(function(t){return t.match(key_regex)}).pop() || "name";
+        var name = feature.get(name_key) || '';
+        var fill = new ol.style.Fill({
+            color: 'rgba(117,63,79,0.4)'
+        });
+        var stroke = new ol.style.Stroke({
+            color: 'rgba(117,63,79,1)',
+            width: 1
+        });
+        // Get the geometry type
+        var geom = feature.getGeometry();
+        var isPolygon = geom.getType() === 'Polygon' || geom.getType() === 'MultiPolygon';
+        
+        var style = new ol.style.Style({
+            image: new ol.style.Icon({
+                src: imgSrc + 'icones/maxspeed_empty.svg',
+                scale: 0.03
+            }),
+            text: new ol.style.Text({
+                text: name,
+             			
+                fill: new ol.style.Fill({
+                    color: 'rgba(0,0,0,1)'
+                }),
+                stroke: new ol.style.Stroke({
+                    color: 'rgba(255,255,255,0.7)',
+                    width: 2
+                }),
+                // For polygons, we'll use a different placement strategy
+                placement: isPolygon ? 'point' : 'point',
+				textAlign: 'center',
+                textBaseline: 'bottom',
+                offsetY: isPolygon ? -15 : 0, // Move text up for polygons
+                overflow: true // Allow text to be rendered outside the view
+            }),
+            fill: fill,
+            stroke: stroke
+        });
+        
+        return style;
+/*   cerrar */								}
+
+/*@@ fin-inicio de copia */			},
+/*   abrir */							{
+    group: 'Test',
+    title: 'geojson (z20)',
+geojson: '/src/test.geojson',
+    iconSrc: imgSrc + 'icones/maxspeed_empty.svg',
+    iconStyle: 'background-color:rgba(255,255,255,0.4)',
+    style: function (feature) {
+        var key_regex = /^name$/;
+        var name_key = feature.getKeys().filter(function(t){return t.match(key_regex)}).pop() || "name";
+        var name = feature.get(name_key) || '';
+        var fill = new ol.style.Fill({
+            color: 'rgba(117,63,79,0.4)'
+        });
+        var stroke = new ol.style.Stroke({
+            color: 'rgba(117,63,79,1)',
+            width: 1
+        });
+        // Get the geometry type
+        var geom = feature.getGeometry();
+        var isPolygon = geom.getType() === 'Polygon' || geom.getType() === 'MultiPolygon';
+        
+        var style = new ol.style.Style({
+            image: new ol.style.Icon({
+                src: imgSrc + 'icones/maxspeed_empty.svg',
+                scale: 0.03
+            }),
+            text: new ol.style.Text({
+                text: name,
+             			
+                fill: new ol.style.Fill({
+                    color: 'rgba(0,0,0,1)'
+                }),
+                stroke: new ol.style.Stroke({
+                    color: 'rgba(255,255,255,0.7)',
+                    width: 2
+                }),
+                // For polygons, we'll use a different placement strategy
+                placement: isPolygon ? 'point' : 'point',
+				textAlign: 'center',
+                textBaseline: 'bottom',
+                offsetY: isPolygon ? -15 : 0, // Move text up for polygons
+                overflow: true // Allow text to be rendered outside the view
+            }),
+            fill: fill,
+            stroke: stroke
+        });
+        
+        return style;
+/*   cerrar */								}
+
+/*@@ fin-inicio de copia */			},
+/*   abrir */							{
+    group: 'Test',
+    title: 'BCN geojson',
+geojson: '/src/bcn1.geojson',
+    iconSrc: imgSrc + 'icones/maxspeed_empty.svg',
+    iconStyle: 'background-color:rgba(255,255,255,0.4)',
+    style: function (feature) {
+        var key_regex = /^name$/;
+        var name_key = feature.getKeys().filter(function(t){return t.match(key_regex)}).pop() || "name";
+        var name = feature.get(name_key) || '';
+        var fill = new ol.style.Fill({
+            color: 'rgba(117,63,79,0.4)'
+        });
+        var stroke = new ol.style.Stroke({
+            color: 'rgba(117,63,79,1)',
+            width: 1
+        });
+        // Get the geometry type
+        var geom = feature.getGeometry();
+        var isPolygon = geom.getType() === 'Polygon' || geom.getType() === 'MultiPolygon';
+        
+        var style = new ol.style.Style({
+            image: new ol.style.Icon({
+                src: imgSrc + 'icones/maxspeed_empty.svg',
+                scale: 0.03
+            }),
+            text: new ol.style.Text({
+                text: name,
+             			
+                fill: new ol.style.Fill({
+                    color: 'rgba(0,0,0,1)'
+                }),
+                stroke: new ol.style.Stroke({
+                    color: 'rgba(255,255,255,0.7)',
+                    width: 2
+                }),
+                // For polygons, we'll use a different placement strategy
+                placement: isPolygon ? 'point' : 'point',
+				textAlign: 'center',
+                textBaseline: 'bottom',
+                offsetY: isPolygon ? -15 : 0, // Move text up for polygons
+                overflow: true // Allow text to be rendered outside the view
+            }),
+            fill: fill,
+            stroke: stroke
+        });
+        
+        return style;
+/*   cerrar */								}
+
+/*@@ fin-inicio de copia */			},
+/*   abrir */							{
+    group: 'Test',
+    title: 'VNG geojson',
+geojson: '/src/vng1.geojson',
+    iconSrc: imgSrc + 'icones/maxspeed_empty.svg',
+    iconStyle: 'background-color:rgba(255,255,255,0.4)',
+    style: function (feature) {
+        var key_regex = /^name$/;
+        var name_key = feature.getKeys().filter(function(t){return t.match(key_regex)}).pop() || "name";
+        var name = feature.get(name_key) || '';
+        var fill = new ol.style.Fill({
+            color: 'rgba(117,63,79,0.4)'
+        });
+        var stroke = new ol.style.Stroke({
+            color: 'rgba(117,63,79,1)',
+            width: 1
+        });
+        // Get the geometry type
+        var geom = feature.getGeometry();
+        var isPolygon = geom.getType() === 'Polygon' || geom.getType() === 'MultiPolygon';
+        
+        var style = new ol.style.Style({
+            image: new ol.style.Icon({
+                src: imgSrc + 'icones/maxspeed_empty.svg',
+                scale: 0.03
+            }),
+            text: new ol.style.Text({
+                text: name,
+             			
+                fill: new ol.style.Fill({
+                    color: 'rgba(0,0,0,1)'
+                }),
+                stroke: new ol.style.Stroke({
+                    color: 'rgba(255,255,255,0.7)',
+                    width: 2
+                }),
+                // For polygons, we'll use a different placement strategy
+                placement: isPolygon ? 'point' : 'point',
+				textAlign: 'center',
+                textBaseline: 'bottom',
+                offsetY: isPolygon ? -15 : 0, // Move text up for polygons
+                overflow: true // Allow text to be rendered outside the view
+            }),
+            fill: fill,
+            stroke: stroke
+        });
+        
+        return style;
+/*   cerrar */								}
+
+},
+ {
+
+   group: 'Test',
+   title: 'all trees geojson',
+   geojson: '/src/test.geojson',
+   iconSrc:'https://raw.githubusercontent.com/yopaseopor/beta_preset_josm/master/ES/traffic_signs/ES/ES_B1a.png',
+   iconStyle: 'background-color:rgba(255,255,255,0.4)',
+   style: function (feature) {
+    var key_regex = /^Nom_Local/
+    var name_key = feature.getKeys().filter(function(t){return t.match(key_regex)}).pop() || "name"
+    var name = feature.get(name_key) || '';
+    var styles = {
+     'natural': {
+      'tree': new ol.style.Style({
+       image: new ol.style.Icon({
+       src: imgSrc + 'icones/maxspeed_empty.svg',
+       rotation: 0,
+       scale: 0.10
+      }),
+       text: new ol.style.Text({
+        text: name,
+								offsetX : 7,
+								offsetY : -12,
+								fill: new ol.style.Fill({
+                            color: 'rgba(0,0,0,1)'
+                        })
+       })
+      })
+     },
+     'Nom_Local': {
+      'Sn': new ol.style.Style({
+       image: new ol.style.Icon({
+       src: 'https://raw.githubusercontent.com/yopaseopor/beta_preset_josm/master/ES/traffic_signs/ES/ES_B1a.png',
+       rotation:9.4,
+              scale: 0.9
+      }),
+       text: new ol.style.Text({
+        text: name,
+								offsetX : 7,
+								offsetY : -12,
+								fill: new ol.style.Fill({
+                            color: 'rgba(0,0,0,1)'
+                        })
+       })
+      })
+     },
+     'traffic_sign': {
+      'ES:B1a': new ol.style.Style({
+       zIndex: 100,
+       stroke: new ol.style.Stroke({
+        color: 'rgba(246, 99, 79, 1.0)',
+        width: 1
+       }),
+       fill: new ol.style.Fill({
+        color: 'rgba(246, 99, 79, 0.3)'
+       }),
+       text: new ol.style.Text({
+        text: name
+       })
+      })
+     }
+    };
+    for (var key in styles) {
+     var value = feature.get(key);
+     if (value !== undefined) {
+      for (var regexp in styles[key]) {
+       if (new RegExp(regexp).test(value)) {
+        return styles[key][regexp];
+       }
+      }
+     }
+    }
+    return null;
+   } 
+   
+/*@@ inicio-fin de copia */			},
+/*   abrir */							{
+    group: 'Test',
+    title: 'Normal trees overpass',
+    query: '(nwr["natural"="tree"]({{bbox}});node(w););out meta;',
+    iconSrc: imgSrc + 'icones/maxspeed_empty.svg',
+    iconStyle: 'background-color:rgba(255,255,255,0.4)',
+    style: function (feature) {
+        var key_regex = /^name$/;
+        var name_key = feature.getKeys().filter(function(t){return t.match(key_regex)}).pop() || "name";
+        var name = feature.get(name_key) || '';
+        var fill = new ol.style.Fill({
+            color: 'rgba(117,63,79,0.4)'
+        });
+        var stroke = new ol.style.Stroke({
+            color: 'rgba(117,63,79,1)',
+            width: 1
+        });
+        // Get the geometry type
+        var geom = feature.getGeometry();
+        var isPolygon = geom.getType() === 'Polygon' || geom.getType() === 'MultiPolygon';
+        
+        var style = new ol.style.Style({
+            image: new ol.style.Icon({
+                src: imgSrc + 'icones/maxspeed_empty.svg',
+                scale: 0.03
+            }),
+            text: new ol.style.Text({
+                text: name,
+             			
+                fill: new ol.style.Fill({
+                    color: 'rgba(0,0,0,1)'
+                }),
+                stroke: new ol.style.Stroke({
+                    color: 'rgba(255,255,255,0.7)',
+                    width: 2
+                }),
+                // For polygons, we'll use a different placement strategy
+                placement: isPolygon ? 'point' : 'point',
+				textAlign: 'center',
+                textBaseline: 'bottom',
+                offsetY: isPolygon ? -15 : 0, // Move text up for polygons
+                overflow: true // Allow text to be rendered outside the view
+            }),
+            fill: fill,
+            stroke: stroke
+        });
+        
+        return style;
+/*   cerrar */								}
+
+/*@@ fin-inicio de copia */			},
+/*   abrir */							{
 /*@@ nombre del grupo al que pertenecen */	group: 'Economía',
 /*@@ título de la opción */					title: 'Banco Sabadell',
 /*@@ consulta overpass */					query: '(nwr["brand:wikidata"="Q762330"]({{bbox}});node(w););out meta;',
