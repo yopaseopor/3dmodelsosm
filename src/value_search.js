@@ -249,7 +249,7 @@ function processQueryResults(allFeatures, key, value) {
             const modelConfig = window.models ? window.models.getModelConfig(modelFilename) : null;
 
             // Set the model property for ol-cesium to use - use Cesium Model options object
-            const modelUrl = `${window.location.origin}/src/assets/models/${modelFilename}`;
+            const modelUrl = `${window.location.origin}/3dmodelsosm/models/${modelFilename}`;
             const modelOptions = {
                 uri: modelUrl,
                 scale: modelConfig ? modelConfig.scale : 1.0,
