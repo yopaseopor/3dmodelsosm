@@ -491,7 +491,7 @@ $(function () {
 									const modelConfig = window.models ? window.models.getModelConfig(modelFilename) : null;
 
 									// Set the model property for ol-cesium to use - use Cesium Model options object
-									const modelUrl = `./src/assets/models/${modelFilename}`;
+									const modelUrl = new URL(`./src/assets/models/${modelFilename}`, window.location.href).href;
 									const modelOptions = {
 										uri: modelUrl,
 										scale: modelConfig ? modelConfig.scale : 1.0,
@@ -1725,8 +1725,8 @@ if (routeLayers.length > 0) {
                                     if (source && source.getFeatures) {
                                         const features = source.getFeatures();
                                         features.forEach((feature, fidx) => {
-                                            const model = feature.get('model');
-                                            if (model && typeof model === 'object' && model.uri && !model.uri.includes('undefined')) {
+                                            const model = feature.model;
+                                            if (model && typeof model === 'object' && model.uri) {
                                                 try {
                                                     const geometry = feature.getGeometry();
                                                     const extent = geometry.getExtent();
@@ -1736,7 +1736,7 @@ if (routeLayers.length > 0) {
                                                     // Create model matrix for positioning (improved for buildings)
                                                     const heightOffset = feature.get('modelHeightOffset') || 0.0;
                                                     const modelMatrix = Cesium.Transforms.eastNorthUpToFixedFrame(
-                                                        Cesium.Cartesian3.fromDegrees(lonLat[0], lonLat[1], 0)
+                                                        Cesium.Cartesian3.fromDegrees(lonLat[0], lonLat[1], heightOffset)
                                                     );
                                                     
                                                     console.log(`🎯 Model url: ${model.uri}`);
@@ -1803,7 +1803,7 @@ if (routeLayers.length > 0) {
                 const view = map.getView();
                 const center = ol.proj.toLonLat(view.getCenter());
                 const zoom = view.getZoom();
-                const height = 50; // Further reduced for better model visibility
+                const height = 500; // Reduced from 2000m to 500m for better building visibility
                 
                 scene.camera.flyTo({
                     destination: Cesium.Cartesian3.fromDegrees(
