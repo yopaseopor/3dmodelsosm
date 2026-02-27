@@ -243,18 +243,17 @@ function processQueryResults(allFeatures, key, value) {
         });
 
         // Check if the tags match any model mapping
-        const mapping = window.models ? window.models.getModelForTags(tagsObj) : null;
-        if (mapping) {
+        const modelFilename = window.models ? window.models.getModelForTags(tagsObj) : null;
+        if (modelFilename) {
             // Get model configuration from mapping
-            const modelFilename = mapping.model;
-            const modelConfig = mapping.config;
+            const modelConfig = window.models ? window.models.getModelConfig(modelFilename) : null;
 
             // Set the model property for ol-cesium to use - use Cesium Model options object
-            const modelUrl = `./src/assets/models/${modelFilename}`;
+            const modelUrl = `${window.location.origin}/3dmodelsosm/models/${modelFilename}`;
             const modelOptions = {
                 uri: modelUrl,
                 scale: modelConfig ? modelConfig.scale : 1.0,
-                heightReference: Cesium.HeightReference.NONE,
+                heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
                 // Add height offset by setting the position
                 // The height offset will be handled by the feature's geometry elevation
             };
