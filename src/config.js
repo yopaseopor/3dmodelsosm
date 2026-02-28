@@ -380,7 +380,7 @@ query: '(nwr({{bbox}});<;);out meta;',
 /*   abrir */							{
     group: 'Test',
     title: 'geojson (z20)',
-geojson: 'src/test.geojson',
+geojson: '/3dmodelsosm/src/test.geojson',
     iconSrc: imgSrc + 'icones/maxspeed_empty.svg',
     iconStyle: 'background-color:rgba(255,255,255,0.4)',
     style: function (feature) {

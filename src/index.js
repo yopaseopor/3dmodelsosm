@@ -491,7 +491,7 @@ $(function () {
 									const modelConfig = window.models ? window.models.getModelConfig(modelFilename) : null;
 
 									// Set the model property for ol-cesium to use - use Cesium Model options object
-									const modelUrl = `src/models/${modelFilename}`;
+									const modelUrl = `/3dmodelsosm/src/models/${modelFilename}`;
 									const modelOptions = {
 										uri: modelUrl,
 										scale: modelConfig ? modelConfig.scale : 1.0,
@@ -1651,7 +1651,7 @@ if (routeLayers.length > 0) {
                                         if (mapping) {
                                             const modelFilename = mapping.model;
                                             const modelConfig = mapping.config;
-                                            const modelUrl = `/src/models/${modelFilename}`;
+                                            const modelUrl = `/3dmodelsosm/src/models/${modelFilename}`;
                                             const modelOptions = {
                                                 uri: modelUrl,
                                                 scale: modelConfig ? modelConfig.scale : 1.0,

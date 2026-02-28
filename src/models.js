@@ -8,7 +8,7 @@ const availableModels = [
     'Untitled.glb',
     'test.gltf',
     'w_amenity_bicycle_parking.glb',
-    'w_highway_street_lamp',
+    'w_highway_street_lamp.glb',
     'w_highway_street_lamp_straight_mast.glb',
     'w_highway_traffic_signals.glb',
     'w_natural_tree.glb',
