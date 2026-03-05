@@ -450,37 +450,48 @@ function processQueryResults(allFeatures, key, value) {
  * @param {string} query - The query to execute
  * @param {string} queryType - Type of query for logging
  * @param {number} retryCount - Current retry attempt
+ * @param {number} serverRetryCount - Current retry attempt on same server
  * @returns {Promise} Promise resolving to features array
  */
-function executeSingleQuery(query, queryType, retryCount = 0) {
+function executeSingleQuery(query, queryType, retryCount = 0, serverRetryCount = 0) {
     return new Promise((resolve, reject) => {
-        const client = new XMLHttpRequest();
-        const apiUrl = retryCount > 0 ? config.overpassApiFallback() : config.overpassApi();
-        client.open('POST', apiUrl);
-        client.setRequestHeader('Content-Type', 'text/plain;charset=UTF-8');
-        client.timeout = 60000; // Increased timeout to 60 seconds
+        // Add server retry parameter to track retries on same server
+        const maxServerRetries = 2; // Retry same server up to 2 times
+        const maxTotalRetries = 5; // Maximum total retries across all servers
+        
+        // Update button to show retry status
+        if (retryCount > 0) {
+            const retryText = serverRetryCount > 0 
+                ? `Retrying same server... (${serverRetryCount}/${maxServerRetries})`
+                : `Retrying server ${retryCount}/${maxTotalRetries}`;
+            $('#execute-query-btn').text(retryText).prop('disabled', false);
+        }
 
-        // Hide loading indicator when request completes, regardless of success/failure
-        client.onloadend = function() {
-            if (window.loading) window.loading.hide();
-        };
+        const client = new XMLHttpRequest();
+        client.open('POST', config.overpassApi());
+        client.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+        client.timeout = 60000; // 60 second timeout
 
         client.onload = function() {
             if (client.status === 200) {
                 try {
-                    const xmlDoc = $.parseXML(client.responseText);
-                    const xml = $(xmlDoc);
-                    const remark = xml.find('remark');
+                    const parser = new DOMParser();
+                    const xmlDoc = parser.parseFromString(client.responseText, 'text/xml');
+                    const remark = xmlDoc.getElementsByTagName('remark');
+                    const nodes = xmlDoc.getElementsByTagName('node');
+                    const nodosLength = nodes ? nodes.length : 0;
 
                     if (remark.length !== 0) {
-                        console.error('Overpass error:', remark.text());
-                        reject(new Error(`Overpass error: ${remark.text()}`));
-                    } else {
-                        const features = new ol.format.OSMXML().readFeatures(xmlDoc, {
-                            featureProjection: window.map.getView().getProjection()
-                        });
-                        resolve(features);
+                        console.error('Error:', remark[0].textContent);
+                        reject(new Error(`Overpass API Error: ${remark[0].textContent}`));
+                        return;
                     }
+
+                    console.log(`Nodes found: ${nodosLength}`);
+                    const features = new ol.format.OSMXML().readFeatures(xmlDoc, {
+                        featureProjection: window.map.getView().getProjection()
+                    });
+                    resolve(features);
                 } catch (parseError) {
                     console.error('Error parsing XML response:', parseError);
                     reject(parseError);
@@ -488,17 +499,39 @@ function executeSingleQuery(query, queryType, retryCount = 0) {
             } else {
                 console.error('Request failed with status:', client.status);
                 if (client.status === 504 || client.status === 429 || client.status >= 500) {
-                    // Retry with fallback server if we haven't retried too many times
-                    if (retryCount < 3) {
-                        console.log(`Retrying with fallback server (attempt ${retryCount + 1}/3)...`);
+                    // First try retrying the same server a few times
+                    if (serverRetryCount < maxServerRetries) {
+                        console.log(`Retrying same server (attempt ${serverRetryCount + 1}/${maxServerRetries}) in 30 seconds...`);
+                        const retryText = `Retrying same server... (${serverRetryCount + 1}/${maxServerRetries})`;
+                        $('#execute-query-btn').text(retryText).prop('disabled', false);
                         setTimeout(() => {
-                            executeSingleQuery(query, queryType, retryCount + 1)
+                            executeSingleQuery(query, queryType, retryCount, serverRetryCount + 1)
                                 .then(resolve)
                                 .catch(reject);
-                        }, 1000); // Wait 1 second before retry
+                        }, 30000); // Wait 30 seconds before retry on same server
+                        return;
+                    }
+                    
+                    // After exhausting same server retries, switch to fallback servers
+                    if (retryCount < maxTotalRetries) {
+                        console.log(`Switching to fallback server (attempt ${retryCount + 1}/${maxTotalRetries})...`);
+                        const retryText = `Retrying server ${retryCount + 1}/${maxTotalRetries}`;
+                        $('#execute-query-btn').text(retryText).prop('disabled', false);
+                        // Use fallback server for retries
+                        const originalOverpassApi = config.overpassApi;
+                        config.overpassApi = config.overpassApiFallback;
+                        setTimeout(() => {
+                            executeSingleQuery(query, queryType, retryCount + 1, 0)
+                                .then(resolve)
+                                .catch(reject);
+                        }, 2000); // Wait 2 seconds before retry with different server
+                        // Restore original function after retry
+                        setTimeout(() => {
+                            config.overpassApi = originalOverpassApi;
+                        }, 2500);
                         return;
                     } else {
-                        reject(new Error(`Timeout: All servers overloaded (${queryType} query)`));
+                        reject(new Error(`All retry attempts failed (${queryType} query)`));
                     }
                 } else {
                     reject(new Error(`HTTP ${client.status} (${queryType} query)`));
@@ -511,11 +544,18 @@ function executeSingleQuery(query, queryType, retryCount = 0) {
             // Retry with fallback server if we haven't retried too many times
             if (retryCount < 3) {
                 console.log(`Retrying with fallback server due to network error (attempt ${retryCount + 1}/3)...`);
+                // Use fallback server for retries
+                const originalOverpassApi = config.overpassApi;
+                config.overpassApi = config.overpassApiFallback;
                 setTimeout(() => {
                     executeSingleQuery(query, queryType, retryCount + 1)
                         .then(resolve)
                         .catch(reject);
-                }, 1000); // Wait 1 second before retry
+                }, 2000); // Wait 2 seconds before retry
+                // Restore original function after retry
+                setTimeout(() => {
+                    config.overpassApi = originalOverpassApi;
+                }, 2500);
                 return;
             } else {
                 reject(new Error(`Network error - all servers failed (${queryType} query)`));
@@ -527,11 +567,18 @@ function executeSingleQuery(query, queryType, retryCount = 0) {
             // Retry with fallback server if we haven't retried too many times
             if (retryCount < 3) {
                 console.log(`Retrying with fallback server due to timeout (attempt ${retryCount + 1}/3)...`);
+                // Use fallback server for retries
+                const originalOverpassApi = config.overpassApi;
+                config.overpassApi = config.overpassApiFallback;
                 setTimeout(() => {
                     executeSingleQuery(query, queryType, retryCount + 1)
                         .then(resolve)
                         .catch(reject);
-                }, 1000); // Wait 1 second before retry
+                }, 2000); // Wait 2 seconds before retry
+                // Restore original function after retry
+                setTimeout(() => {
+                    config.overpassApi = originalOverpassApi;
+                }, 2500);
                 return;
             } else {
                 reject(new Error(`Timeout: All servers overloaded (${queryType} query)`));
@@ -1063,8 +1110,11 @@ function executeTagQuery(key, value) {
     try {
         const overlayKey = `tag_${key}_${value}`;
         if (window._runningTagQueries && window._runningTagQueries.has(overlayKey)) {
-            return;
+            console.log('🚫 Query already running, allowing manual retry by clearing guard');
+            // Clear the guard to allow manual retry
+            window._runningTagQueries.delete(overlayKey);
         }
+        // Add guard for this execution
         window._runningTagQueries.add(overlayKey);
     } catch (guardErr) {
         console.warn('Could not set running guard for executeTagQuery', guardErr);
@@ -1154,7 +1204,11 @@ function executeTagQuery(key, value) {
     executeSingleQuery(query, 'tag-query')
         .then((features) => {
             console.log('🚀 Query executed successfully, features received:', features.length);
+            // Hide loading indicator on success
+            if (window.loading) window.loading.hide();
             processQueryResults(features, key, value);
+            // Re-enable button after successful execution
+            $('#execute-query-btn').prop('disabled', false).text(`${window.getTranslation ? window.getTranslation('executeQuery') : 'Execute Query'}`);
         })
         .catch((error) => {
             console.error('🚀 Query execution failed:', error);
@@ -1310,7 +1364,7 @@ function createTagOverlay(key, value, query) {
                             image: new ol.style.Circle({
                                 radius: 6,
                                 fill: new ol.style.Fill({
-                                    color: [...generateQueryColor(vectorLayer.get('id'), false), 0.65] // 65% opacity for value queries
+                                    color: [...generateQueryColor(vectorLayer.get('id'), false), 0.80] // 30% opacity for value queries
                                 }),
                                 stroke: new ol.style.Stroke({
                                     color: generateQueryColor(vectorLayer.get('id'), false),
@@ -1328,7 +1382,7 @@ function createTagOverlay(key, value, query) {
                             width: 2
                         }),
                         fill: new ol.style.Fill({
-                            color: [...generateQueryColor(vectorLayer.get('id'), false), 0.65] // 65% opacity for value queries
+                            color: [...generateQueryColor(vectorLayer.get('id'), false), 0.3] // 30% opacity for value queries
                         })
                     });
                 } catch (error) {
@@ -2043,7 +2097,8 @@ function initValueSearch() {
     }
 
     function processQueryResults(allFeatures, key, value) {
-        // Calculate execution time
+        // Hide loading indicator immediately when processing starts
+        if (window.loading) window.loading.hide();
         const endTime = performance.now();
         const executionTime = ((endTime - window.queryStartTime) / 1000).toFixed(3) + 's';
 
@@ -2191,7 +2246,7 @@ function initValueSearch() {
                                 width: 2
                             }),
                             fill: new ol.style.Fill({
-                                color: [...generateQueryColor(vectorLayer.get('id'), false), 0.05]
+                                color: [...generateQueryColor(vectorLayer.get('id'), false), 0.8]
                             })
                         });
                     } catch (error) {

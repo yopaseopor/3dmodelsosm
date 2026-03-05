@@ -11,6 +11,8 @@ const availableModels = [
     'w_highway_street_lamp.glb',
     'w_highway_street_lamp_straight_mast.glb',
     'w_highway_traffic_signals.glb',
+    'w_highway_traffic_signals_cycle.glb',
+    'w_highway_traffic_signals_pedestrian.glb',
     'w_natural_tree.glb',
     'ES_CAT_BCN_casa_batllo.glb',
     'ES_CAT_BCN_casa_mila.glb',
@@ -25,6 +27,10 @@ const modelMappings = [
     { tags: ['amenity=bicycle_parking'], model: 'w_amenity_bicycle_parking.glb', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Bicycle parking model for amenity=bicycle_parking
     { tags: ['highway=street_lamp', 'lamp_mount=straight_mast'], model: 'w_highway_street_lamp_straight_mast.glb', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
     { tags: ['highway=street_lamp'], model: 'w_highway_street_lamp.glb', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Street lamp model for highway=street_lamp
+    // More specific traffic signals first
+    { tags: ['highway=traffic_signals', 'traffic_signals=cyclist_crossing'], model: 'w_highway_traffic_signals_cycle.glb', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Traffic signals model for cyclist crossing
+    { tags: ['highway=traffic_signals', 'traffic_signals=pedestrian_crossing'], model: 'w_highway_traffic_signals_pedestrian.glb', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Traffic signals model for pedestrian crossing
+    // General traffic signals last
     { tags: ['highway=traffic_signals'], model: 'w_highway_traffic_signals.glb', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Traffic signals model for highway=traffic_signals
     { tags: ['natural=tree'], model: 'w_natural_tree.glb', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Tree model for natural=tree
     { tags: ['natural=wood'], model: 'test.gltf', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Could use forest model
@@ -43,11 +49,84 @@ const modelMappings = [
 ];
 
 /**
+ * Calculate the bearing (direction) of the way at a specific node index
+ * @param {Array<Array<number>>} wayCoordinates - Array of [lon, lat] coordinates
+ * @param {number} nodeIndex - Index of the node in the way coordinates
+ * @returns {number} Bearing in radians (0 = north, clockwise)
+ */
+function calculateBearing(wayCoordinates, nodeIndex) {
+    if (!wayCoordinates || wayCoordinates.length < 2 || nodeIndex < 0 || nodeIndex >= wayCoordinates.length) {
+        return 0;
+    }
+    let dx, dy;
+    if (nodeIndex === 0) {
+        // Start of way: use direction to next node
+        const curr = wayCoordinates[0];
+        const next = wayCoordinates[1];
+        dx = next[0] - curr[0];
+        dy = next[1] - curr[1];
+    } else if (nodeIndex === wayCoordinates.length - 1) {
+        // End of way: use direction from previous node
+        const prev = wayCoordinates[nodeIndex - 1];
+        const curr = wayCoordinates[nodeIndex];
+        dx = curr[0] - prev[0];
+        dy = curr[1] - prev[1];
+    } else {
+        // Middle: average direction from prev to next
+        const prev = wayCoordinates[nodeIndex - 1];
+        const next = wayCoordinates[nodeIndex + 1];
+        dx = next[0] - prev[0];
+        dy = next[1] - prev[1];
+    }
+    return Math.atan2(dx, dy); // atan2(x, y) where x=east, y=north
+}
+
+/**
+ * Adjust model config based on direction tags
+ * @param {object} config - Original config object
+ * @param {object} tags - OSM tags
+ * @param {number|null} bearing - Bearing of the way at the node in radians, or null if not available
+ * @returns {object} Adjusted config
+ */
+function adjustConfigForDirection(config, tags, bearing) {
+    const adjustedConfig = JSON.parse(JSON.stringify(config));
+    // Use bearing from parameter, or from parent way, or default to 0
+    const baseBearing = bearing !== null ? bearing : 
+                       (tags._parentWayBearing !== undefined ? tags._parentWayBearing : 0);
+    adjustedConfig.rotation[1] = baseBearing;
+    const direction = tags['direction'] || tags['traffic_signals:direction'];
+    if (!direction) return adjustedConfig; // No direction tag, keep base bearing
+    switch (direction) {
+        case 'forward':
+            // No additional rotation
+            break;
+        case 'backward':
+            adjustedConfig.rotation[1] += Math.PI; // Add 180 degrees
+            break;
+        case 'left':
+            adjustedConfig.rotation[1] += Math.PI / 2; // Add 90 degrees
+            break;
+        case 'right':
+            adjustedConfig.rotation[1] -= Math.PI / 2; // Subtract 90 degrees
+            break;
+        case 'all':
+            // No additional rotation for all
+            break;
+        default:
+            console.warn(`Unknown direction value: ${direction}`);
+            break;
+    }
+    return adjustedConfig;
+}
+
+/**
  * Get the model mapping for a given set of OSM tags
  * @param {object} tags - Object with OSM key-value pairs
+ * @param {Array<Array<number>>|null} wayCoordinates - Array of [lon, lat] coordinates of the way, or null
+ * @param {number|null} nodeIndex - Index of the node in the way coordinates, or null
  * @returns {object|null} Mapping object {tags, model, config} or null if no mapping exists
  */
-function getModelForTags(tags) {
+function getModelForTags(tags, wayCoordinates = null, nodeIndex = null) {
     for (const mapping of modelMappings) {
         const allMatch = mapping.tags.every(tag => {
             const [key, value] = tag.split('=');
@@ -55,7 +134,8 @@ function getModelForTags(tags) {
         });
         if (allMatch) {
             console.log(`🔍 Found matching model ${mapping.model} for tags:`, mapping.tags);
-            return mapping;
+            const bearing = wayCoordinates && nodeIndex !== null ? calculateBearing(wayCoordinates, nodeIndex) : null;
+            return { ...mapping, config: adjustConfigForDirection(mapping.config, tags, bearing) };
         }
     }
     console.log(`🔍 No model mapping found for tags:`, tags);
@@ -78,7 +158,8 @@ window.models = {
     availableModels,
     modelMappings,
     getModelForTags,
-    modelExists
+    modelExists,
+    calculateBearing
 };
 
 // Debug: Confirm models.js is loaded

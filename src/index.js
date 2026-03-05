@@ -409,6 +409,93 @@ $(function () {
         format: new ol.format.GeoJSON(),
         url: overlay['geojson']
       })
+
+      // Add building processing for GeoJSON features
+      vectorSource.on('addfeature', function(event) {
+        const feature = event.feature;
+        if (!feature) return;
+
+        const properties = feature.getProperties();
+        const osmTags = Object.keys(properties).filter(prop =>
+          !['geometry', 'id', 'type', 'originalType', 'fixedGeometry', 'members', 'memberOf', 'member', 'membership', 'role', 'version', 'timestamp', 'changeset', 'user', 'uid', 'visible'].includes(prop)
+        );
+
+        // Collect all OSM tags into an object
+        const tagsObj = {};
+        osmTags.forEach(tag => {
+          tagsObj[tag] = properties[tag];
+        });
+
+        // Check if the tags match any model mapping
+        const modelMapping = window.models ? window.models.getModelForTags(tagsObj) : null;
+        if (modelMapping) {
+          const modelFilename = modelMapping.model;
+          const modelConfig = modelMapping.config;
+
+          // Set the model property for ol-cesium to use - use Cesium Model options object
+          const modelUrl = `/3dmodelsosm/src/models/${modelFilename}`;
+          const modelOptions = {
+            uri: modelUrl,
+            scale: modelConfig ? modelConfig.scale : 1.0,
+            heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+          };
+
+          feature.set('model', modelOptions);
+
+          // Set additional model configuration for positioning
+          if (modelConfig) {
+            // Add height offset so models appear above ground
+            feature.set('modelHeightOffset', modelConfig.heightOffset + 10); // Add 10 meters above ground
+            feature.set('modelRotation', modelConfig.rotation);
+          } else {
+            // Default height offset if no config
+            feature.set('modelHeightOffset', 10);
+          }
+
+          console.log(`🎯 SUCCESS: Assigned 3D model ${modelFilename} to GeoJSON feature with tags:`, tagsObj);
+        } else {
+          if (osmTags.length > 0) {
+            console.log(`❌ No model assigned to GeoJSON feature with tags:`, osmTags);
+          }
+        }
+
+        // Check if this feature should be extruded as a 3D building
+        if (!modelMapping && window.buildings && window.buildings.isBuildingFeature(tagsObj)) {
+          const buildingData = window.buildings.createExtrudedBuilding(feature, tagsObj);
+          if (buildingData) {
+            // Store building data on the feature
+            feature.set('extrudedBuilding', buildingData);
+            feature.set('buildingHeight', buildingData.height);
+            feature.set('buildingTags', tagsObj);
+
+            console.log(`🏗️ SUCCESS: Created extruded building for GeoJSON feature with tags:`, tagsObj);
+
+            // If we're in 3D mode, immediately add the building to the scene
+            if (window.ol3d && window.ol3d.getCesiumScene) {
+              const entity = window.buildings.createBuildingEntity(buildingData);
+              if (entity) {
+                const scene = window.ol3d.getCesiumScene();
+                // Find or create buildings data source
+                let dataSource = null;
+                scene.dataSources._dataSources.forEach(ds => {
+                  if (ds.name === 'Buildings') {
+                    dataSource = ds;
+                  }
+                });
+                if (!dataSource) {
+                  dataSource = new Cesium.CustomDataSource('Buildings');
+                  scene.dataSources.add(dataSource);
+                }
+                dataSource.entities.add(entity);
+                window.buildings.buildingEntities.set(feature, entity);
+                console.log(`🏗️ Added new building entity to 3D scene from GeoJSON`);
+              }
+            }
+          } else {
+            console.log(`🏗️ WARNING: Failed to create extruded building for GeoJSON feature with building tags:`, tagsObj);
+          }
+        }
+      });
     } else {
 			var vectorSource = new ol.source.Vector({ 
 			format: new ol.format.OSMXML(),
@@ -484,11 +571,30 @@ $(function () {
 									tagsObj[tag] = properties[tag];
 								});
 
+								// Extract way coordinates from geometry for bearing calculation
+								let wayCoordinates = null;
+								let nodeIndex = null;
+								const geometry = feature.getGeometry();
+								if (geometry && geometry.getType() === 'LineString') {
+									const coordinates = geometry.getCoordinates();
+									// Convert from map projection to lon/lat for bearing calculation
+									wayCoordinates = coordinates.map(coord => 
+										ol.proj.transform(coord, map.getView().getProjection(), 'EPSG:4326')
+									);
+									// Use the middle node for bearing calculation, or first if only one segment
+									nodeIndex = Math.floor(wayCoordinates.length / 2);
+									
+									console.log(`📐 Way coordinates extracted: ${wayCoordinates.length} nodes, calculating bearing at node ${nodeIndex}`);
+									console.log(`📐 Way coordinate sample:`, wayCoordinates.slice(0, 3).map((coord, i) => 
+										`[${i}]: [${coord[0].toFixed(6)}, ${coord[1].toFixed(6)}]`
+									));
+								}
+
 								// Check if the tags match any model mapping
-								const modelFilename = window.models ? window.models.getModelForTags(tagsObj) : null;
-								if (modelFilename) {
-									// Get model configuration first
-									const modelConfig = window.models ? window.models.getModelConfig(modelFilename) : null;
+								const modelMapping = window.models ? window.models.getModelForTags(tagsObj, wayCoordinates, nodeIndex) : null;
+								if (modelMapping) {
+									const modelFilename = modelMapping.model;
+									const modelConfig = modelMapping.config;
 
 									// Set the model property for ol-cesium to use - use Cesium Model options object
 									const modelUrl = `/3dmodelsosm/src/models/${modelFilename}`;
@@ -505,6 +611,14 @@ $(function () {
 										// Add height offset so models appear above ground
 										feature.set('modelHeightOffset', modelConfig.heightOffset + 10); // Add 10 meters above ground
 										feature.set('modelRotation', modelConfig.rotation);
+										
+										// Log bearing and rotation information
+										const bearing = wayCoordinates && nodeIndex !== null ? 
+											window.models.calculateBearing(wayCoordinates, nodeIndex) : null;
+										console.log(`🎯 Model ${modelFilename} orientation info:`);
+										console.log(`  📐 Bearing at node ${nodeIndex}: ${bearing ? (bearing * 180 / Math.PI).toFixed(2) : 'N/A'}°`);
+										console.log(`  🔄 Final rotation: [${modelConfig.rotation.join(', ')}] (Y-axis: ${(modelConfig.rotation[1] * 180 / Math.PI).toFixed(2)}°)`);
+										console.log(`  📍 Feature ID: ${properties.id || 'unknown'}, Tags:`, tagsObj);
 									} else {
 										// Default height offset if no config
 										feature.set('modelHeightOffset', 10);
@@ -514,6 +628,21 @@ $(function () {
 								} else {
 									if (osmTags.length > 0) {
 										console.log(`❌ No model assigned to overlay feature ${index + 1} with tags:`, osmTags);
+									}
+								}
+
+								// Check if this feature should be extruded as a 3D building
+								if (!modelMapping && window.buildings && window.buildings.isBuildingFeature(tagsObj)) {
+									const buildingOptions = window.buildings.createExtrudedBuilding(feature, tagsObj);
+									if (buildingOptions) {
+										// Store building extrusion data on the feature
+										feature.set('extrudedBuilding', buildingOptions);
+										feature.set('buildingHeight', buildingOptions.extrudedHeight);
+										feature.set('buildingTags', tagsObj);
+
+										console.log(`🏗️ SUCCESS: Created extruded building for overlay feature with tags:`, tagsObj);
+									} else {
+										console.log(`🏗️ WARNING: Failed to create extruded building for feature with building tags:`, tagsObj);
 									}
 								}
 							});
@@ -743,22 +872,6 @@ $(function () {
 						// Initialize search modules after taginfo is ready
 						initKeySearch();
 						initValueSearch();
-
-						// Enable automatic execution of tag queries from URL
-						if (window.initialTagQueries && window.initialTagQueries.length > 0) {
-							console.log('🔍 Tag queries from URL found, executing automatically:', window.initialTagQueries);
-
-							// Execute tag queries from URL
-							window.initialTagQueries.forEach(function(query) {
-								console.log('🔍 Executing tag query from URL:', query);
-								if (window.executeTagQuery && typeof window.executeTagQuery === 'function') {
-									window.executeTagQuery(query.key, query.value);
-								}
-							});
-
-							// Clear the initial queries after execution
-							window.initialTagQueries = [];
-						}
 
 						// Set up event listeners for tag query URL updates
 						setupTagQueryEventListeners();
@@ -1646,8 +1759,40 @@ if (routeLayers.length > 0) {
                                             tagsObj[tag] = properties[tag];
                                         });
 
+                                        // Extract way coordinates from geometry for bearing calculation
+                                        let wayCoordinates = null;
+                                        let nodeIndex = null;
+                                        const geometry = feature.getGeometry();
+                                        if (geometry && geometry.getType() === 'LineString') {
+                                            const coordinates = geometry.getCoordinates();
+                                            // Convert from map projection to lon/lat for bearing calculation
+                                            wayCoordinates = coordinates.map(coord => 
+                                                ol.proj.transform(coord, map.getView().getProjection(), 'EPSG:4326')
+                                            );
+                                            // Use the middle node for bearing calculation, or first if only one segment
+                                            nodeIndex = Math.floor(wayCoordinates.length / 2);
+                                            
+                                            console.log(`📐 Way coordinates extracted: ${wayCoordinates.length} nodes, calculating bearing at node ${nodeIndex}`);
+                                            console.log(`📐 Way coordinate sample:`, wayCoordinates.slice(0, 3).map((coord, i) => 
+                                                `[${i}]: [${coord[0].toFixed(6)}, ${coord[1].toFixed(6)}]`
+                                            ));
+                                        } else if (geometry && geometry.getType() === 'Point') {
+                                            // For point features, always try to find bearing from parent ways
+                                            const parentBearing = window.findBearingFromParentWays(feature, features);
+                                            if (parentBearing !== null) {
+                                                // Don't set coordinates when we have parent bearing
+                                                wayCoordinates = null;
+                                                nodeIndex = null;
+                                                
+                                                // Override the bearing in the model configuration by setting a synthetic bearing
+                                                tagsObj._parentWayBearing = parentBearing;
+                                                
+                                                console.log(`🎯 Using parent way bearing ${(parentBearing * 180 / Math.PI).toFixed(2)}° for point feature`);
+                                            }
+                                        }
+
                                         // Check if the tags match any model mapping
-                                        const mapping = window.models ? window.models.getModelForTags(tagsObj) : null;
+                                        const mapping = window.models ? window.models.getModelForTags(tagsObj, wayCoordinates, nodeIndex) : null;
                                         if (mapping) {
                                             const modelFilename = mapping.model;
                                             const modelConfig = mapping.config;
@@ -1661,6 +1806,15 @@ if (routeLayers.length > 0) {
                                             if (modelConfig) {
                                                 feature.set('modelHeightOffset', modelConfig.heightOffset);
                                                 feature.set('modelRotation', modelConfig.rotation);
+                                                
+                                                // Log bearing and rotation information
+                                                const bearing = wayCoordinates && nodeIndex !== null ? 
+                                                    window.models.calculateBearing(wayCoordinates, nodeIndex) : 
+                                                    (tagsObj._parentWayBearing !== undefined ? tagsObj._parentWayBearing : null);
+                                                console.log(`🎯 Model ${modelFilename} orientation info:`);
+                                                console.log(`  📐 Bearing at node ${nodeIndex}: ${bearing ? (bearing * 180 / Math.PI).toFixed(2) : 'N/A'}°`);
+                                                console.log(`  🔄 Final rotation: [${modelConfig.rotation.join(', ')}] (Y-axis: ${(modelConfig.rotation[1] * 180 / Math.PI).toFixed(2)}°)`);
+                                                console.log(`  📍 Feature ID: ${properties.id || 'unknown'}, Tags:`, tagsObj);
                                             } else {
                                                 feature.set('modelHeightOffset', 0);
                                             }
@@ -1735,9 +1889,33 @@ if (routeLayers.length > 0) {
                                                     
                                                     // Create model matrix for positioning (improved for buildings)
                                                     const heightOffset = feature.get('modelHeightOffset') || 0.0;
-                                                    const modelMatrix = Cesium.Transforms.eastNorthUpToFixedFrame(
+                                                    let modelMatrix = Cesium.Transforms.eastNorthUpToFixedFrame(
                                                         Cesium.Cartesian3.fromDegrees(lonLat[0], lonLat[1], heightOffset)
                                                     );
+                                                    
+                                                    // Apply model rotation if specified
+                                                    const modelRotation = feature.get('modelRotation');
+                                                    if (modelRotation && Array.isArray(modelRotation) && modelRotation.length >= 3) {
+                                                        // Apply bearing rotation (Y-axis in OpenLayers becomes Z-axis rotation in Cesium east-north-up frame)
+                                                        if (modelRotation[1] !== 0) {
+                                                            const bearingRotation = Cesium.Matrix3.fromRotationZ(modelRotation[1]);
+                                                            modelMatrix = Cesium.Matrix4.multiplyByMatrix3(modelMatrix, bearingRotation, new Cesium.Matrix4());
+                                                        }
+                                                        
+                                                        // Apply X-axis rotation if needed
+                                                        if (modelRotation[0] !== 0) {
+                                                            const xRotation = Cesium.Matrix3.fromRotationX(modelRotation[0]);
+                                                            modelMatrix = Cesium.Matrix4.multiplyByMatrix3(modelMatrix, xRotation, new Cesium.Matrix4());
+                                                        }
+                                                        
+                                                        // Apply Z-axis rotation if needed  
+                                                        if (modelRotation[2] !== 0) {
+                                                            const zRotation = Cesium.Matrix3.fromRotationZ(modelRotation[2]);
+                                                            modelMatrix = Cesium.Matrix4.multiplyByMatrix3(modelMatrix, zRotation, new Cesium.Matrix4());
+                                                        }
+                                                        
+                                                        console.log(`🎯 Applied rotation to model: [${modelRotation.map(r => (r * 180 / Math.PI).toFixed(2) + '°').join(', ')}]`);
+                                                    }
                                                     
                                                     console.log(`🎯 Model url: ${model.uri}`);
                                                     const cesiumModel = cesiumScene.primitives.add(Cesium.Model.fromGltf({
@@ -1803,17 +1981,17 @@ if (routeLayers.length > 0) {
                 const view = map.getView();
                 const center = ol.proj.toLonLat(view.getCenter());
                 const zoom = view.getZoom();
-                const height = 500; // Reduced from 2000m to 500m for better building visibility
+                const height = 200; // Lower height for better building visibility
                 
                 scene.camera.flyTo({
                     destination: Cesium.Cartesian3.fromDegrees(
                         center[0],
                         center[1],
-                        Math.max(height, 1000)
+                        Math.max(height, 300) // Lower minimum height
                     ),
                     orientation: {
                         heading: 0.0,
-                        pitch: -Cesium.Math.PI_OVER_TWO,
+                        pitch: -Cesium.Math.PI_OVER_FOUR, // Less steep angle to see buildings better
                         roll: 0.0
                     }
                 });
@@ -1824,6 +2002,11 @@ if (routeLayers.length > 0) {
                 // IMPORTANT: Update the is3d state to true
                 is3d = true;
                 console.log('Updated is3d state to true');
+
+                // Dispatch event to notify buildings module that 3D mode is initialized
+                window.dispatchEvent(new CustomEvent('ol3dInitialized', {
+                    detail: { ol3d: ol3d }
+                }));
             } else {
                 console.log('Switching from 3D to 2D mode');
                 
@@ -1838,6 +2021,9 @@ if (routeLayers.length > 0) {
                 // IMPORTANT: Update the is3d state to false
                 is3d = false;
                 console.log('Updated is3d state to false');
+
+                // Dispatch event to notify buildings module that 3D mode is destroyed
+                window.dispatchEvent(new CustomEvent('ol3dDestroyed'));
                 
                 // Reset initialization flag to allow reinitialization on next 3D toggle
                 cesiumInitialized = false;

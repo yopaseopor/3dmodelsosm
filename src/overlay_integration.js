@@ -52,7 +52,7 @@ function createOlLayer(overlay) {
                                 if (index < 5) { // Log first 5
                                     console.log('🎯 Processing feature', index, 'properties:', feature.getProperties());
                                 }
-                                assignModelToFeature(feature);
+                                assignModelToFeature(feature, features);
                             });
                             
                             console.log('Added ' + features.length + ' features for ' + overlay.title);
@@ -174,7 +174,7 @@ function createOverlayGroup(title, layers) {
 }
 
 // Helper function to assign 3D models to features
-function assignModelToFeature(feature) {
+function assignModelToFeature(feature, allFeatures = null) {
     const properties = feature.getProperties();
     console.log('🎯 Assigning model to GeoJSON feature with properties:', properties);
     
@@ -189,13 +189,46 @@ function assignModelToFeature(feature) {
         tagsObj[tag] = properties[tag];
     });
     
+    // Extract way coordinates from LineString geometry for bearing calculation
+    let wayCoordinates = null;
+    let nodeIndex = null;
+    const geometry = feature.getGeometry();
+    if (geometry && geometry.getType() === 'LineString') {
+        const coordinates = geometry.getCoordinates();
+        // Convert from map projection to lon/lat for bearing calculation
+        wayCoordinates = coordinates.map(coord => 
+            ol.proj.transform(coord, window.map.getView().getProjection(), 'EPSG:4326')
+        );
+        // Use the middle node for bearing calculation, or first if only one segment
+        nodeIndex = Math.floor(wayCoordinates.length / 2);
+        
+        console.log(`📐 Way coordinates extracted: ${wayCoordinates.length} nodes, calculating bearing at node ${nodeIndex}`);
+        console.log(`📐 Way coordinate sample:`, wayCoordinates.slice(0, 3).map((coord, i) => 
+            `[${i}]: [${coord[0].toFixed(6)}, ${coord[1].toFixed(6)}]`
+        ));
+    } else if (geometry && geometry.getType() === 'Point' && allFeatures) {
+        // For point features, always try to find bearing from parent ways first
+        const parentBearing = findBearingFromParentWays(feature, allFeatures);
+        if (parentBearing !== null) {
+            // Don't set coordinates when we have parent bearing
+            wayCoordinates = null;
+            nodeIndex = null;
+            
+            // Override the bearing in the model configuration by setting a synthetic bearing
+            tagsObj._parentWayBearing = parentBearing;
+            
+            console.log(`🎯 Using parent way bearing ${(parentBearing * 180 / Math.PI).toFixed(2)}° for point feature`);
+        }
+    }
+    
     // Check if the tags match any model mapping
-    const modelFilename = window.models ? window.models.getModelForTags(tagsObj) : null;
-    console.log(`🎯 Model filename for tags:`, tagsObj, ':', modelFilename);
-    if (modelFilename) {
-        // Get model configuration first
-        const modelConfig = window.models ? window.models.getModelConfig(modelFilename) : null;
-
+    const modelMapping = window.models ? window.models.getModelForTags(tagsObj, wayCoordinates, nodeIndex) : null;
+    console.log(`🎯 Model mapping for tags:`, tagsObj, ':', modelMapping);
+    
+    if (modelMapping) {
+        const modelFilename = modelMapping.model;
+        const modelConfig = modelMapping.config;
+        
         // Set the model property for ol-cesium to use - use Cesium Model options object
         const modelUrl = `/3dmodelsosm/src/models/${modelFilename}`;
         const modelOptions = {
@@ -211,6 +244,15 @@ function assignModelToFeature(feature) {
             // Add height offset so models appear above ground
             feature.set('modelHeightOffset', modelConfig.heightOffset);
             feature.set('modelRotation', modelConfig.rotation);
+            
+            // Log bearing and rotation information
+            const bearing = wayCoordinates && nodeIndex !== null ? 
+                window.models.calculateBearing(wayCoordinates, nodeIndex) : 
+                (tagsObj._parentWayBearing !== undefined ? tagsObj._parentWayBearing : null);
+            console.log(`🎯 Model ${modelFilename} orientation info:`);
+            console.log(`  📐 Bearing at node ${nodeIndex}: ${bearing ? (bearing * 180 / Math.PI).toFixed(2) : 'N/A'}°`);
+            console.log(`  🔄 Final rotation: [${modelConfig.rotation.join(', ')}] (Y-axis: ${(modelConfig.rotation[1] * 180 / Math.PI).toFixed(2)}°)`);
+            console.log(`  📍 Feature ID: ${properties.id || 'unknown'}, Tags:`, tagsObj);
         } else {
             // Default height offset if no config
             feature.set('modelHeightOffset', 10);
@@ -219,6 +261,63 @@ function assignModelToFeature(feature) {
         console.log(`🎯 SUCCESS: Assigned 3D model ${modelFilename} to overlay feature with tags:`, tagsObj);
     }
 }
+
+// Function to find bearing from parent ways for a point feature
+function findBearingFromParentWays(feature, allFeatures) {
+    const properties = feature.getProperties();
+    const geometry = feature.getGeometry();
+    
+    // Only process point features
+    if (!geometry || geometry.getType() !== 'Point') return null;
+    
+    const pointCoords = geometry.getCoordinates();
+    const pointLonLat = ol.proj.transform(pointCoords, window.map.getView().getProjection(), 'EPSG:4326');
+    
+    console.log(`🔍 Looking for parent ways for point at [${pointLonLat[0].toFixed(6)}, ${pointLonLat[1].toFixed(6)}]`);
+    
+    let closestWay = null;
+    let closestDistance = Infinity;
+    let closestIndex = 0;
+    
+    // Find the closest way that contains this point
+    for (const otherFeature of allFeatures) {
+        const otherGeometry = otherFeature.getGeometry();
+        if (otherGeometry && otherGeometry.getType() === 'LineString') {
+            const wayCoords = otherGeometry.getCoordinates();
+            
+            // Find the closest point on this way to our point
+            wayCoords.forEach((coord, index) => {
+                const wayLonLat = ol.proj.transform(coord, window.map.getView().getProjection(), 'EPSG:4326');
+                const distance = Math.sqrt(
+                    Math.pow(wayLonLat[0] - pointLonLat[0], 2) + 
+                    Math.pow(wayLonLat[1] - pointLonLat[1], 2)
+                );
+                
+                if (distance < closestDistance) {
+                    closestDistance = distance;
+                    closestWay = wayCoords;
+                    closestIndex = index;
+                }
+            });
+        }
+    }
+    
+    // If we found a close enough way (within ~10 meters), calculate bearing
+    if (closestWay && closestDistance < 0.0001) {
+        const wayLonLatCoords = closestWay.map(coord => 
+            ol.proj.transform(coord, window.map.getView().getProjection(), 'EPSG:4326')
+        );
+        
+        const bearing = window.models.calculateBearing(wayLonLatCoords, closestIndex);
+        console.log(`🎯 Found parent way for point, bearing: ${(bearing * 180 / Math.PI).toFixed(2)}° at distance: ${(closestDistance * 111000).toFixed(1)}m`);
+        return bearing;
+    }
+    
+    return null;
+}
+
+// Make findBearingFromParentWays globally accessible
+window.findBearingFromParentWays = findBearingFromParentWays;
 
 // Function to integrate overlays
 function integrateOverlays() {
@@ -344,11 +443,24 @@ function parseFeatureForModel(feature) {
         tagsObj[tag] = properties[tag];
     });
     
+    // Extract way coordinates from geometry for bearing calculation
+    let wayCoordinates = null;
+    let nodeIndex = null;
+    const geometry = feature.geometry || feature.getGeometry();
+    if (geometry && (geometry.type === 'LineString' || (geometry.getType && geometry.getType() === 'LineString'))) {
+        const coordinates = geometry.coordinates || geometry.getCoordinates();
+        if (coordinates) {
+            // Convert from lon/lat to lon/lat (assuming GeoJSON is already in EPSG:4326)
+            wayCoordinates = coordinates;
+            nodeIndex = Math.floor(wayCoordinates.length / 2);
+        }
+    }
+    
     // Check if the tags match any model mapping
-    const modelFilename = window.models ? window.models.getModelForTags(tagsObj) : null;
-    if (modelFilename) {
-        const modelConfig = window.models ? window.models.getModelConfig(modelFilename) : null;
-        const modelUrl = `/3dmodelsosm/src/models/${modelFilename}`;
+    const modelMapping = window.models ? window.models.getModelForTags(tagsObj, wayCoordinates, nodeIndex) : null;
+    if (modelMapping) {
+        const modelConfig = modelMapping.config;
+        const modelUrl = `/3dmodelsosm/src/models/${modelMapping.model}`;
         return {
             uri: modelUrl,
             scale: modelConfig ? modelConfig.scale : 1.0,
