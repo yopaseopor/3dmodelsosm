@@ -175,6 +175,7 @@ function createOverlayGroup(title, layers) {
 
 // Helper function to assign 3D models to features
 function assignModelToFeature(feature, allFeatures = null) {
+    console.log('Processing feature geometry:', feature.getGeometry() ? feature.getGeometry().getType() : 'null', 'tags:', feature.getProperties());
     const properties = feature.getProperties();
     console.log('🎯 Assigning model to GeoJSON feature with properties:', properties);
     
@@ -188,77 +189,291 @@ function assignModelToFeature(feature, allFeatures = null) {
     osmTags.forEach(tag => {
         tagsObj[tag] = properties[tag];
     });
-    
-    // Extract way coordinates from LineString geometry for bearing calculation
+    console.log('assignModelToFeature tagsObj:', tagsObj);
+    console.log('geometryType initial:', geometryType);
+
+    let geometryType = 'point'; // default
     let wayCoordinates = null;
     let nodeIndex = null;
-    const geometry = feature.getGeometry();
-    if (geometry && geometry.getType() === 'LineString') {
-        const coordinates = geometry.getCoordinates();
-        // Convert from map projection to lon/lat for bearing calculation
-        wayCoordinates = coordinates.map(coord => 
-            ol.proj.transform(coord, window.map.getView().getProjection(), 'EPSG:4326')
-        );
-        // Use the middle node for bearing calculation, or first if only one segment
-        nodeIndex = Math.floor(wayCoordinates.length / 2);
-        
-        console.log(`📐 Way coordinates extracted: ${wayCoordinates.length} nodes, calculating bearing at node ${nodeIndex}`);
-        console.log(`📐 Way coordinate sample:`, wayCoordinates.slice(0, 3).map((coord, i) => 
-            `[${i}]: [${coord[0].toFixed(6)}, ${coord[1].toFixed(6)}]`
-        ));
-    } else if (geometry && geometry.getType() === 'Point' && allFeatures) {
-        // For point features, always try to find bearing from parent ways first
-        const parentBearing = findBearingFromParentWays(feature, allFeatures);
-        if (parentBearing !== null) {
-            // Don't set coordinates when we have parent bearing
-            wayCoordinates = null;
-            nodeIndex = null;
+    
+    console.log(`🎯 Geometry detection for feature with tags:`, tagsObj, `geometry:`, geometry ? geometry.getType() : 'null');
+    
+    if (geometry) {
+        const geomType = geometry.getType();
+        console.log(`🎯 Geometry type: ${geomType}`);
+        if (geomType === 'Polygon' || geomType === 'MultiPolygon') {
+            geometryType = 'area';
+        } else if (geomType === 'LineString' || geomType === 'MultiLineString') {
+            // Check if this is a way tagged as an area
+            console.log(`🎯 Checking area tags on LineString: area:highway=${tagsObj['area:highway']}`);
+            if (tagsObj['area:highway'] || tagsObj['area:amenity'] || tagsObj['area:leisure'] || tagsObj['area:natural'] || tagsObj['area:landuse']) {
+                geometryType = 'area';
+                console.log(`🎨 Detected area-tagged way, treating as area geometry`);
+            } else {
+                geometryType = 'line';
+            }
+            // Extract way coordinates from LineString geometry for bearing calculation
+            const coordinates = geometry.getCoordinates();
+            // Convert from map projection to lon/lat for bearing calculation
+            wayCoordinates = coordinates.map(coord => 
+                ol.proj.transform(coord, window.map.getView().getProjection(), 'EPSG:4326')
+            );
+            // Use the middle node for bearing calculation, or first if only one segment
+            nodeIndex = Math.floor(wayCoordinates.length / 2);
             
-            // Override the bearing in the model configuration by setting a synthetic bearing
-            tagsObj._parentWayBearing = parentBearing;
-            
-            console.log(`🎯 Using parent way bearing ${(parentBearing * 180 / Math.PI).toFixed(2)}° for point feature`);
+            console.log(`📐 Way coordinates extracted: ${wayCoordinates.length} nodes, calculating bearing at node ${nodeIndex}`);
+            console.log(`📐 Way coordinate sample:`, wayCoordinates.slice(0, 3).map((coord, i) => 
+                `[${i}]: [${coord[0].toFixed(6)}, ${coord[1].toFixed(6)}]`
+            ));
+        } else if (geomType === 'Point') {
+            geometryType = 'point';
+            // For point features, always try to find bearing from parent ways first
+            if (allFeatures) {
+                const parentBearing = findBearingFromParentWays(feature, allFeatures);
+                if (parentBearing !== null) {
+                    // Don't set coordinates when we have parent bearing
+                    wayCoordinates = null;
+                    nodeIndex = null;
+                    
+                    // Override the bearing in the model configuration by setting a synthetic bearing
+                    tagsObj._parentWayBearing = parentBearing;
+                    
+                    console.log(`🎯 Using parent way bearing ${(parentBearing * 180 / Math.PI).toFixed(2)}° for point feature`);
+                }
+            }
         }
     }
     
-    // Check if the tags match any model mapping
-    const modelMapping = window.models ? window.models.getModelForTags(tagsObj, wayCoordinates, nodeIndex) : null;
-    console.log(`🎯 Model mapping for tags:`, tagsObj, ':', modelMapping);
+    // Check for area tags that force geometry type after geometry determination
+    if (Object.keys(tagsObj).some(key => key.startsWith('area:'))) {
+        geometryType = 'area';
+    }
+
+    // Special case: treat footway features as lines for model placement along paths
+    if (tagsObj['highway'] === 'footway') {
+        geometryType = 'line';
+    }
+
+    console.log(`🔍 Final geometry type determination: ${geometryType} for tags:`, tagsObj);
+    const modelMapping = window.models ? window.models.getModelForTags(tagsObj, wayCoordinates, nodeIndex, geometryType) : null;
+    console.log(`🎯 Model mapping for tags:`, tagsObj, `geometry type: ${geometryType}:`, modelMapping);
     
     if (modelMapping) {
         const modelFilename = modelMapping.model;
         const modelConfig = modelMapping.config;
+        const mappingGeometryType = modelMapping.geometryType;
         
-        // Set the model property for ol-cesium to use - use Cesium Model options object
-        const modelUrl = `/3dmodelsosm/src/models/${modelFilename}`;
-        const modelOptions = {
-            uri: modelUrl,
-            scale: modelConfig ? modelConfig.scale : 1.0,
-            heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
-        };
-
-        feature.model = modelOptions;
-
-        // Set additional model configuration for positioning
-        if (modelConfig) {
-            // Add height offset so models appear above ground
-            feature.set('modelHeightOffset', modelConfig.heightOffset);
-            feature.set('modelRotation', modelConfig.rotation);
+        if (mappingGeometryType === 'area') {
+            console.log('🎨 Area code reached for tags:', tagsObj, 'geometryType:', mappingGeometryType);
+            // Handle area textures/materials
+            console.log(`🎨 Applying area texture ${modelFilename} to polygon or line`);
             
-            // Log bearing and rotation information
-            const bearing = wayCoordinates && nodeIndex !== null ? 
-                window.models.calculateBearing(wayCoordinates, nodeIndex) : 
-                (tagsObj._parentWayBearing !== undefined ? tagsObj._parentWayBearing : null);
-            console.log(`🎯 Model ${modelFilename} orientation info:`);
-            console.log(`  📐 Bearing at node ${nodeIndex}: ${bearing ? (bearing * 180 / Math.PI).toFixed(2) : 'N/A'}°`);
-            console.log(`  🔄 Final rotation: [${modelConfig.rotation.join(', ')}] (Y-axis: ${(modelConfig.rotation[1] * 180 / Math.PI).toFixed(2)}°)`);
-            console.log(`  📍 Feature ID: ${properties.id || 'unknown'}, Tags:`, tagsObj);
+            // Create a Cesium entity for the textured area or line
+            try {
+                const geometry = feature.getGeometry();
+                if (geometry && geometry.getType() === 'Polygon') {
+                    const coordinates = geometry.getCoordinates()[0];
+                    const cesiumPositions = coordinates.map(coord => Cesium.Cartesian3.fromDegrees(coord[0], coord[1]));
+                    
+                    if (cesiumPositions.length > 0) {
+                        const hierarchy = new Cesium.PolygonHierarchy(cesiumPositions);
+                        const areaEntity = new Cesium.Entity({
+                            polygon: {
+                                hierarchy: hierarchy,
+                                material: new Cesium.ImageMaterialProperty({
+                                    image: `/3dmodelsosm/src/models/${modelFilename}`,
+                                    repeat: new Cesium.Cartesian2(1, 1)
+                                }),
+                                height: 0,
+                                extrudedHeight: 0
+                            }
+                        });
+                        
+                        feature.set('areaEntity', areaEntity);
+                        
+                        // If we're in 3D mode, immediately add the area to the scene
+                        if (window.ol3d && window.ol3d.getDataSources) {
+                            const dataSources = window.ol3d.getDataSources();
+                            let dataSource = null;
+                            for (let i = 0; i < dataSources.length; i++) {
+                                const ds = dataSources.get(i);
+                                if (ds.name === 'AreaTextures') {
+                                    dataSource = ds;
+                                    break;
+                                }
+                            }
+                            if (!dataSource) {
+                                dataSource = new Cesium.CustomDataSource('AreaTextures');
+                                dataSources.add(dataSource);
+                                console.log('🎨 Created new AreaTextures data source');
+                            }
+                            dataSource.entities.add(areaEntity);
+                            console.log(`🎨 Added textured area entity to 3D scene`);
+                        }
+                        
+                        console.log(`🎨 SUCCESS: Created Cesium entity for area texture ${modelFilename} with ${cesiumPositions.length} vertices`);
+                    } else {
+                        console.warn(`🎨 No valid coordinates found for area texture`);
+                    }
+                } else if (geometry && geometry.getType() === 'LineString') {
+                    const coordinates = geometry.getCoordinates();
+                    const positions = coordinates.map(coord => Cesium.Cartesian3.fromDegrees(coord[0], coord[1]));
+                    
+                    if (positions.length > 1) {
+                        const areaEntity = new Cesium.Entity({
+                            polyline: {
+                                positions: positions,
+                                width: 5,
+                                material: new Cesium.ImageMaterialProperty({
+                                    image: `/3dmodelsosm/src/models/${modelFilename}`,
+                                    repeat: new Cesium.Cartesian2(coordinates.length * 0.1, 1)
+                                })
+                            }
+                        });
+                        
+                        feature.set('areaEntity', areaEntity);
+                        
+                        // If we're in 3D mode, immediately add the polyline to the scene
+                        if (window.ol3d && window.ol3d.getDataSources) {
+                            const dataSources = window.ol3d.getDataSources();
+                            let dataSource = null;
+                            for (let i = 0; i < dataSources.length; i++) {
+                                const ds = dataSources.get(i);
+                                if (ds.name === 'AreaTextures') {
+                                    dataSource = ds;
+                                    break;
+                                }
+                            }
+                            if (!dataSource) {
+                                dataSource = new Cesium.CustomDataSource('AreaTextures');
+                                dataSources.add(dataSource);
+                                console.log('🎨 Created new AreaTextures data source');
+                            }
+                            dataSource.entities.add(areaEntity);
+                            console.log(`🎨 Added textured polyline entity to 3D scene`);
+                        }
+                        
+                        console.log(`🎨 SUCCESS: Created Cesium entity for line texture ${modelFilename} with ${positions.length} positions`);
+                    } else {
+                        console.warn(`🎨 No valid coordinates found for line texture`);
+                    }
+                } else {
+                    console.warn(`🎨 Area texture feature has unsupported geometry type: ${geometry ? geometry.getType() : 'null'}`);
+                }
+            } catch (error) {
+                console.error('🎨 Error creating area texture entity:', error);
+            }
+            
+        } else if (mappingGeometryType === 'line') {
+            // Handle way textures or models along ways
+            console.log(`🛤️ Applying way model/texture ${modelFilename} along linestring`);
+            
+            // For ways, we can either:
+            // 1. Place multiple models along the way (like existing behavior)
+            // 2. Apply texture along the corridor
+            
+            // Start with option 1: place models at intervals along the way
+            if (wayCoordinates && wayCoordinates.length > 1) {
+                const wayModels = [];
+                
+                for (let i = 0; i < wayCoordinates.length - 1; i += 0.05) {
+                    const floorI = Math.floor(i);
+                    const frac = i - floorI;
+                    const curr = wayCoordinates[floorI];
+                    const next = wayCoordinates[floorI + 1];
+                    
+                    // Interpolate position
+                    const lon = curr[0] + (next[0] - curr[0]) * frac;
+                    const lat = curr[1] + (next[1] - curr[1]) * frac;
+                    
+                    const bearing = window.models.calculateBearing(wayCoordinates, floorI);
+                    const adjustedConfig = window.models.adjustConfigForDirection ? 
+                        window.models.adjustConfigForDirection(modelConfig, tagsObj, bearing) : modelConfig;
+                    
+                    const wayModelOptions = {
+                        uri: `/3dmodelsosm/src/models/${modelFilename}`,
+                        scale: adjustedConfig ? adjustedConfig.scale : 1.0,
+                        heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+                        position: Cesium.Cartesian3.fromDegrees(lon, lat)
+                    };
+                    
+                    wayModels.push({
+                        position: [lon, lat],
+                        model: wayModelOptions,
+                        config: adjustedConfig
+                    });
+                }
+                
+                feature.wayModels = wayModels;
+                console.log(`🛤️ SUCCESS: Placed ${wayModels.length} models along way with tags:`, tagsObj);
+            } else if (!wayCoordinates && geometry && geometry.getType() === 'Point') {
+                // Handle point features treated as lines: place a single model at the point
+                const pointCoords = geometry.getCoordinates();
+                const lonLat = ol.proj.transform(pointCoords, window.map.getView().getProjection(), 'EPSG:4326');
+                
+                const pointModelOptions = {
+                    uri: `/3dmodelsosm/src/models/${modelFilename}`,
+                    scale: modelConfig ? modelConfig.scale : 1.0,
+                    heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+                    position: Cesium.Cartesian3.fromDegrees(lonLat[0], lonLat[1])
+                };
+                
+                feature.model = pointModelOptions;
+                
+                // Set additional model configuration for positioning
+                if (modelConfig) {
+                    // Add height offset so models appear above ground
+                    feature.set('modelHeightOffset', modelConfig.heightOffset);
+                    feature.set('modelRotation', modelConfig.rotation);
+                    
+                    // Log bearing and rotation information
+                    console.log(`🎯 Model ${modelFilename} orientation info for point feature:`);
+                    console.log(`  📍 Position: [${lonLat[0].toFixed(6)}, ${lonLat[1].toFixed(6)}]`);
+                    console.log(`  🔄 Final rotation: [${modelConfig.rotation.join(', ')}]`);
+                    console.log(`  📍 Feature ID: ${properties.id || 'unknown'}, Tags:`, tagsObj);
+                } else {
+                    // Default height offset if no config
+                    feature.set('modelHeightOffset', 10);
+                }
+                
+                console.log(`🛤️ SUCCESS: Placed single model at point for line-treated feature with tags:`, tagsObj);
+            }
+            
         } else {
-            // Default height offset if no config
-            feature.set('modelHeightOffset', 10);
-        }
+            // Handle point models (existing functionality)
+            console.log(`🎯 Applying point model ${modelFilename}`);
+            
+            // Set the model property for ol-cesium to use - use Cesium Model options object
+            const modelUrl = `/3dmodelsosm/src/models/${modelFilename}`;
+            const modelOptions = {
+                uri: modelUrl,
+                scale: modelConfig ? modelConfig.scale : 1.0,
+                heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+            };
 
-        console.log(`🎯 SUCCESS: Assigned 3D model ${modelFilename} to overlay feature with tags:`, tagsObj);
+            feature.model = modelOptions;
+
+            // Set additional model configuration for positioning
+            if (modelConfig) {
+                // Add height offset so models appear above ground
+                feature.set('modelHeightOffset', modelConfig.heightOffset);
+                feature.set('modelRotation', modelConfig.rotation);
+                
+                // Log bearing and rotation information
+                const bearing = wayCoordinates && nodeIndex !== null ? 
+                    window.models.calculateBearing(wayCoordinates, nodeIndex) : 
+                    (tagsObj._parentWayBearing !== undefined ? tagsObj._parentWayBearing : null);
+                console.log(`🎯 Model ${modelFilename} orientation info:`);
+                console.log(`  📐 Bearing at node ${nodeIndex}: ${bearing ? (bearing * 180 / Math.PI).toFixed(2) : 'N/A'}°`);
+                console.log(`  🔄 Final rotation: [${modelConfig.rotation.join(', ')}] (Y-axis: ${(modelConfig.rotation[1] * 180 / Math.PI).toFixed(2)}°)`);
+                console.log(`  📍 Feature ID: ${properties.id || 'unknown'}, Tags:`, tagsObj);
+            } else {
+                // Default height offset if no config
+                feature.set('modelHeightOffset', 10);
+            }
+
+            console.log(`🎯 SUCCESS: Assigned point model ${modelFilename} to feature with tags:`, tagsObj);
+        }
     }
 }
 
@@ -443,35 +658,104 @@ function parseFeatureForModel(feature) {
         tagsObj[tag] = properties[tag];
     });
     
-    // Extract way coordinates from geometry for bearing calculation
+    // Detect geometry type
+    const geometry = feature.geometry || feature.getGeometry();
+    let geometryType = 'point'; // default
     let wayCoordinates = null;
     let nodeIndex = null;
-    const geometry = feature.geometry || feature.getGeometry();
-    if (geometry && (geometry.type === 'LineString' || (geometry.getType && geometry.getType() === 'LineString'))) {
-        const coordinates = geometry.coordinates || geometry.getCoordinates();
-        if (coordinates) {
-            // Convert from lon/lat to lon/lat (assuming GeoJSON is already in EPSG:4326)
-            wayCoordinates = coordinates;
-            nodeIndex = Math.floor(wayCoordinates.length / 2);
+    
+    if (geometry) {
+        const geomType = geometry.type || (geometry.getType && geometry.getType());
+        if (geomType === 'Polygon' || geomType === 'MultiPolygon') {
+            geometryType = 'area';
+        } else if (geomType === 'LineString' || geomType === 'MultiLineString') {
+            // Extract way coordinates from geometry for bearing calculation
+            let wayCoordinates = null;
+            let nodeIndex = null;
+            const geometry = feature.getGeometry();
+            if (geometry) {
+                const geomType = geometry.getType();
+                if (geomType === 'LineString') {
+                    const coordinates = geometry.getCoordinates();
+                    if (coordinates) {
+                        wayCoordinates = coordinates.map(coord => ol.proj.transform(coord, window.map.getView().getProjection(), 'EPSG:4326'));
+                        nodeIndex = Math.floor(wayCoordinates.length / 2);
+                    }
+                } else if (geomType === 'MultiLineString') {
+                    const coordinates = geometry.getCoordinates();
+                    if (coordinates) {
+                        wayCoordinates = coordinates.flat().map(coord => ol.proj.transform(coord, window.map.getView().getProjection(), 'EPSG:4326'));
+                        nodeIndex = Math.floor(wayCoordinates.length / 2);
+                    }
+                }
+            }
+            geometryType = 'line';
+        } else if (geomType === 'Point') {
+            geometryType = 'point';
         }
     }
     
-    // Check if the tags match any model mapping
-    const modelMapping = window.models ? window.models.getModelForTags(tagsObj, wayCoordinates, nodeIndex) : null;
+    // Check if the tags match any model mapping with the detected geometry type
+    const modelMapping = window.models ? window.models.getModelForTags(tagsObj, wayCoordinates, nodeIndex, geometryType) : null;
     if (modelMapping) {
         const modelConfig = modelMapping.config;
-        const modelUrl = `/3dmodelsosm/src/models/${modelMapping.model}`;
-        return {
-            uri: modelUrl,
-            scale: modelConfig ? modelConfig.scale : 1.0,
-            heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
-        };
+        const mappingGeometryType = modelMapping.geometryType;
+        
+        if (mappingGeometryType === 'area') {
+            // Return area texture options
+            return {
+                type: 'area',
+                polygon: {
+                    hierarchy: geometry ? (geometry.coordinates || geometry.getCoordinates()) : [],
+                    material: {
+                        image: `/3dmodelsosm/src/models/${modelMapping.model}`,
+                        transparent: true
+                    },
+                    height: modelConfig ? modelConfig.heightOffset : 0,
+                    extrudedHeight: 0
+                }
+            };
+        } else if (mappingGeometryType === 'line') {
+            // For ways, return array of models along the way
+            const wayModels = [];
+            if (wayCoordinates && wayCoordinates.length > 1) {
+                const interval = Math.max(1, Math.floor(wayCoordinates.length / 10));
+                for (let i = 0; i < wayCoordinates.length; i += interval) {
+                    const bearing = window.models.calculateBearing(wayCoordinates, i);
+                    const adjustedConfig = window.models.adjustConfigForDirection ? 
+                        window.models.adjustConfigForDirection(modelConfig, tagsObj, bearing) : modelConfig;
+                    
+                    wayModels.push({
+                        position: wayCoordinates[i],
+                        model: {
+                            uri: `/3dmodelsosm/src/models/${modelMapping.model}`,
+                            scale: adjustedConfig ? adjustedConfig.scale : 1.0,
+                            heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+                            position: Cesium.Cartesian3.fromDegrees(wayCoordinates[i][0], wayCoordinates[i][1])
+                        },
+                        config: adjustedConfig
+                    });
+                }
+            }
+            return {
+                type: 'way',
+                models: wayModels
+            };
+        } else {
+            // Return point model options (existing functionality)
+            const modelUrl = `/3dmodelsosm/src/models/${modelMapping.model}`;
+            return {
+                uri: modelUrl,
+                scale: modelConfig ? modelConfig.scale : 1.0,
+                heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+            };
+        }
     }
     return null;
 }
 
-// Make parseFeatureForModel available globally
-window.parseFeatureForModel = parseFeatureForModel;
+// Make assignModelToFeature available globally
+window.assignModelToFeature = assignModelToFeature;
 console.log('Overlay integration module loaded');
 
 // Listen for config to be available

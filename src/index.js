@@ -426,8 +426,31 @@ $(function () {
           tagsObj[tag] = properties[tag];
         });
 
+        // Extract way coordinates from geometry for bearing calculation (for GeoJSON LineString features)
+        let wayCoordinates = null;
+        let nodeIndex = null;
+        const geometry = feature.getGeometry();
+        if (geometry && geometry.getType() === 'LineString') {
+            const coordinates = geometry.getCoordinates();
+            // Convert from map projection to lon/lat for bearing calculation
+            wayCoordinates = coordinates.map(coord => 
+                ol.proj.transform(coord, window.map.getView().getProjection(), 'EPSG:4326')
+            );
+            // Use the middle node for bearing calculation, or first if only one segment
+            nodeIndex = Math.floor(wayCoordinates.length / 2);
+        }
+
+        // Determine geometry type based on geometry and tags
+        let geometryType = 'point';
+        const geomType = geometry ? geometry.getType() : null;
+        if (geomType === 'LineString') {
+            geometryType = tagsObj['area'] ? 'area' : 'line';
+        } else if (geomType === 'Polygon') {
+            geometryType = 'area';
+        }
+
         // Check if the tags match any model mapping
-        const modelMapping = window.models ? window.models.getModelForTags(tagsObj) : null;
+        const modelMapping = window.models ? window.models.getModelForTags(tagsObj, wayCoordinates, nodeIndex, geometryType) : null;
         if (modelMapping) {
           const modelFilename = modelMapping.model;
           const modelConfig = modelMapping.config;
@@ -453,6 +476,16 @@ $(function () {
           }
 
           console.log(`🎯 SUCCESS: Assigned 3D model ${modelFilename} to GeoJSON feature with tags:`, tagsObj);
+
+          // Apply model repetitions for lines and areas (skip points and buildings)
+          if (modelMapping.geometryType !== 'point' && window.modelRepetition) {
+            // Special handling for highway=footway lines
+            if (modelMapping.geometryType === 'line' && modelMapping.tags.includes('highway=footway') && window.footwayRepetition) {
+              window.footwayRepetition.applyFootwayRepetitions(feature, modelFilename, modelConfig, vectorSource);
+            } else {
+              window.modelRepetition.applyModelRepetitions(feature, modelFilename, modelConfig, modelMapping.geometryType);
+            }
+          }
         } else {
           if (osmTags.length > 0) {
             console.log(`❌ No model assigned to GeoJSON feature with tags:`, osmTags);
@@ -475,20 +508,26 @@ $(function () {
               const entity = window.buildings.createBuildingEntity(buildingData);
               if (entity) {
                 const scene = window.ol3d.getCesiumScene();
-                // Find or create buildings data source
+                // Find or create buildings data source with safety checks
                 let dataSource = null;
-                scene.dataSources._dataSources.forEach(ds => {
-                  if (ds.name === 'Buildings') {
-                    dataSource = ds;
-                  }
-                });
+                if (scene.dataSources && scene.dataSources._dataSources) {
+                  scene.dataSources._dataSources.forEach(ds => {
+                    if (ds.name === 'Buildings') {
+                      dataSource = ds;
+                    }
+                  });
+                }
                 if (!dataSource) {
                   dataSource = new Cesium.CustomDataSource('Buildings');
-                  scene.dataSources.add(dataSource);
+                  if (scene.dataSources) {
+                    scene.dataSources.add(dataSource);
+                  }
                 }
-                dataSource.entities.add(entity);
-                window.buildings.buildingEntities.set(feature, entity);
-                console.log(`🏗️ Added new building entity to 3D scene from GeoJSON`);
+                if (dataSource && dataSource.entities) {
+                  dataSource.entities.add(entity);
+                  window.buildings.buildingEntities.set(feature, entity);
+                  console.log(`🏗️ Added new building entity to 3D scene from GeoJSON`);
+                }
               }
             }
           } else {
@@ -590,8 +629,17 @@ $(function () {
 									));
 								}
 
+								// Determine geometry type based on geometry and tags
+								let geometryType = 'point';
+								const geomType = geometry ? geometry.getType() : null;
+								if (geomType === 'LineString') {
+									geometryType = tagsObj['area'] ? 'area' : 'line';
+								} else if (geomType === 'Polygon') {
+									geometryType = 'area';
+								}
+
 								// Check if the tags match any model mapping
-								const modelMapping = window.models ? window.models.getModelForTags(tagsObj, wayCoordinates, nodeIndex) : null;
+								const modelMapping = window.models ? window.models.getModelForTags(tagsObj, wayCoordinates, nodeIndex, geometryType) : null;
 								if (modelMapping) {
 									const modelFilename = modelMapping.model;
 									const modelConfig = modelMapping.config;
@@ -625,6 +673,16 @@ $(function () {
 									}
 
 									console.log(`🎯 SUCCESS: Assigned 3D model ${modelFilename} to overlay feature with tags:`, tagsObj);
+
+									// Apply model repetitions for lines and areas (skip points and buildings)
+									if (modelMapping.geometryType !== 'point' && window.modelRepetition) {
+										// Special handling for highway=footway lines
+										if (modelMapping.geometryType === 'line' && modelMapping.tags.includes('highway=footway') && window.footwayRepetition) {
+											window.footwayRepetition.applyFootwayRepetitions(feature, modelFilename, modelConfig, me);
+										} else {
+											window.modelRepetition.applyModelRepetitions(feature, modelFilename, modelConfig, modelMapping.geometryType);
+										}
+									}
 								} else {
 									if (osmTags.length > 0) {
 										console.log(`❌ No model assigned to overlay feature ${index + 1} with tags:`, osmTags);
@@ -850,6 +908,18 @@ $(function () {
 
 	// Export map to global scope for other modules
 	window.map = map;
+
+	// Process vector tile features for models when tiles load
+	map.getLayers().forEach(layer => {
+		if (layer.getSource && layer.getSource() instanceof ol.source.VectorTile) {
+			layer.getSource().on('tileloadend', function(event) {
+				const features = event.tile.getFeatures();
+				features.forEach(feature => {
+					assignModelToFeature(feature);
+				});
+			});
+		}
+	});
 
     // Initialize Nominatim search
     initNominatimSearch(map);
@@ -1844,129 +1914,11 @@ if (routeLayers.length > 0) {
                     assignModelsToExistingFeatures(layer);
                 });
 
-                // Manually add 3D models to Cesium scene
-                console.log('🎯 Manually adding 3D models to Cesium scene...');
-                if (!window.ol3d) {
-                    console.log('🎯 window.ol3d is null, cannot add models');
-                    return;
-                }
-                const cesiumScene = window.ol3d.getCesiumScene();
-                if (cesiumScene && cesiumScene.primitives) {
-                    // Clear any existing models first
-                    const primitivesToRemove = [];
-                    cesiumScene.primitives._primitives.forEach((primitive, idx) => {
-                        if (primitive instanceof Cesium.Model) {
-                            primitivesToRemove.push(primitive);
-                        }
-                    });
-                    primitivesToRemove.forEach(primitive => {
-                        cesiumScene.primitives.remove(primitive);
-                    });
-                    console.log(`🎯 Cleared ${primitivesToRemove.length} existing models`);
-
-                    // Manually add 3D models to Cesium scene
-                    try {
-                        // Enable depth testing against terrain (important for 3D models)
-                        cesiumScene.globe.depthTestAgainstTerrain = true;
-                        console.log('🎯 Enabled depth test against terrain');
-
-                        // Add models for features with model properties
-                        let modelsAdded = 0;
-                        function addModelsFromLayer(layer) {
-                            if (layer.getSource && typeof layer.getSource === 'function') {
-                                try {
-                                    const source = layer.getSource();
-                                    if (source && source.getFeatures) {
-                                        const features = source.getFeatures();
-                                        features.forEach((feature, fidx) => {
-                                            const model = feature.model;
-                                            if (model && typeof model === 'object' && model.uri) {
-                                                try {
-                                                    const geometry = feature.getGeometry();
-                                                    const extent = geometry.getExtent();
-                                                    const center = ol.extent.getCenter(extent);
-                                                    const lonLat = ol.proj.toLonLat(center);
-                                                    
-                                                    // Create model matrix for positioning (improved for buildings)
-                                                    const heightOffset = feature.get('modelHeightOffset') || 0.0;
-                                                    let modelMatrix = Cesium.Transforms.eastNorthUpToFixedFrame(
-                                                        Cesium.Cartesian3.fromDegrees(lonLat[0], lonLat[1], heightOffset)
-                                                    );
-                                                    
-                                                    // Apply model rotation if specified
-                                                    const modelRotation = feature.get('modelRotation');
-                                                    if (modelRotation && Array.isArray(modelRotation) && modelRotation.length >= 3) {
-                                                        // Apply bearing rotation (Y-axis in OpenLayers becomes Z-axis rotation in Cesium east-north-up frame)
-                                                        if (modelRotation[1] !== 0) {
-                                                            const bearingRotation = Cesium.Matrix3.fromRotationZ(modelRotation[1]);
-                                                            modelMatrix = Cesium.Matrix4.multiplyByMatrix3(modelMatrix, bearingRotation, new Cesium.Matrix4());
-                                                        }
-                                                        
-                                                        // Apply X-axis rotation if needed
-                                                        if (modelRotation[0] !== 0) {
-                                                            const xRotation = Cesium.Matrix3.fromRotationX(modelRotation[0]);
-                                                            modelMatrix = Cesium.Matrix4.multiplyByMatrix3(modelMatrix, xRotation, new Cesium.Matrix4());
-                                                        }
-                                                        
-                                                        // Apply Z-axis rotation if needed  
-                                                        if (modelRotation[2] !== 0) {
-                                                            const zRotation = Cesium.Matrix3.fromRotationZ(modelRotation[2]);
-                                                            modelMatrix = Cesium.Matrix4.multiplyByMatrix3(modelMatrix, zRotation, new Cesium.Matrix4());
-                                                        }
-                                                        
-                                                        console.log(`🎯 Applied rotation to model: [${modelRotation.map(r => (r * 180 / Math.PI).toFixed(2) + '°').join(', ')}]`);
-                                                    }
-                                                    
-                                                    console.log(`🎯 Model url: ${model.uri}`);
-                                                    const cesiumModel = cesiumScene.primitives.add(Cesium.Model.fromGltf({
-                                                        url: model.uri, // Use 'url' as in Stack Exchange example
-                                                        modelMatrix: modelMatrix,
-                                                        scale: model.scale || 1.0, // Use model's scale or default to 1.0
-                                                        show: true
-                                                    }));
-                                                    
-                                                    // Set height reference to clamp to ground
-                                                    cesiumModel.heightReference = model.heightReference;
-                                                    
-                                                    console.log(`🎯 Added GLTF model ${fidx} using Stack Exchange approach at:`, lonLat);
-                                                    modelsAdded++;
-                                                    
-                                                    // Listen for loading
-                                                    cesiumModel.readyPromise.then(function(model) {
-                                                        console.log(`🎯 GLTF Model ${fidx} loaded successfully:`, model);
-                                                    }).catch(function(error) {
-                                                        console.error(`🎯 GLTF Model ${fidx} failed to load:`, error);
-                                                    });
-                                                    
-                                                } catch (modelError) {
-                                                    console.error(`🎯 Error adding GLTF model ${fidx}:`, modelError);
-                                                }
-                                            }
-                                        });
-                                    }
-                                } catch (e) {
-                                    console.log('Error accessing layer source in addModelsFromLayer:', e);
-                                }
-                            }
-                            // Check group children recursively
-                            else if (layer.getLayers && typeof layer.getLayers === 'function') {
-                                const childLayers = layer.getLayers().getArray();
-                                childLayers.forEach(childLayer => {
-                                    addModelsFromLayer(childLayer);
-                                });
-                            }
-                        }
-
-                        window.map.getLayers().getArray().forEach(layer => {
-                            addModelsFromLayer(layer);
-                        });
-
-                        console.log(`🎯 Added ${modelsAdded} GLTF models using Stack Exchange approach`);
-                    } catch (stackExchangeError) {
-                        console.error('🎯 Error with Stack Exchange GLTF approach:', stackExchangeError);
-                    }
+                // Use the new model renderer
+                if (window.modelRenderer) {
+                    window.modelRenderer.addAllModels();
                 } else {
-                    console.log('🎯 Cesium scene not available for manual model addition');
+                    console.log('🎯 model_renderer not available');
                 }
                 
                 console.log('3D mode enabled with synchronized layers');
@@ -3205,6 +3157,21 @@ function setOverlaySummary(summary) {
 
 // Make it available globally
 window.setOverlaySummary = setOverlaySummary;
+
+function getSelectedElementTypes() {
+    // Get selected element types from checkboxes or default to all
+    const elementTypesCheckboxes = $('.element-type-checkbox:checked');
+    console.log('🔍 getSelectedElementTypes: Found', elementTypesCheckboxes.length, 'checked checkboxes');
+
+    if (elementTypesCheckboxes.length > 0) {
+        const values = elementTypesCheckboxes.map((i, el) => $(el).val()).get();
+        console.log('🔍 getSelectedElementTypes: Selected values:', values);
+        return values;
+    }
+
+    console.log('🔍 getSelectedElementTypes: No checkboxes found, returning defaults');
+    return ['node', 'way', 'relation'];
+}
 
 function updatePermalink() {
     console.log('🔗 updatePermalink called - START');

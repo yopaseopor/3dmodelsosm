@@ -135,49 +135,32 @@ function processQueryResults(allFeatures, key, value) {
             }
 
             if (geometryType === 'Polygon' || geometryType === 'MultiPolygon') {
-                try {
-                    const area = geometry.getArea();
-                    if (isNaN(area) || area <= 0) {
-                        const centroid = ol.extent.getCenter(geometry.getExtent());
-                        return new ol.style.Style({
-                            image: new ol.style.Circle({
-                                radius: 6,
-                                fill: new ol.style.Fill({
-                                    color: [...generateQueryColor(vectorLayer.get('id'), false), 0.8]
-                                }),
-                                stroke: new ol.style.Stroke({
-                                    color: [...generateQueryColor(vectorLayer.get('id'), false), 1.0],
-                                    width: 2
-                                })
-                            }),
-                            geometry: new ol.geom.Point(centroid)
-                        });
-                    }
-                    return new ol.style.Style({
-                        stroke: new ol.style.Stroke({
-                            color: generateQueryColor(vectorLayer.get('id'), false),
-                            width: 2
-                        }),
-                        fill: new ol.style.Fill({
-                            color: [...generateQueryColor(vectorLayer.get('id'), false), 0.05]
-                        })
-                    });
-                } catch (error) {
+                const area = geometry.getArea();
+                if (isNaN(area) || area <= 0) {
                     const centroid = ol.extent.getCenter(geometry.getExtent());
                     return new ol.style.Style({
                         image: new ol.style.Circle({
                             radius: 6,
                             fill: new ol.style.Fill({
-                                color: [...generateQueryColor(vectorLayer.get('id'), false), 0.4]
+                                color: [...generateQueryColor(vectorLayer.get('id'), false), 0.8]
                             }),
                             stroke: new ol.style.Stroke({
-                                color: generateQueryColor(vectorLayer.get('id'), false),
+                                color: [...generateQueryColor(vectorLayer.get('id'), false), 1.0],
                                 width: 2
                             })
                         }),
                         geometry: new ol.geom.Point(centroid)
                     });
                 }
+                return new ol.style.Style({
+                    stroke: new ol.style.Stroke({
+                        color: generateQueryColor(vectorLayer.get('id'), false),
+                        width: 2
+                    }),
+                    fill: new ol.style.Fill({
+                        color: [...generateQueryColor(vectorLayer.get('id'), false), 0.05]
+                    })
+                });
             }
 
             const centroid = ol.extent.getCenter(geometry.getExtent());
@@ -236,46 +219,322 @@ function processQueryResults(allFeatures, key, value) {
             console.log(`🔍 Feature ${index + 1} full properties:`, properties);
         }
 
-        // Collect all OSM tags into an object
+        // Collect all OSM tags into an object first (for area detection)
         const tagsObj = {};
         osmTags.forEach(tag => {
             tagsObj[tag] = properties[tag];
         });
 
-        // Check if the tags match any model mapping
-        const mapping = window.models ? window.models.getModelForTags(tagsObj) : null;
-        if (mapping) {
-            // Get model configuration from mapping
-            const modelFilename = mapping.model;
-            const modelConfig = mapping.config;
+        // Detect geometry type
+        let geometry = feature.getGeometry ? feature.getGeometry() : properties.geometry;
+        let geometryType = 'point'; // default
+        let wayCoordinates = null;
+        let nodeIndex = null;
 
-            // Set the model property for ol-cesium to use - use Cesium Model options object
-            const modelUrl = `/3dmodelsosm/src/models/${modelFilename}`;
-            const modelOptions = {
-                uri: modelUrl,
-                scale: modelConfig ? modelConfig.scale : 1.0,
-                heightReference: Cesium.HeightReference.NONE,
-                // Add height offset by setting the position
-                // The height offset will be handled by the feature's geometry elevation
-            };
+        console.log(`🎯 Geometry detection for feature ${index + 1}:`, geometry, `type:`, geometry ? (geometry.getType ? geometry.getType() : typeof geometry) : 'null');
 
-            feature.set('model', modelOptions);
-
-            // Set additional model configuration for positioning
-            if (modelConfig) {
-                // Add height offset so models appear above ground
-                feature.set('modelHeightOffset', modelConfig.heightOffset);
-                feature.set('modelRotation', modelConfig.rotation);
+        // First check if this is an area feature by tags (override geometry detection)
+        if (tagsObj['area:highway'] || tagsObj['area:amenity'] || tagsObj['area:leisure'] || tagsObj['area:natural'] || tagsObj['area:landuse']) {
+            geometryType = 'area';
+            console.log(`🎨 Feature has area tags, forcing geometry type to 'area'`);
+        } else if (geometry) {
+            let geomType;
+            if (geometry.getType) {
+                geomType = geometry.getType();
+            } else if (typeof geometry === 'object' && geometry.type) {
+                geomType = geometry.type;
             } else {
-                // Default height offset if no config
-                feature.set('modelHeightOffset', 0);
+                // Try to infer from the string representation
+                const geomStr = String(geometry);
+                if (geomStr.includes('Polygon')) {
+                    geomType = 'Polygon';
+                } else if (geomStr.includes('LineString')) {
+                    geomType = 'LineString';
+                } else if (geomStr.includes('Point')) {
+                    geomType = 'Point';
+                } else {
+                    geomType = 'Point'; // fallback
+                }
             }
 
-            console.log(`🎯 SUCCESS: Assigned 3D model ${modelFilename} (${modelUrl}) to feature with tags:`, tagsObj);
-            console.log(`🎯 Model options:`, modelOptions);
-            console.log(`🎯 Feature now has model property:`, feature.get('model'));
-            console.log(`🎯 Feature geometry type:`, feature.getGeometry().getType());
-            console.log(`🎯 Feature coordinates:`, feature.getGeometry().getCoordinates());
+            console.log(`🎯 Detected geometry type: ${geomType}`);
+
+            if (geomType === 'Polygon' || geomType === 'MultiPolygon') {
+                geometryType = 'area';
+            } else if (geomType === 'LineString' || geomType === 'MultiLineString') {
+                geometryType = 'line';
+                // Extract way coordinates
+                let coordinates;
+                if (geometry.getCoordinates) {
+                    coordinates = geometry.getCoordinates();
+                } else if (geometry.coordinates) {
+                    coordinates = geometry.coordinates;
+                } else {
+                    coordinates = null;
+                }
+
+                if (coordinates) {
+                    // Convert from map projection to lon/lat for bearing calculation
+                    wayCoordinates = coordinates.map(coord => 
+                        ol.proj.transform(coord, window.map.getView().getProjection(), 'EPSG:4326')
+                    );
+                    // Use the middle node for bearing calculation, or first if only one segment
+                    nodeIndex = Math.floor(wayCoordinates.length / 2);
+                }
+            } else if (geomType === 'Point') {
+                geometryType = 'point';
+            }
+        }
+
+        console.log(`🔍 Final geometry type determination for feature ${index + 1}: ${geometryType}`);
+
+        const mapping = window.models ? window.models.getModelForTags(tagsObj, wayCoordinates, nodeIndex, geometryType) : null;
+        console.log('mapping:', mapping);
+        if (mapping) {
+            const modelFilename = mapping.model;
+            const modelConfig = mapping.config;
+            const mappingGeometryType = mapping.geometryType;
+            console.log('mappingGeometryType:', mappingGeometryType);
+
+            // Apply footway repetitions if this is a footway feature
+            if (window.footwayRepetition && typeof window.footwayRepetition.applyFootwayRepetitions === 'function') {
+                const tags = feature.getProperties();
+                const highway = tags.highway;
+                
+                // Check if this is a footway feature
+                if (highway === 'footway' || highway === 'path' || highway === 'pedestrian') {
+                    console.log('🚶 Applying repetitions to footway feature from query:', tags);
+                    try {
+                        window.footwayRepetition.applyFootwayRepetitions(feature, modelFilename, modelConfig);
+                    } catch (error) {
+                        console.error('🚶 Error applying repetitions to footway query result:', error);
+                    }
+                }
+            }
+
+            if (mappingGeometryType === 'area') {
+                console.log('🎨 Area code reached for tags:', tagsObj, 'geometryType:', mappingGeometryType);
+                // Handle area textures/materials
+                console.log(`🎨 Applying area texture ${modelFilename} to polygon`);
+
+                // Create a Cesium entity for the textured area
+                if (mappingGeometryType === 'area') {
+                    // Handle area models (polygons with textures)
+                    console.log(`🎨 Applying area texture ${modelFilename} to polygon`);
+
+                    let coordinates;
+                    const geometry = feature.getGeometry();
+
+                    if (geometry && geometry.getType && geometry.getType() === 'Polygon') {
+                        coordinates = geometry.getCoordinates();
+                        console.log(`🎨 Using Polygon coordinates:`, coordinates);
+                    } else if (geometry && geometry.getType && geometry.getType() === 'LineString') {
+                        // For area-tagged ways, create a simple polygon from the linestring
+                        const lineCoords = geometry.getCoordinates();
+                        coordinates = [lineCoords]; // Single ring
+                        console.log(`🎨 Converting LineString to Polygon coordinates:`, coordinates);
+                    } else if (geometry && geometry.coordinates) {
+                        // Fallback for GeoJSON-style geometry
+                        coordinates = geometry.coordinates;
+                        console.log(`🎨 Using GeoJSON coordinates:`, coordinates);
+                    } else if (properties.geometry && properties.geometry.coordinates) {
+                        // Last resort - use geometry from properties
+                        coordinates = properties.geometry.coordinates;
+                        console.log(`🎨 Using geometry property coordinates:`, coordinates);
+                    } else {
+                        console.warn(`🎨 No coordinates found for area texture`);
+                        coordinates = null;
+                    }
+
+                    if (coordinates && coordinates.length > 0) {
+                        console.log(`🎨 Processing coordinates with ${coordinates.length} rings`);
+
+                        // Convert coordinates to Cesium Cartesian3 array
+                        const cesiumPositions = [];
+                        for (const ring of coordinates) {
+                            console.log(`🎨 Processing ring with ${ring.length} points`);
+                            for (const coord of ring) {
+                                const lonLat = ol.proj.transform(coord, window.map.getView().getProjection(), 'EPSG:4326');
+                                const cartesian = Cesium.Cartesian3.fromDegrees(lonLat[0], lonLat[1], 0);
+                                cesiumPositions.push(cartesian);
+                                console.log(`🎨 Added point: [${lonLat[0]}, ${lonLat[1]}] -> Cartesian3`);
+                            }
+                        }
+
+                        console.log(`🎨 Created ${cesiumPositions.length} Cesium positions`);
+
+                        // Create polygon hierarchy
+                        const hierarchy = new Cesium.PolygonHierarchy(cesiumPositions);
+                        console.log(`🎨 Created polygon hierarchy`);
+
+                        // Create textured material
+                        const material = new Cesium.ImageMaterialProperty({
+                            image: `/3dmodelsosm/src/models/${modelFilename}`,
+                            transparent: true,
+                            color: new Cesium.Color(1.0, 1.0, 1.0, 0.8) // Slight transparency
+                        });
+                        console.log(`🎨 Created material with texture: ${modelFilename}`);
+
+                        // Create the entity
+                        const areaEntity = new Cesium.Entity({
+                            polygon: {
+                                hierarchy: hierarchy,
+                                height: modelConfig ? modelConfig.heightOffset : 0,
+                                extrudedHeight: 0, // Flat on ground
+                                material: material,
+                                outline: true, // Enable outline for debugging
+                                outlineColor: Cesium.Color.RED,
+                                outlineWidth: 2.0,
+                                shadows: Cesium.ShadowMode.DISABLED
+                            },
+                            properties: {
+                                areaId: properties.id || `area_${Date.now()}`,
+                                areaTags: tagsObj,
+                                isArea: true,
+                                textureUrl: `/3dmodelsosm/src/models/${modelFilename}`
+                            }
+                        });
+
+                        console.log(`🎨 Created area entity:`, areaEntity);
+
+                        // Store the entity on the feature for later management
+                        feature.set('areaEntity', areaEntity);
+
+                        // Add to data source if in 3D mode
+                        const dataSource = this.getDataSource();
+                        if (dataSource) {
+                            dataSource.entities.add(areaEntity);
+                            console.log(`🎨 Added textured area entity to 3D scene. Total entities: ${dataSource.entities.values.length}`);
+
+                            // Force a render
+                            if (window.ol3d.getCesiumScene) {
+                                const scene = window.ol3d.getCesiumScene();
+                                if (scene && scene.requestRender) {
+                                    scene.requestRender();
+                                    console.log('🎨 Requested scene render');
+                                }
+                            }
+                        } else {
+                            console.warn('🎨 No 3D mode available, area entity stored but not rendered');
+                        }
+
+                        console.log(`🎨 SUCCESS: Created Cesium entity for area texture ${modelFilename} with ${cesiumPositions.length} vertices`);
+                    } else {
+                        console.warn(`🎨 No valid coordinates found for area texture`);
+                    }
+                }
+                // Handle point/line models (existing functionality)
+                const modelUrl = `/3dmodelsosm/src/models/${modelFilename}`;
+                const modelOptions = {
+                    uri: modelUrl,
+                    scale: modelConfig ? modelConfig.scale : 1.0,
+                    heightReference: mappingGeometryType === 'line' ? Cesium.HeightReference.CLAMP_TO_GROUND : Cesium.HeightReference.NONE,
+                };
+
+                if (mappingGeometryType === 'line') {
+                    // For ways, place models at intervals along the way
+                    if (wayCoordinates && wayCoordinates.length > 1) {
+                        const wayModels = [];
+                        const interval = Math.max(1, Math.floor(wayCoordinates.length / 10)); // Place models every ~10th segment
+
+                        for (let i = 0; i < wayCoordinates.length; i += interval) {
+                            const bearing = window.models.calculateBearing(wayCoordinates, i);
+                            const adjustedConfig = window.models.adjustConfigForDirection ? 
+                                window.models.adjustConfigForDirection(modelConfig, tagsObj, bearing) : modelConfig;
+
+                            const wayModelOptions = {
+                                uri: `/3dmodelsosm/src/models/${modelFilename}`,
+                                scale: adjustedConfig ? adjustedConfig.scale : 1.0,
+                                heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+                                position: Cesium.Cartesian3.fromDegrees(wayCoordinates[i][0], wayCoordinates[i][1])
+                            };
+
+                            wayModels.push({
+                                position: wayCoordinates[i],
+                                model: wayModelOptions,
+                                config: adjustedConfig
+                            });
+                        }
+
+                        feature.set('wayModels', wayModels);
+                        console.log(`🛤️ SUCCESS: Placed ${wayModels.length} models along way with tags:`, tagsObj);
+                    }
+                } else {
+                    // Point model
+                    feature.set('model', modelOptions);
+                }
+
+                // Set additional model configuration for positioning
+                if (modelConfig) {
+                    // Add height offset so models appear above ground
+                    feature.set('modelHeightOffset', modelConfig.heightOffset);
+                    feature.set('modelRotation', modelConfig.rotation);
+                } else {
+                    // Default height offset if no config
+                    feature.set('modelHeightOffset', 0);
+                }
+
+                console.log(`🎯 SUCCESS: Assigned 3D model ${modelFilename} (${modelUrl}) to feature with tags:`, tagsObj);
+                console.log(`🎯 Model options:`, modelOptions);
+                console.log(`🎯 Feature now has model property:`, feature.get('model'));
+                console.log(`🎯 Feature geometry type:`, geometry ? geometry.getType() : 'null');
+            } else {
+                // Handle point/line models (existing functionality)
+                const modelUrl = `/3dmodelsosm/src/models/${modelFilename}`;
+                const modelOptions = {
+                    uri: modelUrl,
+                    scale: modelConfig ? modelConfig.scale : 1.0,
+                    heightReference: mappingGeometryType === 'line' ? Cesium.HeightReference.CLAMP_TO_GROUND : Cesium.HeightReference.NONE,
+                };
+
+                if (mappingGeometryType === 'line') {
+                    // For ways, place models at intervals along the way
+                    if (wayCoordinates && wayCoordinates.length > 1) {
+                        const wayModels = [];
+                        const interval = Math.max(1, Math.floor(wayCoordinates.length / 10)); // Place models every ~10th segment
+
+                        for (let i = 0; i < wayCoordinates.length; i += interval) {
+                            const bearing = window.models.calculateBearing(wayCoordinates, i);
+                            const adjustedConfig = window.models.adjustConfigForDirection ? 
+                                window.models.adjustConfigForDirection(modelConfig, tagsObj, bearing) : modelConfig;
+
+                            const wayModelOptions = {
+                                uri: `/3dmodelsosm/src/models/${modelFilename}`,
+                                scale: adjustedConfig ? adjustedConfig.scale : 1.0,
+                                heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+                                position: Cesium.Cartesian3.fromDegrees(wayCoordinates[i][0], wayCoordinates[i][1])
+                            };
+
+                            wayModels.push({
+                                position: wayCoordinates[i],
+                                model: wayModelOptions,
+                                config: adjustedConfig
+                            });
+                        }
+
+                        feature.set('wayModels', wayModels);
+                        console.log(`🛤️ SUCCESS: Placed ${wayModels.length} models along way with tags:`, tagsObj);
+                    }
+                } else {
+                    // Point model
+                    feature.set('model', modelOptions);
+                }
+
+                // Set additional model configuration for positioning
+                if (modelConfig) {
+                    // Add height offset so models appear above ground
+                    feature.set('modelHeightOffset', modelConfig.heightOffset);
+                    feature.set('modelRotation', modelConfig.rotation);
+                } else {
+                    // Default height offset if no config
+                    feature.set('modelHeightOffset', 0);
+                }
+
+                console.log(`🎯 SUCCESS: Assigned 3D model ${modelFilename} (${modelUrl}) to feature with tags:`, tagsObj);
+                console.log(`🎯 Model options:`, modelOptions);
+                console.log(`🎯 Feature now has model property:`, feature.get('model'));
+                console.log(`🎯 Feature geometry type:`, geometry ? geometry.getType() : 'null');
+            }
         } else {
             if (osmTags.length > 0) {
                 console.log(`❌ No model assigned to feature ${index + 1} with tags:`, osmTags);
@@ -385,64 +644,49 @@ function processQueryResults(allFeatures, key, value) {
     $('#clear-search-btn').show();
 
     // If we added features, make sure they are visible: fit view to features and render
-    try {
-        const src = vectorLayer.getSource();
-        const feats = src.getFeatures ? src.getFeatures() : [];
-        console.log('🎯 Added features count for overlay', overlayId, ':', feats.length);
+    const src = vectorLayer.getSource();
+    const feats = src.getFeatures ? src.getFeatures() : [];
+    console.log('🎯 Added features count for overlay', overlayId, ':', feats.length);
 
-        // Ensure layer is visible and on top
-        try {
-            vectorLayer.setVisible(true);
-            // Give it a high z-index so it renders above basemap/other overlays
-            if (typeof vectorLayer.setZIndex === 'function') vectorLayer.setZIndex(1000);
-        } catch (zErr) {
-            console.warn('⚠️ Could not set zIndex on vector layer:', zErr);
-        }
+    // Ensure layer is visible and on top
+    vectorLayer.setVisible(true);
+    // Give it a high z-index so it renders above basemap/other overlays
+    if (typeof vectorLayer.setZIndex === 'function') vectorLayer.setZIndex(1000);
 
-        if (feats.length > 0 && window.map) {
-            const featuresExtent = src.getExtent();
+    if (feats.length > 0 && window.map) {
+        const featuresExtent = src.getExtent();
 
-            console.log('🎯 Features extent:', featuresExtent);
+        console.log('🎯 Features extent:', featuresExtent);
 
-            // Validate extent numbers (must be finite and not empty)
-            const isValidExtent = featuresExtent && !ol.extent.isEmpty(featuresExtent) &&
-                featuresExtent.every(coord => Number.isFinite(coord));
+        // Validate extent numbers (must be finite and not empty)
+        const isValidExtent = featuresExtent && !ol.extent.isEmpty(featuresExtent) &&
+            featuresExtent.every(coord => Number.isFinite(coord));
 
-            if (isValidExtent) {
-                try {
-                    const mapView = window.map.getView();
-                    const mapSize = window.map.getSize();
-                    const viewExtent = mapView.calculateExtent(mapSize);
+        if (isValidExtent) {
+            const mapView = window.map.getView();
+            const mapSize = window.map.getSize();
+            const viewExtent = mapView.calculateExtent(mapSize);
 
-                    // Only fit the view if the features extent is not already fully inside the current view
-                    const needFit = !(ol.extent.containsExtent(viewExtent, featuresExtent));
-                    console.log('🔎 View extent contains features extent?', ol.extent.containsExtent(viewExtent, featuresExtent), 'needFit:', needFit);
+            // Only fit the view if the features extent is not already fully inside the current view
+            const needFit = !(ol.extent.containsExtent(viewExtent, featuresExtent));
+            console.log('🔎 View extent contains features extent?', ol.extent.containsExtent(viewExtent, featuresExtent), 'needFit:', needFit);
 
-                    if (needFit) {
-                        console.log('🔎 Fitting map view to new features extent for overlay', overlayId);
-                        // Fit with padding and maxZoom to avoid zooming too far
-                        mapView.fit(featuresExtent, { size: mapSize, maxZoom: 18, padding: [50, 50, 50, 50] });
-                    } else {
-                        console.log('🔎 Features already within view; skipping fit to avoid flash');
-                    }
-                } catch (fitErr) {
-                    console.warn('⚠️ Error fitting view to extent:', fitErr);
-                }
+            if (needFit) {
+                console.log('🔎 Fitting map view to new features extent for overlay', overlayId);
+                // Fit with padding and maxZoom to avoid zooming too far
+                mapView.fit(featuresExtent, { size: mapSize, maxZoom: 18, padding: [50, 50, 50, 50] });
             } else {
-                console.warn('⚠️ Invalid features extent, skipping fit:', featuresExtent);
+                console.log('🔎 Features already within view; skipping fit to avoid flash');
             }
-
-            // Force synchronous render to ensure visibility
-            try {
-                window.map.renderSync();
-            } catch (rsErr) {
-                console.warn('⚠️ renderSync failed, calling render instead:', rsErr);
-                window.map.render();
-            }
+        } else {
+            console.warn('⚠️ Invalid features extent, skipping fit:', featuresExtent);
         }
-    } catch (err) {
-        console.error('🎯 Error while trying to show features on map:', err);
+
+        // Force synchronous render to ensure visibility
+        window.map.renderSync();
+        window.map.render();
     }
+    console.error('🎯 Error while trying to show features on map:');
 }
 
 /**
@@ -595,47 +839,43 @@ function executeSingleQuery(query, queryType, retryCount = 0, serverRetryCount =
  * @param {string} key - Optional key to filter by
  * @param {boolean} useYesCsv - Whether to use yes/no focused CSV
  */
-function performValueSearch(query, key, useYesCsv = false) {
+function performValueSearch(query, key) {
     let results = []; // Initialize results variable
 
-    try {
-        // Read checkbox state (default false)
-        const useYesCsv = $('#use-yes-csv-checkbox').is(':checked');
+    // Read checkbox state (default false)
+    const useYesCsv = $('#use-yes-csv-checkbox').is(':checked');
 
-        // Choose appropriate loader/init function
-        const ensureLoaded = useYesCsv ? window.initTaginfoAPIYes : window.initTaginfoAPI;
-        const loadedFlag = useYesCsv ? (window.taginfoDataYes && window.taginfoDataYes.loaded) : (window.taginfoData && window.taginfoData.loaded);
+    // Choose appropriate loader/init function
+    const ensureLoaded = useYesCsv ? window.initTaginfoAPIYes : window.initTaginfoAPI;
+    const loadedFlag = useYesCsv ? (window.taginfoDataYes && window.taginfoDataYes.loaded) : (window.taginfoData && window.taginfoData.loaded);
 
-        if (!loadedFlag) {
-            console.log('Taginfo data for requested dataset not loaded, initializing...');
-            if (ensureLoaded) {
-                ensureLoaded().then(() => {
-                    console.log('Taginfo API (requested dataset) initialized, retrying search');
-                    window.performValueSearch(query, key);
-                }).catch(error => {
-                    console.error('Failed to initialize taginfo API for requested dataset:', error);
-                });
-            } else {
-                console.error('No init function for requested taginfo dataset');
-            }
-            return;
-        }
-
-        results = window.searchValues(query, key, 100, useYesCsv);
-        currentResults = results;
-
-        // Check if displayValueResults exists before calling it
-        if (typeof displayValueResults === 'function') {
-            displayValueResults(results, query);
+    if (!loadedFlag) {
+        console.log('Taginfo data for requested dataset not loaded, initializing...');
+        if (ensureLoaded) {
+            ensureLoaded().then(() => {
+                console.log('Taginfo API (requested dataset) initialized, retrying search');
+                window.performValueSearch(query, key);
+            }).catch(error => {
+                console.error('Failed to initialize taginfo API for requested dataset:', error);
+            });
         } else {
-            console.error('displayValueResults is not defined');
+            console.error('No init function for requested taginfo dataset');
         }
-
-        // Trigger custom event for other components
-        searchInput.trigger('valueSearchResults', [results, key]);
-    } catch (error) {
-        console.error('Error in performValueSearch:', error);
+        return;
     }
+
+    results = window.searchValues(query, key, 100, useYesCsv);
+    currentResults = results;
+
+    // Check if displayValueResults exists before calling it
+    if (typeof displayValueResults === 'function') {
+        displayValueResults(results, query);
+    } else {
+        console.error('displayValueResults is not defined');
+    }
+
+    // Trigger custom event for other components
+    searchInput.trigger('valueSearchResults', [results, key]);
 }
 
 /**
@@ -2682,7 +2922,8 @@ window.generateQueryColor = generateQueryColor; // Export for use in other modul
 window.findOrCreateTagOverlaysGroup = findOrCreateTagOverlaysGroup; // Export for use in other modules
 window.createTagOverlay = createTagOverlay; // Export for use in other modules
 window.updateQueryStatistics = updateQueryStatistics; // Export for use in other modules
-window.getSelectedElementTypes = getSelectedElementTypes; // Export for use in other modules
+window.getSelectedElementTypes = getSelectedElementTypes;
+
 window.formatDetailedCount = formatDetailedCount; // Export for use in other modules
 window.formatDetailedCountWithNodeSeparation = formatDetailedCountWithNodeSeparation; // Export for use in other modules
 window.formatValueCount = formatValueCount; // Export for use in other modules
