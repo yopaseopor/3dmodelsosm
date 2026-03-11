@@ -5,13 +5,33 @@ window.modelRenderer = {
     
     // Main function to add models from layers
     addModelsFromLayer: function(layer, cesiumScene) {
+        console.log(`🎯 Processing layer: ${layer.get('title') || 'unnamed'} (type: ${layer.get('type') || 'unknown'})`);
+        
         if (layer.getSource && typeof layer.getSource === 'function') {
             try {
                 const source = layer.getSource();
                 if (source && source.getFeatures) {
                     const features = source.getFeatures();
+                    console.log(`🎯 Found ${features.length} features in layer`);
+                    
+                    let modelsFound = 0;
+                    let repetitionsFound = 0;
+                    
                     features.forEach((feature, fidx) => {
                         const model = feature.model;
+                        const hasRepetitions = feature.get('repetition_0');
+                        
+                        if (model) {
+                            console.log(`🎯 Feature ${fidx} has model: ${model.uri}`);
+                            modelsFound++;
+                        }
+                        
+                        if (hasRepetitions) {
+                            console.log(`🎯 Feature ${fidx} has repetitions starting with repetition_0`);
+                            repetitionsFound++;
+                        }
+                        
+                        // Process individual models
                         if (model && typeof model === 'object' && model.uri) {
                             try {
                                 this.addModelForFeature(feature, fidx, cesiumScene);
@@ -19,12 +39,18 @@ window.modelRenderer = {
                                 console.error(`🎯 Error adding model for feature ${fidx}:`, error);
                             }
                         }
+                        
+                        // Process repetition models
+                        this.addRepetitionModels(feature, cesiumScene);
                     });
+                    
+                    console.log(`🎯 Layer summary: ${modelsFound} models, ${repetitionsFound} features with repetitions`);
                 }
             } catch (e) {
-                console.log('Error accessing layer source in addModelsFromLayer:', e);
+                console.log('Error accessing layer source:', e.message);
             }
         }
+        
         // Check group children recursively
         else if (layer.getLayers && typeof layer.getLayers === 'function') {
             const childLayers = layer.getLayers().getArray();
@@ -101,7 +127,7 @@ window.modelRenderer = {
         const hasRepetitions = feature.get('repetition_0'); // Check if this feature has repetition models
         
         if (isRepetition || hasRepetitions) {
-            console.log(`🚶 Processing repetition models for ${isRepetition ? 'kerb' : 'footway'} feature`);
+            console.log(`🚶 Processing repetition models for ${isRepetition ? 'kerb' : 'highway/footway'} feature`);
             
             if (isRepetition) {
                 // Kerb repetition: model data is stored directly on the feature
@@ -116,7 +142,7 @@ window.modelRenderer = {
                     console.warn('🚶 Kerb repetition feature missing model data');
                 }
             } else {
-                // Footway repetition: find all repetition models on this feature
+                // Highway/Footway repetition: find all repetition models on this feature
                 let repIndex = 0;
                 while (true) {
                     const repModel = feature.get(`repetition_${repIndex}`);
@@ -149,8 +175,8 @@ window.modelRenderer = {
         
         console.log(`🚶 Repetition model ${repIndex} using stored position: [${repPosition[0].toFixed(6)}, ${repPosition[1].toFixed(6)}] (already lon/lat)`);
         
-        // Create model matrix for repetition model - GROUND LEVEL (no height offset)
-        const repHeightOffset = 0; // ON THE GROUND
+        // Create model matrix for repetition model - GROUND LEVEL (like footway)
+        const repHeightOffset = 0; // ON THE GROUND (same as footway)
         let repModelMatrix = Cesium.Transforms.eastNorthUpToFixedFrame(
             Cesium.Cartesian3.fromDegrees(repLonLat[0], repLonLat[1], repHeightOffset)
         );
@@ -162,7 +188,7 @@ window.modelRenderer = {
         if (feature.get('isRepetition')) {
             repModelRotation = feature.get('modelRotation');
         } else {
-            // For footway repetitions, rotation is stored as 'repetition_${repIndex}_rotation'
+            // For highway/footway repetitions, rotation is stored as 'repetition_${repIndex}_rotation'
             repModelRotation = feature.get(`repetition_${repIndex}_rotation`);
         }
         
@@ -214,9 +240,8 @@ window.modelRenderer = {
                 // Count models before adding
                 const originalCount = modelsAdded;
                 
-                window.map.getLayers().getArray().forEach(layer => {
-                    this.addModelsFromLayer(layer, cesiumScene);
-                });
+                // Recursively process all layers including group layers
+                this.processLayersRecursively(window.map.getLayers().getArray(), cesiumScene);
 
                 console.log(`🎯 Added ${modelsAdded - originalCount} GLTF models using model renderer`);
             } catch (error) {
@@ -225,7 +250,20 @@ window.modelRenderer = {
         } else {
             console.log('🎯 Cesium scene not available for manual model addition');
         }
-    }
+    },
+
+    // Recursively process layers including group layers
+    processLayersRecursively: function(layers, cesiumScene) {
+        layers.forEach(layer => {
+            if (layer.getLayers) {
+                // This is a group layer, process its child layers
+                this.processLayersRecursively(layer.getLayers().getArray(), cesiumScene);
+            } else {
+                // This is a regular layer
+                this.addModelsFromLayer(layer, cesiumScene);
+            }
+        });
+    },
 };
 
 console.log('🎯 model_renderer.js loaded successfully');

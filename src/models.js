@@ -11,6 +11,7 @@ const availableModels = [
     'w_area_highway_footway.glb',
     'w_barrier_kerb.glb',
     'w_highway_footway.glb',
+    'w_highway_residential.glb',
     'w_highway_street_lamp.glb',
     'w_highway_street_lamp_straight_mast.glb',
     'w_highway_traffic_signals.glb',
@@ -51,16 +52,18 @@ const modelMappings = [
     { tags: ['name=Torre Mapfre'], model: 'ES_CAT_BCN_torre_mapfre.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Torre Mapfre by name
     
     // Area models (new functionality) - supports both actual polygons and ways tagged as areas
-    { tags: ['area:highway=footway', 'footway=sidewalk'], model: 'llamborda.jpg', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway area texture
-    { tags: ['area:highway=footway', 'footway=crossing'], model: 'w_area_highway_footway.glb', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway point models
-    { tags: ['highway=footway'], model: 'w_area_highway_footway.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway point models
-    
-    // Way models (new functionality) - models placed along ways
+     { tags: ['area:highway=footway', 'footway=sidewalk'], model: 'llamborda.jpg', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway area texture
+   { tags: ['area:highway=footway', 'footway=crossing'], model: 'w_highway_residential.glb', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway point models
+        // Way models (new functionality) - models placed along ways
     { tags: ['highway=footway'], model: 'w_highway_footway.glb', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway line models
+    { tags: ['footway=sidewalk'], model: 'w_highway_footway.glb', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Sidewalk line models
+    { tags: ['highway=residential'], model: 'w_highway_residential.glb', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Residential road line models
     { tags: ['barrier=kerb'], model: 'w_barrier_kerb.glb', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Kerb
-{ tags: ['barrier=kerb'], model: 'w_barrier_kerb.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Kerb repetitions
-        { tags: ['footway=sidewalk'], model: 'w_area_highway_footway.glb', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Sidewalk line models
-    { tags: ['highway=footway','footway=sidewalk'], model: 'w_area_highway_footway.glb', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway line models
+{ tags: ['area:highway=footway'], model: 'w_highway_footway.glb', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway line models
+   
+    //{ tags: ['barrier=kerb'], model: 'w_barrier_kerb.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Kerb repetitions
+    
+    //{ tags: ['highway=footway','footway=sidewalk'], model: 'w_area_highway_footway.glb', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway line models
 ];
 
 /**

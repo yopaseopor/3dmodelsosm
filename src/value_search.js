@@ -301,13 +301,27 @@ function processQueryResults(allFeatures, key, value) {
                 const tags = feature.getProperties();
                 const highway = tags.highway;
                 
-                // Check if this is a footway feature
                 if (highway === 'footway' || highway === 'path' || highway === 'pedestrian') {
                     console.log('🚶 Applying repetitions to footway feature from query:', tags);
                     try {
                         window.footwayRepetition.applyFootwayRepetitions(feature, modelFilename, modelConfig);
                     } catch (error) {
                         console.error('🚶 Error applying repetitions to footway query result:', error);
+                    }
+                }
+            }
+
+            // Apply highway repetitions if this is a highway feature
+            if (window.highwayRepetition && typeof window.highwayRepetition.applyHighwayRepetitions === 'function') {
+                const tags = feature.getProperties();
+                const highway = tags.highway;
+                
+                if (highway && highway !== 'footway' && highway !== 'path' && highway !== 'pedestrian') {
+                    console.log(`🛣️ Applying repetitions to highway ${highway} feature from query:`, tags);
+                    try {
+                        window.highwayRepetition.applyHighwayRepetitions(feature, modelFilename, modelConfig, highway);
+                    } catch (error) {
+                        console.error(`🛣️ Error applying repetitions to highway ${highway} query result:`, error);
                     }
                 }
             }
@@ -2702,18 +2716,19 @@ function initValueSearch() {
                 try {
                     window.map.renderSync();
                 } catch (rsErr) {
-                    console.warn('⚠️ renderSync failed, calling render instead:', rsErr);
+                    console.error('⚠️ renderSync failed, calling render instead:', rsErr.message); // Fix error logging
                     window.map.render();
                 }
             }
-        } catch (err) {
-            console.error('🎯 Error while trying to show features on map:', err);
+        } catch (error) {
+            console.error('🎯 Error while trying to show features on map:', error.message); // Fix error logging
         }
     }
 
     function findOrCreateTagOverlaysGroup() {
         console.log('� Looking for Tag Queries group');
 
+// ...
         // SINGLE CHECK: First check if group already exists in map (fastest)
         if (window.map) {
             const existingLayers = window.map.getLayers().getArray();

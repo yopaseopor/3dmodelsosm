@@ -449,6 +449,8 @@ $(function () {
             geometryType = 'area';
         }
 
+        console.log(`🔍 Processing feature with tags:`, tagsObj);
+
         // Check if the tags match any model mapping
         const modelMapping = window.models ? window.models.getModelForTags(tagsObj, wayCoordinates, nodeIndex, geometryType) : null;
         if (modelMapping) {
@@ -482,7 +484,41 @@ $(function () {
             // Special handling for highway=footway lines
             if (modelMapping.geometryType === 'line' && modelMapping.tags.includes('highway=footway') && window.footwayRepetition) {
               window.footwayRepetition.applyFootwayRepetitions(feature, modelFilename, modelConfig, vectorSource);
+            } else if (modelMapping.geometryType === 'line' && window.highwayRepetition) {
+              // Handle all other highway types with the new highway repetition system
+              const tags = feature.getProperties();
+              const highway = tags.highway;
+              
+              console.log(`🛣️ DEBUG: Checking highway feature - highway: ${highway}, tags:`, tags);
+              
+              if (highway && highway !== 'footway' && highway !== 'path' && highway !== 'pedestrian') {
+                console.log(`🛣️ Applying repetitions to highway ${highway} feature from index.js:`, tags);
+                try {
+                  window.highwayRepetition.applyHighwayRepetitions(feature, modelFilename, modelConfig, highway);
+                } catch (error) {
+                  console.error(`🛣️ Error applying repetitions to highway ${highway} feature:`, error);
+                  // Fallback to old system
+                  window.modelRepetition.applyModelRepetitions(feature, modelFilename, modelConfig, modelMapping.geometryType);
+                }
+              } else {
+                // Fallback to old system for non-highway features
+                window.modelRepetition.applyModelRepetitions(feature, modelFilename, modelConfig, modelMapping.geometryType);
+              }
+            } else if (modelMapping.geometryType === 'area' && window.areaRepetition) {
+              // Handle area repetitions
+              const tags = feature.getProperties();
+              console.log(`🏞️ Applying area repetitions to feature with tags:`, tags);
+              try {
+                // Extract area type from tags (could be highway, amenity, etc.)
+                const areaType = tags.highway || tags.amenity || tags.landuse || 'unknown';
+                window.areaRepetition.applyAreaRepetitions(feature, modelFilename, modelConfig, areaType);
+              } catch (error) {
+                console.error(`🏞️ Error applying area repetitions:`, error);
+                // Fallback to old system
+                window.modelRepetition.applyModelRepetitions(feature, modelFilename, modelConfig, modelMapping.geometryType);
+              }
             } else {
+              // Fallback to old system for unsupported geometry types
               window.modelRepetition.applyModelRepetitions(feature, modelFilename, modelConfig, modelMapping.geometryType);
             }
           }
@@ -679,7 +715,41 @@ $(function () {
 										// Special handling for highway=footway lines
 										if (modelMapping.geometryType === 'line' && modelMapping.tags.includes('highway=footway') && window.footwayRepetition) {
 											window.footwayRepetition.applyFootwayRepetitions(feature, modelFilename, modelConfig, me);
+										} else if (modelMapping.geometryType === 'line' && window.highwayRepetition) {
+											// Handle all other highway types with the new highway repetition system
+											const tags = feature.getProperties();
+											const highway = tags.highway;
+											
+											console.log(`🛣️ DEBUG OSM XML: Checking highway feature - highway: ${highway}, tags:`, tags);
+											
+											if (highway && highway !== 'footway' && highway !== 'path' && highway !== 'pedestrian') {
+												console.log(`🛣️ Applying repetitions to highway ${highway} overlay feature:`, tags);
+												try {
+													window.highwayRepetition.applyHighwayRepetitions(feature, modelFilename, modelConfig, highway);
+												} catch (error) {
+													console.error(`🛣️ Error applying repetitions to highway ${highway} overlay feature:`, error);
+													// Fallback to old system
+													window.modelRepetition.applyModelRepetitions(feature, modelFilename, modelConfig, modelMapping.geometryType);
+												}
+											} else {
+												// Fallback to old system for non-highway features
+												window.modelRepetition.applyModelRepetitions(feature, modelFilename, modelConfig, modelMapping.geometryType);
+											}
+										} else if (modelMapping.geometryType === 'area' && window.areaRepetition) {
+											// Handle area repetitions
+											const tags = feature.getProperties();
+											console.log(`🏞️ Applying area repetitions to overlay feature with tags:`, tags);
+											try {
+												// Extract area type from tags (could be highway, amenity, etc.)
+												const areaType = tags.highway || tags.amenity || tags.landuse || 'unknown';
+												window.areaRepetition.applyAreaRepetitions(feature, modelFilename, modelConfig, areaType);
+											} catch (error) {
+												console.error(`🏞️ Error applying area repetitions:`, error);
+												// Fallback to old system
+												window.modelRepetition.applyModelRepetitions(feature, modelFilename, modelConfig, modelMapping.geometryType);
+											}
 										} else {
+											// Fallback to old system
 											window.modelRepetition.applyModelRepetitions(feature, modelFilename, modelConfig, modelMapping.geometryType);
 										}
 									}
@@ -1440,7 +1510,12 @@ if (routeLayers.length > 0) {
     routeLayers.forEach(layer => layer.setVisible(true));
 }
 
-                        // Set up terrain provider
+                        // Process models after 3D initialization is complete
+                        setTimeout(() => {
+                            if (window.modelRenderer && window.modelRenderer.addAllModels) {
+                                window.modelRenderer.addAllModels();
+                            }
+                        }, 3000);
                         try {
                             scene.terrainProvider = new Cesium.EllipsoidTerrainProvider();
                         } catch (error) {
