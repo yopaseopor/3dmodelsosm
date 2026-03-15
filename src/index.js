@@ -444,9 +444,16 @@ $(function () {
         let geometryType = 'point';
         const geomType = geometry ? geometry.getType() : null;
         if (geomType === 'LineString') {
-            geometryType = tagsObj['area'] ? 'area' : 'line';
-        } else if (geomType === 'Polygon') {
+            // Check for area tags: area=yes, area:* tags, or tags starting with area:
+            const hasAreaTag = tagsObj['area'] === 'yes' ||
+                               Object.keys(tagsObj).some(key => key.startsWith('area:'));
+            geometryType = hasAreaTag ? 'area' : 'line';
+        } else if (geomType === 'Polygon' || geomType === 'MultiPolygon') {
             geometryType = 'area';
+        }
+
+        if (geometryType === 'area') {
+            console.log(`🏞️ DEBUG: Found area feature with geometry ${geomType}, tags:`, tagsObj);
         }
 
         console.log(`🔍 Processing feature with tags:`, tagsObj);
@@ -454,6 +461,7 @@ $(function () {
         // Check if the tags match any model mapping
         const modelMapping = window.models ? window.models.getModelForTags(tagsObj, wayCoordinates, nodeIndex, geometryType) : null;
         if (modelMapping) {
+          console.log(`🎯 SUCCESS: Found model mapping for ${geometryType} feature:`, modelMapping);
           const modelFilename = modelMapping.model;
           const modelConfig = modelMapping.config;
 
@@ -481,11 +489,9 @@ $(function () {
 
           // Apply model repetitions for lines and areas (skip points and buildings)
           if (modelMapping.geometryType !== 'point' && window.modelRepetition) {
-            // Special handling for highway=footway lines
-            if (modelMapping.geometryType === 'line' && modelMapping.tags.includes('highway=footway') && window.footwayRepetition) {
-              window.footwayRepetition.applyFootwayRepetitions(feature, modelFilename, modelConfig, vectorSource);
-            } else if (modelMapping.geometryType === 'line' && window.highwayRepetition) {
-              // Handle all other highway types with the new highway repetition system
+            console.log(`🎯 Applying model repetitions for ${modelMapping.geometryType} feature`);
+            if (modelMapping.geometryType === 'line' && window.highwayRepetition) {
+              // Handle highway lines
               const tags = feature.getProperties();
               const highway = tags.highway;
               
@@ -509,9 +515,7 @@ $(function () {
               const tags = feature.getProperties();
               console.log(`🏞️ Applying area repetitions to feature with tags:`, tags);
               try {
-                // Extract area type from tags (could be highway, amenity, etc.)
-                const areaType = tags.highway || tags.amenity || tags.landuse || 'unknown';
-                window.areaRepetition.applyAreaRepetitions(feature, modelFilename, modelConfig, areaType);
+                window.areaRepetition.applyAreaRepetitions(feature, modelFilename, modelConfig, tags);
               } catch (error) {
                 console.error(`🏞️ Error applying area repetitions:`, error);
                 // Fallback to old system
@@ -522,13 +526,7 @@ $(function () {
               window.modelRepetition.applyModelRepetitions(feature, modelFilename, modelConfig, modelMapping.geometryType);
             }
           }
-        } else {
-          if (osmTags.length > 0) {
-            console.log(`❌ No model assigned to GeoJSON feature with tags:`, osmTags);
-          }
         }
-
-        // Check if this feature should be extruded as a 3D building
         if (!modelMapping && window.buildings && window.buildings.isBuildingFeature(tagsObj)) {
           const buildingData = window.buildings.createExtrudedBuilding(feature, tagsObj);
           if (buildingData) {
@@ -669,9 +667,16 @@ $(function () {
 								let geometryType = 'point';
 								const geomType = geometry ? geometry.getType() : null;
 								if (geomType === 'LineString') {
-									geometryType = tagsObj['area'] ? 'area' : 'line';
-								} else if (geomType === 'Polygon') {
+									// Check for area tags: area=yes, area:* tags, or tags starting with area:
+									const hasAreaTag = tagsObj['area'] === 'yes' ||
+													   Object.keys(tagsObj).some(key => key.startsWith('area:'));
+									geometryType = hasAreaTag ? 'area' : 'line';
+								} else if (geomType === 'Polygon' || geomType === 'MultiPolygon') {
 									geometryType = 'area';
+								}
+
+								if (geometryType === 'area') {
+									console.log(`🏞️ DEBUG OSM XML: Found area feature with geometry ${geomType}, tags:`, tagsObj);
 								}
 
 								// Check if the tags match any model mapping
@@ -742,7 +747,7 @@ $(function () {
 											try {
 												// Extract area type from tags (could be highway, amenity, etc.)
 												const areaType = tags.highway || tags.amenity || tags.landuse || 'unknown';
-												window.areaRepetition.applyAreaRepetitions(feature, modelFilename, modelConfig, areaType);
+												window.areaRepetition.applyAreaRepetitions(feature, modelFilename, modelConfig, tags);
 											} catch (error) {
 												console.error(`🏞️ Error applying area repetitions:`, error);
 												// Fallback to old system

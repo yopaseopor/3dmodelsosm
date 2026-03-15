@@ -8,6 +8,7 @@ const availableModels = [
     'Untitled.glb',
     'test.gltf',
     'w_amenity_bicycle_parking.glb',
+    'w_amenity_waste_basket.glb',
     'w_area_highway_footway.glb',
     'w_barrier_kerb.glb',
     'w_highway_footway.glb',
@@ -17,6 +18,8 @@ const availableModels = [
     'w_highway_traffic_signals.glb',
     'w_highway_traffic_signals_cycle.glb',
     'w_highway_traffic_signals_pedestrian.glb',
+    'w_leisure_garden.glb',
+    'w_leisure_playground.glb',
     'w_natural_tree.glb',
     'ES_CAT_BCN_casa_batllo.glb',
     'ES_CAT_BCN_casa_mila.glb',
@@ -24,14 +27,19 @@ const availableModels = [
    'ES_CAT_BCN_sagrada_familia.glb',
     'ES_CAT_BCN_torre_glories.glb',
     'ES_CAT_BCN_torre_mapfre.glb',
-    'panot.jpg',
-    'llamborda.jpg'
+    'i_asfalt.jpg',
+    'i_gespa.jpg',
+    'i_marbre.jpg',
+    'i_terra_verd.jpg',
+    'i_panot.jpg',
+    'i_llamborda.jpg'
 ];
 
 // Model mapping for OSM tags (array of objects to support multiple tags per mapping) - Maps arrays of OSM key=value pairs to 3D model filenames
 const modelMappings = [
     // Point models (existing functionality)
     { tags: ['amenity=bicycle_parking'], model: 'w_amenity_bicycle_parking.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Bicycle parking model for amenity=bicycle_parking
+    { tags: ['amenity=waste_basket'], model: 'w_amenity_bicycle_parking.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Bicycle parking model for amenity=bicycle_parking 
     { tags: ['highway=street_lamp', 'lamp_mount=straight_mast'], model: 'w_highway_street_lamp_straight_mast.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
     { tags: ['highway=street_lamp'], model: 'w_highway_street_lamp.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Street lamp model for highway=street_lamp
     // More specific traffic signals first
@@ -52,14 +60,24 @@ const modelMappings = [
     { tags: ['name=Torre Mapfre'], model: 'ES_CAT_BCN_torre_mapfre.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Torre Mapfre by name
     
     // Area models (new functionality) - supports both actual polygons and ways tagged as areas
-     { tags: ['area:highway=footway', 'footway=sidewalk'], model: 'llamborda.jpg', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway area texture
-   { tags: ['area:highway=footway', 'footway=crossing'], model: 'w_highway_residential.glb', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway point models
-        // Way models (new functionality) - models placed along ways
-    { tags: ['highway=footway'], model: 'w_highway_footway.glb', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway line models
+   //  { tags: ['area:highway=footway'], model: 'llamborda.jpg', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway area models
+   { tags: ['highway=footway'], model: 'w_highway_footway.glb', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway area models
+   { tags: ['highway=residential'], model: 'w_highway_residential.glb', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Residential area models
+  { tags: ['area:highway=residential'], model: 'i_asfalt.jpg', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Residential area-tagged ways
+ // { tags: ['building=residential'], model: 'w_highway_residential.glb', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Residential building areas
+  // { tags: ['building'], model: 'w_highway_residential.glb', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Generic building areas
+   { tags: ['amenity=parking'], model: '', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Parking area models
+  { tags: ['area:highway=footway', 'footway=sidewalk'], model: 'i_llamborda.jpg', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway area texture
+  { tags: ['area:highway=footway', 'footway=crossing'], model: 'i_panot.jpg', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway point models
+{ tags: ['leisure=garden'], model: '', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Parking area models
+   { tags: ['leisure=playground'], model: '', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Parking area models
+   
+  // Way models (new functionality) - models placed along ways
+  { tags: ['highway=footway'], model: 'w_highway_footway.glb', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway line models
     { tags: ['footway=sidewalk'], model: 'w_highway_footway.glb', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Sidewalk line models
-    { tags: ['highway=residential'], model: 'w_highway_residential.glb', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Residential road line models
+   { tags: ['highway=residential'], model: 'w_highway_residential.glb', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Residential road line models
     { tags: ['barrier=kerb'], model: 'w_barrier_kerb.glb', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Kerb
-{ tags: ['area:highway=footway'], model: 'w_highway_footway.glb', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway line models
+//{ tags: ['area:highway=footway'], model: 'w_highway_footway.glb', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway line models
    
     //{ tags: ['barrier=kerb'], model: 'w_barrier_kerb.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Kerb repetitions
     
@@ -146,6 +164,7 @@ function adjustConfigForDirection(config, tags, bearing) {
  * @returns {object|null} Mapping object {tags, model, geometryType, config} or null if no mapping exists
  */
 function getModelForTags(tags, wayCoordinates = null, nodeIndex = null, geometryType = 'point') {
+    console.log(`🔍 Checking model mappings for tags:`, tags, `geometry type: ${geometryType}`);
     for (const mapping of modelMappings) {
         // Check if geometry type matches (default to 'point' for backward compatibility)
         const mappingGeometryType = mapping.geometryType || 'point';
@@ -153,7 +172,11 @@ function getModelForTags(tags, wayCoordinates = null, nodeIndex = null, geometry
         
         const allMatch = mapping.tags.every(tag => {
             const [key, value] = tag.split('=');
-            return tags[key] === value;
+            // Handle compound keys like 'area:highway' - these are single tags, not combinations
+            const tagValue = tags[key];
+            const matches = tagValue === value;
+            console.log(`🔍 Checking tag ${key}=${value}, found value: ${tagValue}, matches: ${matches}`);
+            return matches;
         });
         if (allMatch) {
             console.log(`🔍 Found matching model ${mapping.model} for tags:`, mapping.tags, `geometry type: ${geometryType}`);

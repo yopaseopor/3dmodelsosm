@@ -426,6 +426,7 @@ window.addEventListener('ol3dDestroyed', function() {
 
 // Export functions for use in other modules
 window.buildings = {
+    buildingEntities, // Add buildingEntities to the export
     isBuildingFeature,
     getBuildingHeight,
     getBuildingColor,
