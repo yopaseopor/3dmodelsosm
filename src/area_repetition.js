@@ -45,12 +45,30 @@ const areaRepetitionConfigs = [
         description: 'Residential street areas'
     },*/
     {
+        tags: ['area:highway=footway', 'footway=crossing'],
+        model: 'i_crossing.png',
+        config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] },
+        spacing: 1.0, // 1 meter spacing for area-tagged footways
+        maxModels: 5000,
+        description: 'Area-tagged footway areas with crossing'
+    },
+    {
         tags: ['area:highway=footway'],
         model: 'i_panot.jpg',
         config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] },
         spacing: 1.0, // 1 meter spacing for area-tagged footways
         maxModels: 5000,
         description: 'Area-tagged footway areas'
+    },
+
+    // Amenity areas
+    {
+        tags: ['amenity=parking'],
+        model: 'i_parking.jpg',
+        config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] },
+        spacing: 0.1, // 3 meter spacing for parking
+        maxModels: 3000,
+        description: 'Parking areas'
     },
        {
         tags: ['area:highway=residential'],
@@ -79,16 +97,6 @@ const areaRepetitionConfigs = [
         spacing: 1, // 2 meter spacing for playgrounds
         maxModels: 10000,
         description: 'Playground'
-    },
-
-    // Amenity areas
-    {
-        tags: ['amenity=parking'],
-        model: 'i_marbre.jpg',
-        config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] },
-        spacing: 0.1, // 3 meter spacing for parking
-        maxModels: 3000,
-        description: 'Parking areas'
     },
 
     // Default fallback
@@ -170,11 +178,24 @@ function generateAreaRepetitions(coordinates, tags) {
     // For image files (textures), return single polygon object instead of grid points
     if (isImageFile) {
         console.log(`🏞️ Using single polygon texture approach for ${modelFilename}`);
+        
+        // Calculate texture rotation based on nearby ways
+        const polygonCoords = coordinates.map(coord => 
+            ol.proj.transform(coord, window.map.getView().getProjection(), 'EPSG:4326')
+        );
+        
+        // DISABLED: Canvas rotation causes gaps in tiling
+        const textureRotation = 0; // No rotation for now
+        console.log(`🏞️ Texture rotation disabled - canvas rotation causes tiling gaps`);
+        
+        console.log(`🏞️ Calculated texture rotation for area repetition: ${(textureRotation * 180 / Math.PI).toFixed(1)}°`);
+        
         return [{
             type: 'polygon_texture',
             polygonCoordinates: coordinates,
             model: modelFilename,
-            spacing: config.spacing
+            spacing: config.spacing,
+            rotation: textureRotation
         }];
     }
 
@@ -302,21 +323,23 @@ function applyAreaRepetitions(feature, modelFilename, modelConfig, tags) {
                 const repetitionKey = `repetition_${index}`;
 
                 if (rep.type === 'polygon_texture') {
-                    // Store polygon texture data
+                    // Store polygon texture data with rotation
                     const repModelOptions = {
                         uri: `/3dmodelsosm/src/models/${rep.model}`,
                         scale: 1.0,
                         type: 'polygon_texture',
                         polygonCoordinates: rep.polygonCoordinates,
-                        spacing: rep.spacing
+                        spacing: rep.spacing,
+                        rotation: rep.rotation || 0
                     };
 
                     feature.set(repetitionKey, repModelOptions);
                     feature.set(`${repetitionKey}_type`, 'polygon_texture');
                     feature.set(`${repetitionKey}_polygonCoordinates`, rep.polygonCoordinates);
                     feature.set(`${repetitionKey}_spacing`, rep.spacing);
+                    feature.set(`${repetitionKey}_rotation`, rep.rotation || 0);
 
-                    console.log(`🏞️ Stored polygon texture repetition ${index + 1} for model: ${rep.model}`);
+                    console.log(`🏞️ Stored polygon texture repetition ${index + 1} for model: ${rep.model} with rotation: ${((rep.rotation || 0) * 180 / Math.PI).toFixed(1)}°`);
                 } else {
                     // Original model instance approach
                     const repModelOptions = {

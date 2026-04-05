@@ -276,7 +276,25 @@ function assignModelToFeature(feature, allFeatures = null) {
                     const cesiumPositions = coordinates.map(coord => Cesium.Cartesian3.fromDegrees(coord[0], coord[1]));
                     
                     if (cesiumPositions.length > 0) {
+                        // Check if feature already has an area entity to prevent duplicates
+                        if (feature.get('areaEntity')) {
+                            console.log(`🎨 Feature already has area entity, skipping duplicate creation`);
+                            return;
+                        }
+                        
+                        // Calculate texture rotation based on nearby ways
+                        const polygonCoords = coordinates.map(coord => 
+                            ol.proj.transform(coord, window.map.getView().getProjection(), 'EPSG:4326')
+                        );
+                        
+                        // DISABLED: Canvas rotation causes gaps in tiling
+                        const textureRotation = 0; // No rotation for now
+                        console.log(`🎨 Texture rotation disabled - canvas rotation causes tiling gaps`);
+                        
+                        console.log(`🎨 Calculated texture rotation for overlay: ${(textureRotation * 180 / Math.PI).toFixed(1)}°`);
+                        
                         const hierarchy = new Cesium.PolygonHierarchy(cesiumPositions);
+                        console.log(`🎨 Creating area entity for tags:`, tagsObj, `model: ${modelFilename}, timestamp: ${Date.now()}`);
                         const areaEntity = new Cesium.Entity({
                             polygon: {
                                 hierarchy: hierarchy,
@@ -284,8 +302,8 @@ function assignModelToFeature(feature, allFeatures = null) {
                                     image: `/3dmodelsosm/src/models/${modelFilename}`,
                                     repeat: new Cesium.Cartesian2(1, 1)
                                 }),
-                                height: 0,
-                                extrudedHeight: 0
+                                height: 0.001, // Small height to ensure consistent rendering order
+                                extrudedHeight: 0.001
                             }
                         });
                         
@@ -320,6 +338,17 @@ function assignModelToFeature(feature, allFeatures = null) {
                     const positions = coordinates.map(coord => Cesium.Cartesian3.fromDegrees(coord[0], coord[1]));
                     
                     if (positions.length > 1) {
+                        // Calculate texture rotation based on nearby ways for line textures
+                        const lineCoords = coordinates.map(coord => 
+                            ol.proj.transform(coord, window.map.getView().getProjection(), 'EPSG:4326')
+                        );
+                        
+                        // DISABLED: Canvas rotation causes gaps in tiling
+                        const textureRotation = 0; // No rotation for now
+                        console.log(`🎨 Texture rotation disabled - canvas rotation causes tiling gaps`);
+                        
+                        console.log(`🎨 Calculated texture rotation for overlay line: ${(textureRotation * 180 / Math.PI).toFixed(1)}°`);
+                        
                         const areaEntity = new Cesium.Entity({
                             polyline: {
                                 positions: positions,

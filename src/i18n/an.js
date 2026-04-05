@@ -520,5 +520,7 @@ export const an = {
     locationPreview: 'Vista previa d\'ubicación',
     clickMapSetLocation: 'Prebar en o mapa pa estabelecer una ubicación',
     interactiveMapOpenNewWindow: 'O mapa interactivo s\'ubrirá en una finestra nueva',
-    openMapillary: 'Ubrir Mapillary'
+    openMapillary: 'Ubrir Mapillary',
+    // Server selection translations
+    overpassServer: 'Servidor Overpass'
 };

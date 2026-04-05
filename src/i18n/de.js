@@ -633,13 +633,16 @@ polygonsLabel: 'Polygone:',
 clickToRepeat: 'Zum Wiederholen klicken',
     
 // Mapillary Street View translations
-streetViewTitle: '📷 Street View <small>(zum Schließen klicken)</small>',
-mapillaryStreetView: 'Mapillary Street View',
-clickBelowOpenImagery: 'Klicken Sie unten, um Straßenansichtsbilder in einem neuen Fenster zu öffnen',
+streetViewTitle: '📷 Straßenansicht <small>(klicken zum Schließen)</small>',
+mapillaryStreetView: 'Mapillary Straßenansicht',
+clickBelowOpenImagery: 'Klicken Sie unten, um Straßenbilder in einem neuen Fenster zu öffnen',
 locationPreview: 'Standortvorschau',
-clickMapSetLocation: 'Klicken Sie auf die Karte, um einen Standort festzulegen',
-interactiveMapOpenNewWindow: 'Die interaktive Karte wird in einem neuen Fenster geöffnet',
+clickMapSetLocation: 'Auf der Karte klicken, um einen Standort festzulegen',
+interactiveMapOpenNewWindow: 'Interaktive Karte wird in neuem Fenster geöffnet',
 openMapillary: 'Mapillary öffnen',
+    
+// Server selection translations
+overpassServer: 'Overpass Server',
     
 // Categories
 leisure: 'Freizeit',

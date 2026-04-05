@@ -81,11 +81,11 @@ var config = {
 		var overpassServers = [
 			'https://overpass-api.de/api/interpreter',
 			'https://overpass.kumi.systems/api/interpreter',
-			'https://overpass.nchc.org.tw/api/interpreter',
-			'https://z.overpass-api.de/api/interpreter',
+			'https://overpass.saltant.org/api/interpreter',
+			'https://overpass.private.coffee/api/interpreter',
 			'https://overpass.openstreetmap.fr/api/interpreter',
 			'https://overpass.osm.ch/api/interpreter',
-			'https://overpass.openstreetmap.ru/api/interpreter'
+			'https://z.overpass-api.de/api/interpreter'
 		];
 		
 		var currentIndex = parseInt(localStorage.getItem('overpassServerIndex') || '0');
@@ -595,7 +595,7 @@ geojson: './src/vng5_area.geojson',
         var name_key = feature.getKeys().filter(function(t){return t.match(key_regex)}).pop() || "name";
         var name = feature.get(name_key) || '';
         var fill = new ol.style.Fill({
-            color: 'rgba(117,63,79,0.4)'
+            color: 'rgba(117,63,79,0.1)'
         });
         var stroke = new ol.style.Stroke({
             color: 'rgba(117,63,79,1)',
@@ -608,16 +608,16 @@ geojson: './src/vng5_area.geojson',
         var style = new ol.style.Style({
             image: new ol.style.Icon({
                 src: imgSrc + 'icones/maxspeed_empty.svg',
-                scale: 0.03
+                scale: 0.01
             }),
             text: new ol.style.Text({
                 text: name,
              			
                 fill: new ol.style.Fill({
-                    color: 'rgba(0,0,0,1)'
+                    color: 'rgba(0,0,0,0.1)'
                 }),
                 stroke: new ol.style.Stroke({
-                    color: 'rgba(255,255,255,0.7)',
+                    color: 'rgba(255,255,255,0.3)',
                     width: 2
                 }),
                 // For polygons, we'll use a different placement strategy

@@ -1742,8 +1742,15 @@ if (routeLayers.length > 0) {
                     window.addEventListener('tagQueryAdded', function(event) {
                         console.log('🎯 FIRST tagQueryAdded event fired:', event.detail);
                         if (window.ol3d && window.ol3d.getEnabled()) {
-                            console.log('🎯 In 3D mode, checking for models...');
+                            console.log('🎯 In 3D mode, refreshing imagery and adding models...');
                             refresh3DImagery();
+                            // Add models for newly added features
+                            if (window.modelRenderer && window.modelRenderer.addAllModels) {
+                                setTimeout(() => {
+                                    window.modelRenderer.addAllModels();
+                                    console.log('🎯 Models added for new query');
+                                }, 500);
+                            }
                         } else {
                             console.log('🎯 Not in 3D mode yet');
                         }

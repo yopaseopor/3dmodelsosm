@@ -520,5 +520,7 @@ export const gl = {
     locationPreview: 'Vista previa de ubicación',
     clickMapSetLocation: 'Fai clic no mapa para estabelecer unha ubicación',
     interactiveMapOpenNewWindow: 'O mapa interactivo abrirase nunha nova ventá',
-    openMapillary: 'Abrir Mapillary'
+    openMapillary: 'Abrir Mapillary',
+    // Server selection translations
+    overpassServer: 'Servidor Overpass'
 };

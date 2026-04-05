@@ -514,11 +514,13 @@ export const it = {
     exportGpx: 'Esporta GPX',
     noRouteToExport: 'Nessun percorso da esportare',
     // Mapillary Street View translations
-    streetViewTitle: '📷 Street View <small>(clicca per chiudere)</small>',
+    streetViewTitle: '📷 Street View <small>(fare clic per chiudere)</small>',
     mapillaryStreetView: 'Mapillary Street View',
-    clickBelowOpenImagery: 'Clicca sotto per aprire immagini livello strada in una nuova finestra',
+    clickBelowOpenImagery: 'Fare clic sotto per aprire immagini a livello stradale in una nuova finestra',
     locationPreview: 'Anteprima posizione',
-    clickMapSetLocation: 'Clicca sulla mappa per impostare una posizione',
+    clickMapSetLocation: 'Fare clic sulla mappa per impostare una posizione',
     interactiveMapOpenNewWindow: 'La mappa interattiva si aprirà in una nuova finestra',
-    openMapillary: 'Apri Mapillary'
+    openMapillary: 'Apri Mapillary',
+    // Server selection translations
+    overpassServer: 'Server Overpass'
 };

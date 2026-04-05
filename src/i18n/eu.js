@@ -519,5 +519,7 @@ export const eu = {
     locationPreview: 'Kokalekuaren aurrebista',
     clickMapSetLocation: 'Egin klik mapan kokaleku bat ezartzeko',
     interactiveMapOpenNewWindow: 'Mapa interaktiboa leiho berri batean irekiko da',
-    openMapillary: 'Mapillary Ireki'
+    openMapillary: 'Mapillary Ireki',
+    // Server selection translations
+    overpassServer: 'Overpass Zerbitzaria'
 };

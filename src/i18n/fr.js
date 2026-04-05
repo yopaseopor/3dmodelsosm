@@ -516,9 +516,11 @@ export const fr = {
     // Mapillary Street View translations
     streetViewTitle: '📷 Street View <small>(cliquer pour fermer)</small>',
     mapillaryStreetView: 'Mapillary Street View',
-    clickBelowOpenImagery: 'Cliquez ci-dessous pour ouvrir les images de rue dans une nouvelle fenêtre',
+    clickBelowOpenImagery: 'Cliquer ci-dessous pour ouvrir les images de niveau rue dans une nouvelle fenêtre',
     locationPreview: 'Aperçu de l\'emplacement',
-    clickMapSetLocation: 'Cliquez sur la carte pour définir un emplacement',
+    clickMapSetLocation: 'Cliquer sur la carte pour définir un emplacement',
     interactiveMapOpenNewWindow: 'La carte interactive s\'ouvrira dans une nouvelle fenêtre',
-    openMapillary: 'Ouvrir Mapillary'
+    openMapillary: 'Ouvrir Mapillary',
+    // Server selection translations
+    overpassServer: 'Serveur Overpass'
 };

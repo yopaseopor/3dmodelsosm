@@ -362,6 +362,12 @@ function processQueryResults(allFeatures, key, value) {
 
                     if (coordinates && coordinates.length > 0) {
                         console.log(`🎨 Processing coordinates with ${coordinates.length} rings`);
+                        
+                        // Check if feature already has an area entity to prevent duplicates
+                        if (feature.get('areaEntity')) {
+                            console.log(`🎨 Feature already has area entity, skipping duplicate creation`);
+                            return;
+                        }
 
                         // Convert coordinates to Cesium Cartesian3 array
                         const cesiumPositions = [];
@@ -381,20 +387,32 @@ function processQueryResults(allFeatures, key, value) {
                         const hierarchy = new Cesium.PolygonHierarchy(cesiumPositions);
                         console.log(`🎨 Created polygon hierarchy`);
 
+                        // Calculate texture rotation based on nearby ways
+                        const polygonCoords = coordinates[0].map(coord => 
+                            ol.proj.transform(coord, window.map.getView().getProjection(), 'EPSG:4326')
+                        );
+                        
+                        // DISABLED: Canvas rotation causes gaps in tiling
+                        const textureRotation = 0; // No rotation for now
+                        console.log(`🎨 Texture rotation disabled - canvas rotation causes tiling gaps`);
+
+                        console.log(`🎨 Calculated texture rotation for value search: ${(textureRotation * 180 / Math.PI).toFixed(1)}°`);
+
                         // Create textured material
                         const material = new Cesium.ImageMaterialProperty({
                             image: `/3dmodelsosm/src/models/${modelFilename}`,
                             transparent: true,
                             color: new Cesium.Color(1.0, 1.0, 1.0, 0.8) // Slight transparency
                         });
-                        console.log(`🎨 Created material with texture: ${modelFilename}`);
+                        
+                        console.log(`🎨 Created material with texture: ${modelFilename}, rotation: ${(textureRotation * 180 / Math.PI).toFixed(1)}°`);
 
                         // Create the entity
                         const areaEntity = new Cesium.Entity({
                             polygon: {
                                 hierarchy: hierarchy,
-                                height: modelConfig ? modelConfig.heightOffset : 0,
-                                extrudedHeight: 0, // Flat on ground
+                                height: modelConfig ? (modelConfig.heightOffset || 0.001) : 0.001,
+                                extrudedHeight: modelConfig ? (modelConfig.heightOffset || 0.001) : 0.001, // Flat on ground
                                 material: material,
                                 outline: true, // Enable outline for debugging
                                 outlineColor: Cesium.Color.RED,
@@ -415,7 +433,7 @@ function processQueryResults(allFeatures, key, value) {
                         feature.set('areaEntity', areaEntity);
 
                         // Add to data source if in 3D mode
-                        const dataSource = this.getDataSource();
+                        const dataSource = window.areaTextureManager.getDataSource();
                         if (dataSource) {
                             dataSource.entities.add(areaEntity);
                             console.log(`🎨 Added textured area entity to 3D scene. Total entities: ${dataSource.entities.values.length}`);
@@ -1741,6 +1759,50 @@ function initValueSearch() {
         return;
     }
 
+    // Add server selector before the search input (only if not already present)
+    const serverSelectorContainer = $('#server-selector-container');
+    if (serverSelectorContainer.length === 0) {
+        const serverSelectorHtml = `
+            <div id="server-selector-container" style="margin-bottom: 10px; border: 1px solid red; padding: 5px;">
+                <label for="overpass-server-select">${window.getTranslation ? window.getTranslation('overpassServer') : 'Overpass API Server'}:</label>
+                <select id="overpass-server-select" style="margin-left: 5px; padding: 2px;">
+                    <option value="0">https://overpass-api.de/api/interpreter</option>
+                    <option value="1">https://overpass.kumi.systems/api/interpreter</option>
+                    <option value="2">https://overpass.saltant.org/api/interpreter</option>
+                    <option value="3">https://overpass.private.coffee/api/interpreter</option>
+                    <option value="4">https://overpass.openstreetmap.fr/api/interpreter</option>
+                    <option value="5">https://overpass.osm.ch/api/interpreter</option>
+                    <option value="6">https://z.overpass-api.de/api/interpreter</option>
+                </select>
+            </div>
+        `;
+
+        const searchContainer = $('#value-search-container');
+        console.log('🔍 DEBUG: searchContainer found:', searchContainer.length);
+        console.log('🔍 DEBUG: searchContainer element:', searchContainer);
+
+        if (searchContainer.length > 0) {
+            searchContainer.prepend(serverSelectorHtml);
+            console.log('🔍 DEBUG: Server selector prepended successfully');
+            console.log('🔍 DEBUG: Server selector container HTML:', $('#server-selector-container').length);
+        } else {
+            console.error('🔍 DEBUG: searchContainer not found!');
+        }
+    } else {
+        console.log('🔍 DEBUG: Server selector already exists, skipping creation');
+    }
+
+    // Set current server from localStorage (always update in case it changed)
+    const currentServerIndex = parseInt(localStorage.getItem('overpassServerIndex') || '0');
+    $('#overpass-server-select').val(currentServerIndex.toString());
+
+    // Handle server selection change (only if selector exists)
+    $('#overpass-server-select').off('change').on('change', function() {
+        const selectedIndex = parseInt($(this).val());
+        localStorage.setItem('overpassServerIndex', selectedIndex.toString());
+        console.log('Overpass server changed to:', config.overpassApi());
+    });
+
     const searchInput = $('#value-search');
     const resultsContainer = $('#value-search-dropdown');
 
@@ -1944,6 +2006,10 @@ function initValueSearch() {
                     // Select first result if none highlighted
                     selectValueResult(currentResults[0]);
                 }
+                // DISABLED: No automatic execution on Enter - user must use Execute button
+                // else if (currentValue && currentKey) {
+                //     executeTagQuery(currentKey, currentValue);
+                // }
                 break;
             case 27: // Escape
                 resultsContainer.empty().hide();

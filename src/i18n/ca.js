@@ -514,11 +514,13 @@ export const ca = {
     exportGpx: 'Exportar GPX',
     noRouteToExport: 'No hi ha cap ruta per exportar',
     // Mapillary Street View translations
-    streetViewTitle: '📷 Street View <small>(fer clic per tancar)</small>',
-    mapillaryStreetView: 'Mapillary Street View',
-    clickBelowOpenImagery: 'Fer clic a sota per obrir imatges de carrer en una nova finestra',
-    locationPreview: 'Previsualització d\'ubicació',
-    clickMapSetLocation: 'Fer clic al mapa per definir una ubicació',
+    streetViewTitle: '📷 Vista al Carrer <small>(fes clic per tancar)</small>',
+    mapillaryStreetView: 'Vista al Carrer de Mapillary',
+    clickBelowOpenImagery: 'Fes clic a sota per obrir imatges a nivell de carrer en una nova finestra',
+    locationPreview: 'Vista prèvia de la ubicació',
+    clickMapSetLocation: 'Fes clic al mapa per definir una ubicació',
     interactiveMapOpenNewWindow: 'El mapa interactiu s\'obrirà en una nova finestra',
-    openMapillary: 'Obrir Mapillary'
-}; 
+    openMapillary: 'Obrir Mapillary',
+    // Server selection translations
+    overpassServer: 'Servidor Overpass'
+};

@@ -371,5 +371,7 @@ export const en = {
     locationPreview: 'Location Preview',
     clickMapSetLocation: 'Click on the map to set a location',
     interactiveMapOpenNewWindow: 'Interactive map will open in new window',
-    openMapillary: 'Open Mapillary'
+    openMapillary: 'Open Mapillary',
+    // Server selection translations
+    overpassServer: 'Overpass Server'
 };
