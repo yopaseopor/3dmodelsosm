@@ -102,14 +102,31 @@ class AreaTextureManager {
                 const textureRotation = this.calculateTextureRotation(polygonCoords, modelFilename);
                 console.log(`🎨 Calculated texture rotation: ${(textureRotation * 180 / Math.PI).toFixed(1)}°`);
 
-                // Create textured material with rotation support
+                // Calculate polygon center for entity rotation
+                let minLon = Infinity, maxLon = -Infinity, minLat = Infinity, maxLat = -Infinity;
+                polygonCoords.forEach(coord => {
+                    minLon = Math.min(minLon, coord[0]);
+                    maxLon = Math.max(maxLon, coord[0]);
+                    minLat = Math.min(minLat, coord[1]);
+                    maxLat = Math.max(maxLat, coord[1]);
+                });
+                const centerLon = (minLon + maxLon) / 2;
+                const centerLat = (minLat + maxLat) / 2;
+                const centerPosition = Cesium.Cartesian3.fromDegrees(centerLon, centerLat, 0.001);
+
+                // Use Cesium's stRotation property for texture rotation
+                // No canvas manipulation - just set the rotation angle
+                console.log(`🎨 DEBUG: textureRotation value: ${textureRotation}, degrees: ${(textureRotation * 180 / Math.PI).toFixed(1)}°`);
+
+                // Create initial material with stRotation
                 const material = new Cesium.ImageMaterialProperty({
                     image: `/3dmodelsosm/src/models/${modelFilename}`,
                     transparent: true,
                     color: new Cesium.Color(1.0, 1.0, 1.0, 0.8), // Slight transparency
+                    stRotation: textureRotation
                 });
                 
-                console.log(`🎨 Created material with texture: ${modelFilename}, rotation: ${(textureRotation * 180 / Math.PI).toFixed(1)}°`);
+                console.log(`🎨 Created material with texture: ${modelFilename} and stRotation: ${(textureRotation * 180 / Math.PI).toFixed(1)}°`);
 
                 // Create the entity
                 const areaEntity = new Cesium.Entity({
@@ -202,21 +219,104 @@ class AreaTextureManager {
     calculateTextureRotation(polygonCoordinates, textureName) {
         console.log(`🎨 calculateTextureRotation called for texture: ${textureName}`);
 
-        // DISABLED: Canvas rotation causes gaps in tiling
-        // Need different approach - pre-rotated textures or different rotation method
-        console.log(`🎨 Texture rotation disabled - canvas rotation causes tiling gaps`);
-        return 0; // No rotation for now
+        // Special handling for crossing textures - align with parent footway
+        console.log(`🎨 Checking if texture is crossing: ${textureName}`);
+        console.log(`🎨 Texture name lowercase: ${textureName.toLowerCase()}`);
+        console.log(`🎨 Contains i_crossing.png: ${textureName.toLowerCase().includes('i_crossing.png')}`);
+        console.log(`🎨 Contains crossing: ${textureName.toLowerCase().includes('crossing')}`);
+        console.log(`🎨 Contains panot: ${textureName.toLowerCase().includes('panot')}`);
         
-        /*
-        // TEMPORARY: Force 45-degree rotation on ALL textures for testing
-        const testRotation = Math.PI / 4; // 45 degrees
-        console.log(`🎨 FORCING TEST ROTATION: ${(testRotation * 180 / Math.PI).toFixed(1)}° for ALL textures`);
-        return testRotation;
+        // Check for multiple possible crossing texture names
+        const isCrossingTexture = textureName.toLowerCase().includes('i_crossing.png') || 
+                                textureName.toLowerCase().includes('crossing') ||
+                                textureName.toLowerCase().includes('panot');
         
-        // Original code below - disabled for testing
-        console.log(`🎨 Processing rotation for texture: ${textureName} (testing all textures)`);
-        // ... rest of original code
-        */
+        if (isCrossingTexture) {
+            console.log(`🎨 Special handling for crossing texture - looking for parent footway`);
+            // For now, use general rotation for all textures
+            console.log(`🎨 Using general rotation for crossing texture`);
+        } else {
+            console.log(`🎨 Not a crossing texture, using general rotation`);
+        }
+
+        try {
+            // Get all map layers to find ways
+            const layers = window.map.getLayers().getArray();
+            const nearbyWays = [];
+
+            console.log(`🎨 Searching ${layers.length} layers for nearby ways...`);
+
+            // Search through all layers for ways that cross or are adjacent to the polygon
+            layers.forEach((layer, layerIndex) => {
+                if (layer.getSource && typeof layer.getSource === 'function') {
+                    const source = layer.getSource();
+                    if (source && source.getFeatures) {
+                        const features = source.getFeatures();
+                        console.log(`🎨 Layer ${layerIndex}: ${features.length} features`);
+
+                        features.forEach((feature, featureIndex) => {
+                            const geometry = feature.getGeometry();
+                            if (geometry && (geometry.getType() === 'LineString' || geometry.getType() === 'MultiLineString')) {
+                                // Check if this way crosses or is adjacent to our polygon
+                                if (this.wayIntersectsOrAdjacentToPolygon(geometry, polygonCoordinates)) {
+                                    nearbyWays.push(feature);
+                                    console.log(`🎨 Found nearby way in layer ${layerIndex}, feature ${featureIndex}`);
+                                }
+                            }
+                        });
+                    }
+                }
+            });
+
+            console.log(`🎨 Found ${nearbyWays.length} nearby ways for texture rotation`);
+
+            if (nearbyWays.length === 0) {
+                console.log(`🎨 No nearby ways found - returning 0 rotation`);
+                return 0;
+            }
+
+            // Calculate average bearing of nearby ways
+            const bearings = nearbyWays.map((feature, index) => {
+                const geometry = feature.getGeometry();
+                const coords = geometry.getType() === 'LineString' ?
+                    geometry.getCoordinates() :
+                    geometry.getCoordinates().flat();
+
+                console.log(`🎨 Way ${index} has ${coords.length} coordinates`);
+
+                // Convert to EPSG:4326 if needed
+                const lonLatCoords = coords.map(coord =>
+                    ol.proj.transform(coord, window.map.getView().getProjection(), 'EPSG:4326')
+                );
+
+                console.log(`🎨 Way ${index} first few coords:`, lonLatCoords.slice(0, 3));
+
+                const bearing = this.calculateWayBearing(lonLatCoords);
+                console.log(`🎨 Way ${index} bearing: ${(bearing * 180 / Math.PI).toFixed(1)}°`);
+                return bearing;
+            }).filter(bearing => bearing !== null);
+
+            console.log(`🎨 Valid bearings calculated: ${bearings.length} out of ${nearbyWays.length}`);
+
+            if (bearings.length === 0) {
+                console.log(`🎨 Could not calculate bearings - returning 0 rotation`);
+                return 0;
+            }
+
+            // Calculate average bearing
+            const averageBearing = bearings.reduce((sum, bearing) => sum + bearing, 0) / bearings.length;
+
+            console.log(`🎨 Calculated average bearing from ${bearings.length} ways: ${(averageBearing * 180 / Math.PI).toFixed(1)}°`);
+
+            // For textures, we want the texture to flow in the direction of the way
+            // So we rotate the texture to align with the way's bearing
+            // Cesium texture rotation: positive values rotate clockwise
+            return -averageBearing;
+
+        } catch (error) {
+            console.error(`🎨 Error calculating texture rotation:`, error);
+            return 0;
+        }
     }
 
     /**

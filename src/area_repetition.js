@@ -6,6 +6,14 @@
  * Defines how different area types should be filled with models
  */
 
+// Debug configuration
+const areaRepetitionDebugConfig = {
+    enabled: true,
+    logConfigMatching: false,      // Log config matching operations
+    logGeneration: true,          // Log generation details
+    logCoordinates: false          // Log coordinate processing
+};
+
 // Area repetition configurations
 const areaRepetitionConfigs = [
     // Building areas
@@ -91,6 +99,16 @@ const areaRepetitionConfigs = [
 
     // Amenity areas
     {
+        tags: ['waterway=stream'],
+        model: 'i_aigua.jpg',
+        config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] },
+        spacing: 1, // 2 meter spacing for playgrounds
+        maxModels: 10000,
+        description: 'Stream'
+    },
+
+    // Amenity areas
+    {
         tags: ['leisure=playground'],
         model: 'i_terra_verd.jpg',
         config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] },
@@ -116,7 +134,7 @@ const areaRepetitionConfigs = [
  * @returns {object|null} Configuration object or null if no match
  */
 function getAreaRepetitionConfig(tags) {
-    console.log(`🏞️ Checking area repetition configs for tags:`, tags);
+    if (areaRepetitionDebugConfig.enabled && areaRepetitionDebugConfig.logConfigMatching) console.log(`🏞️ Checking area repetition configs for tags:`, tags);
 
     for (const config of areaRepetitionConfigs) {
         // Skip wildcard/default config for now
@@ -130,17 +148,17 @@ function getAreaRepetitionConfig(tags) {
             // Handle compound keys like 'area:highway' - these are single tags, not combinations
             const tagValue = tags[key];
             const matches = tagValue === value;
-            console.log(`🏞️ Checking area config tag ${key}=${value}, found: ${tagValue}, matches: ${matches}`);
+            if (areaRepetitionDebugConfig.enabled && areaRepetitionDebugConfig.logConfigMatching) console.log(`🏞️ Checking area config tag ${key}=${value}, found: ${tagValue}, matches: ${matches}`);
             return matches;
         });
 
         if (allMatch) {
-            console.log(`🏞️ Found matching area repetition config:`, config.description);
+            if (areaRepetitionDebugConfig.enabled) console.log(`🏞️ Found matching area repetition config:`, config.description);
             return config;
         }
     }
 
-    console.log(`🏞️ No specific area repetition config found, will use default`);
+    if (areaRepetitionDebugConfig.enabled) console.log(`🏞️ No specific area repetition config found, will use default`);
     return null;
 }
 
@@ -163,10 +181,10 @@ function metersToDegrees(meters, latitude) {
  * @returns {Array<Object>} Array of repetition objects with position OR single polygon object for textures
  */
 function generateAreaRepetitions(coordinates, tags) {
-    console.log(`🏞️ generateAreaRepetitions called with coordinates: ${coordinates.length}, tags:`, tags);
+    if (areaRepetitionDebugConfig.enabled && areaRepetitionDebugConfig.logGeneration) console.log(`🏞️ generateAreaRepetitions called with coordinates: ${coordinates.length}, tags:`, tags);
 
     if (!coordinates || coordinates.length < 3) {
-        console.log('🏞️ Not enough coordinates for area repetition');
+        if (areaRepetitionDebugConfig.enabled) console.log('🏞️ Not enough coordinates for area repetition');
         return [];
     }
 
@@ -177,18 +195,18 @@ function generateAreaRepetitions(coordinates, tags) {
 
     // For image files (textures), return single polygon object instead of grid points
     if (isImageFile) {
-        console.log(`🏞️ Using single polygon texture approach for ${modelFilename}`);
+        if (areaRepetitionDebugConfig.enabled) console.log(`🏞️ Using single polygon texture approach for ${modelFilename}`);
         
         // Calculate texture rotation based on nearby ways
         const polygonCoords = coordinates.map(coord => 
             ol.proj.transform(coord, window.map.getView().getProjection(), 'EPSG:4326')
         );
+        const textureRotation = window.modelRenderer ? 
+            window.modelRenderer.calculateTextureRotation(polygonCoords, modelFilename) : 
+            0; // No rotation if modelRenderer not available
         
-        // DISABLED: Canvas rotation causes gaps in tiling
-        const textureRotation = 0; // No rotation for now
-        console.log(`🏞️ Texture rotation disabled - canvas rotation causes tiling gaps`);
-        
-        console.log(`🏞️ Calculated texture rotation for area repetition: ${(textureRotation * 180 / Math.PI).toFixed(1)}°`);
+        console.log(`🏞️ DEBUG: area_repetition calculated texture rotation: ${(textureRotation * 180 / Math.PI).toFixed(1)}° for ${modelFilename}`); // UNCONDITIONAL DEBUG
+        if (areaRepetitionDebugConfig.enabled && areaRepetitionDebugConfig.logGeneration) console.log(`🏞️ Calculated texture rotation for area repetition: ${(textureRotation * 180 / Math.PI).toFixed(1)}°`);
         
         return [{
             type: 'polygon_texture',
@@ -203,7 +221,7 @@ function generateAreaRepetitions(coordinates, tags) {
     const spacingMeters = config.spacing;
     const maxModels = config.maxModels;
 
-    console.log(`🏞️ Using grid-based model approach: spacing=${spacingMeters}m, maxModels=${maxModels}, model=${modelFilename}`);
+    if (areaRepetitionDebugConfig.enabled && areaRepetitionDebugConfig.logGeneration) console.log(`🏞️ Using grid-based model approach: spacing=${spacingMeters}m, maxModels=${maxModels}, model=${modelFilename}`);
 
     // Calculate bounding box
     let minLon = Infinity, maxLon = -Infinity, minLat = Infinity, maxLat = -Infinity;
@@ -220,7 +238,7 @@ function generateAreaRepetitions(coordinates, tags) {
     const centerLat = (minLat + maxLat) / 2;
     const [spacingLonDeg, spacingLatDeg] = metersToDegrees(spacingMeters, centerLat);
 
-    console.log(`🏞️ Center latitude: ${centerLat.toFixed(6)}, spacing: ${spacingLonDeg.toFixed(8)} lon deg, ${spacingLatDeg.toFixed(8)} lat deg`);
+    if (areaRepetitionDebugConfig.enabled && areaRepetitionDebugConfig.logCoordinates) console.log(`🏞️ Center latitude: ${centerLat.toFixed(6)}, spacing: ${spacingLonDeg.toFixed(8)} lon deg, ${spacingLatDeg.toFixed(8)} lat deg`);
 
     // Generate grid points within bounding box
     const repetitions = [];
@@ -274,7 +292,7 @@ function isPointInPolygon(point, polygon) {
  * @param {object} tags - OSM tags object
  */
 function applyAreaRepetitions(feature, modelFilename, modelConfig, tags) {
-    console.log(`🏞️ applyAreaRepetitions called for tags:`, tags, `model: ${modelFilename}`);
+    if (areaRepetitionDebugConfig.enabled) console.log(`🏞️ applyAreaRepetitions called for tags:`, tags, `model: ${modelFilename}`);
 
     try {
         const geometry = feature.getGeometry();
@@ -294,22 +312,22 @@ function applyAreaRepetitions(feature, modelFilename, modelConfig, tags) {
                 coordinates = [lineCoords.slice(0, -1)]; // Remove closing coordinate and wrap in array
                 geometryType = 'Polygon'; // Treat as polygon for processing
             } else {
-                console.log('🏞️ LineString not closed, skipping area repetition');
+                if (areaRepetitionDebugConfig.enabled) console.log('🏞️ LineString not closed, skipping area repetition');
                 return;
             }
         } else {
-            console.log(`🏞️ Geometry type ${geometryType} not supported for area repetition`);
+            if (areaRepetitionDebugConfig.enabled) console.log(`🏞️ Geometry type ${geometryType} not supported for area repetition`);
             return;
         }
 
-        console.log(`🏞️ Processing ${geometryType} with ${coordinates.length} polygon(s)`);
+        if (areaRepetitionDebugConfig.enabled && areaRepetitionDebugConfig.logGeneration) console.log(`🏞️ Processing ${geometryType} with ${coordinates.length} polygon(s)`);
 
         let allRepetitions = [];
         coordinates.forEach((polygonCoords, polyIndex) => {
             const coords4326 = polygonCoords.map(coord =>
                 ol.proj.transform(coord, window.map.getView().getProjection(), 'EPSG:4326')
             );
-            console.log(`🏞️ Processing polygon ${polyIndex + 1} with ${coords4326.length} coordinates`);
+            if (areaRepetitionDebugConfig.enabled && areaRepetitionDebugConfig.logCoordinates) console.log(`🏞️ Processing polygon ${polyIndex + 1} with ${coords4326.length} coordinates`);
 
             const repetitions = generateAreaRepetitions(coords4326, tags);
             allRepetitions = allRepetitions.concat(repetitions);
@@ -317,7 +335,7 @@ function applyAreaRepetitions(feature, modelFilename, modelConfig, tags) {
 
         // Store repetition data on original feature
         if (allRepetitions.length > 0) {
-            console.log(`🏞️ Storing ${allRepetitions.length} area repetition configurations on original feature`);
+            if (areaRepetitionDebugConfig.enabled) console.log(`🏞️ Storing ${allRepetitions.length} area repetition configurations on original feature`);
 
             allRepetitions.forEach((rep, index) => {
                 const repetitionKey = `repetition_${index}`;
@@ -339,7 +357,7 @@ function applyAreaRepetitions(feature, modelFilename, modelConfig, tags) {
                     feature.set(`${repetitionKey}_spacing`, rep.spacing);
                     feature.set(`${repetitionKey}_rotation`, rep.rotation || 0);
 
-                    console.log(`🏞️ Stored polygon texture repetition ${index + 1} for model: ${rep.model} with rotation: ${((rep.rotation || 0) * 180 / Math.PI).toFixed(1)}°`);
+                    if (areaRepetitionDebugConfig.enabled) console.log(`🏞️ Stored polygon texture repetition ${index + 1} for model: ${rep.model} with rotation: ${((rep.rotation || 0) * 180 / Math.PI).toFixed(1)}°`);
                 } else {
                     // Original model instance approach
                     const repModelOptions = {
@@ -354,13 +372,13 @@ function applyAreaRepetitions(feature, modelFilename, modelConfig, tags) {
                     feature.set(`${repetitionKey}_heightOffset`, 0); // ON THE GROUND
                     feature.set(`${repetitionKey}_rotation`, [0, 0, 0]);
 
-                    console.log(`🏞️ Stored model instance repetition ${index + 1} configuration at [${rep.position[0].toFixed(6)}, ${rep.position[1].toFixed(6)}] with model: ${rep.model}`);
+                    if (areaRepetitionDebugConfig.enabled) console.log(`🏞️ Stored model instance repetition ${index + 1} configuration at [${rep.position[0].toFixed(6)}, ${rep.position[1].toFixed(6)}] with model: ${rep.model}`);
                 }
             });
 
-            console.log(`🏞️ Successfully stored ${allRepetitions.length} area repetition configurations`);
+            if (areaRepetitionDebugConfig.enabled) console.log(`🏞️ Successfully stored ${allRepetitions.length} area repetition configurations`);
         } else {
-            console.log(`🏞️ No area repetitions to store`);
+            if (areaRepetitionDebugConfig.enabled) console.log(`🏞️ No area repetitions to store`);
         }
     } catch (error) {
         console.error(`🏞️ Error in applyAreaRepetitions:`, error);

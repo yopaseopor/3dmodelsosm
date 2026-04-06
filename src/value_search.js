@@ -4,6 +4,21 @@
  * between the default taginfo CSV and a yes/no-focused CSV.
  */
 
+// Import centralized debug configuration
+if (typeof window !== 'undefined' && window.globalDebugConfig) {
+    var debugConfig = window.globalDebugConfig.valueSearch;
+} else {
+    // Fallback debug configuration if centralized config not available
+    var debugConfig = {
+        enabled: false,
+        logFeatureProcessing: false,      // Log individual feature processing
+        logGeometryDetection: false,     // Log geometry detection details
+        logModelAssignment: false,        // Log model assignment details
+        logAreaProcessing: false,         // Log area texture processing
+        logCoordinateProcessing: false    // Log coordinate conversion details
+    };
+}
+
 /**
  * Process query results and add them to the map
  * @param {Array} allFeatures - Array of features returned from the query
@@ -206,16 +221,16 @@ function processQueryResults(allFeatures, key, value) {
     });
 
     // Assign 3D models to features based on OSM tags
-    console.log(`🎯 Processing ${featuresWithTags.length} features with tags for model assignment`);
+    if (debugConfig.enabled && debugConfig.logFeatureProcessing) console.log(`🎯 Processing ${featuresWithTags.length} features with tags for model assignment`);
     featuresWithTags.forEach((feature, index) => {
         const properties = feature.getProperties();
         const osmTags = Object.keys(properties).filter(prop =>
             !['geometry', 'id', 'type', 'originalType', 'fixedGeometry', 'members', 'memberOf', 'member', 'membership', 'role', 'version', 'timestamp', 'changeset', 'user', 'uid', 'visible'].includes(prop)
         );
-        console.log(`🔍 Feature ${index + 1} OSM tags:`, osmTags);
+        if (debugConfig.enabled && debugConfig.logFeatureProcessing) console.log(`🔍 Feature ${index + 1} OSM tags:`, osmTags);
 
         // Log all properties for first few features to understand structure
-        if (index < 3) {
+        if (index < 3 && debugConfig.enabled && debugConfig.logFeatureProcessing) {
             console.log(`🔍 Feature ${index + 1} full properties:`, properties);
         }
 
@@ -231,12 +246,12 @@ function processQueryResults(allFeatures, key, value) {
         let wayCoordinates = null;
         let nodeIndex = null;
 
-        console.log(`🎯 Geometry detection for feature ${index + 1}:`, geometry, `type:`, geometry ? (geometry.getType ? geometry.getType() : typeof geometry) : 'null');
+        if (debugConfig.enabled && debugConfig.logGeometryDetection) console.log(`🎯 Geometry detection for feature ${index + 1}:`, geometry, `type:`, geometry ? (geometry.getType ? geometry.getType() : typeof geometry) : 'null');
 
         // First check if this is an area feature by tags (override geometry detection)
         if (tagsObj['area:highway'] || tagsObj['area:amenity'] || tagsObj['area:leisure'] || tagsObj['area:natural'] || tagsObj['area:landuse']) {
             geometryType = 'area';
-            console.log(`🎨 Feature has area tags, forcing geometry type to 'area'`);
+            if (debugConfig.enabled && debugConfig.logGeometryDetection) console.log(`🎨 Feature has area tags, forcing geometry type to 'area'`);
         } else if (geometry) {
             let geomType;
             if (geometry.getType) {
@@ -257,7 +272,7 @@ function processQueryResults(allFeatures, key, value) {
                 }
             }
 
-            console.log(`🎯 Detected geometry type: ${geomType}`);
+            if (debugConfig.enabled && debugConfig.logGeometryDetection) console.log(`🎯 Detected geometry type: ${geomType}`);
 
             if (geomType === 'Polygon' || geomType === 'MultiPolygon') {
                 geometryType = 'area';
@@ -286,15 +301,15 @@ function processQueryResults(allFeatures, key, value) {
             }
         }
 
-        console.log(`🔍 Final geometry type determination for feature ${index + 1}: ${geometryType}`);
+        if (debugConfig.enabled && debugConfig.logGeometryDetection) console.log(`🔍 Final geometry type determination for feature ${index + 1}: ${geometryType}`);
 
         const mapping = window.models ? window.models.getModelForTags(tagsObj, wayCoordinates, nodeIndex, geometryType) : null;
-        console.log('mapping:', mapping);
+        if (debugConfig.enabled && debugConfig.logModelAssignment) console.log('mapping:', mapping);
         if (mapping) {
             const modelFilename = mapping.model;
             const modelConfig = mapping.config;
             const mappingGeometryType = mapping.geometryType;
-            console.log('mappingGeometryType:', mappingGeometryType);
+            if (debugConfig.enabled && debugConfig.logModelAssignment) console.log('mappingGeometryType:', mappingGeometryType);
 
             // Apply footway repetitions if this is a footway feature
             if (window.footwayRepetition && typeof window.footwayRepetition.applyFootwayRepetitions === 'function') {
@@ -302,7 +317,7 @@ function processQueryResults(allFeatures, key, value) {
                 const highway = tags.highway;
                 
                 if (highway === 'footway' || highway === 'path' || highway === 'pedestrian') {
-                    console.log('🚶 Applying repetitions to footway feature from query:', tags);
+                    if (debugConfig.enabled && debugConfig.logModelAssignment) console.log('🚶 Applying repetitions to footway feature from query:', tags);
                     try {
                         window.footwayRepetition.applyFootwayRepetitions(feature, modelFilename, modelConfig);
                     } catch (error) {
@@ -317,7 +332,7 @@ function processQueryResults(allFeatures, key, value) {
                 const highway = tags.highway;
                 
                 if (highway && highway !== 'footway' && highway !== 'path' && highway !== 'pedestrian') {
-                    console.log(`🛣️ Applying repetitions to highway ${highway} feature from query:`, tags);
+                    if (debugConfig.enabled && debugConfig.logModelAssignment) console.log(`🛣️ Applying repetitions to highway ${highway} feature from query:`, tags);
                     try {
                         window.highwayRepetition.applyHighwayRepetitions(feature, modelFilename, modelConfig, highway);
                     } catch (error) {
@@ -327,85 +342,85 @@ function processQueryResults(allFeatures, key, value) {
             }
 
             if (mappingGeometryType === 'area') {
-                console.log('🎨 Area code reached for tags:', tagsObj, 'geometryType:', mappingGeometryType);
+                if (debugConfig.enabled && debugConfig.logAreaProcessing) console.log('🎨 Area code reached for tags:', tagsObj, 'geometryType:', mappingGeometryType);
                 // Handle area textures/materials
-                console.log(`🎨 Applying area texture ${modelFilename} to polygon`);
+                if (debugConfig.enabled && debugConfig.logAreaProcessing) console.log(`🎨 Applying area texture ${modelFilename} to polygon`);
 
                 // Create a Cesium entity for the textured area
                 if (mappingGeometryType === 'area') {
                     // Handle area models (polygons with textures)
-                    console.log(`🎨 Applying area texture ${modelFilename} to polygon`);
+                    if (debugConfig.enabled && debugConfig.logAreaProcessing) console.log(`🎨 Applying area texture ${modelFilename} to polygon`);
 
                     let coordinates;
                     const geometry = feature.getGeometry();
 
                     if (geometry && geometry.getType && geometry.getType() === 'Polygon') {
                         coordinates = geometry.getCoordinates();
-                        console.log(`🎨 Using Polygon coordinates:`, coordinates);
+                        if (debugConfig.enabled && debugConfig.logAreaProcessing) console.log(`🎨 Using Polygon coordinates:`, coordinates);
                     } else if (geometry && geometry.getType && geometry.getType() === 'LineString') {
                         // For area-tagged ways, create a simple polygon from the linestring
                         const lineCoords = geometry.getCoordinates();
                         coordinates = [lineCoords]; // Single ring
-                        console.log(`🎨 Converting LineString to Polygon coordinates:`, coordinates);
+                        if (debugConfig.enabled && debugConfig.logAreaProcessing) console.log(`🎨 Converting LineString to Polygon coordinates:`, coordinates);
                     } else if (geometry && geometry.coordinates) {
                         // Fallback for GeoJSON-style geometry
                         coordinates = geometry.coordinates;
-                        console.log(`🎨 Using GeoJSON coordinates:`, coordinates);
+                        if (debugConfig.enabled && debugConfig.logAreaProcessing) console.log(`🎨 Using GeoJSON coordinates:`, coordinates);
                     } else if (properties.geometry && properties.geometry.coordinates) {
                         // Last resort - use geometry from properties
                         coordinates = properties.geometry.coordinates;
-                        console.log(`🎨 Using geometry property coordinates:`, coordinates);
+                        if (debugConfig.enabled && debugConfig.logAreaProcessing) console.log(`🎨 Using geometry property coordinates:`, coordinates);
                     } else {
                         console.warn(`🎨 No coordinates found for area texture`);
                         coordinates = null;
                     }
 
                     if (coordinates && coordinates.length > 0) {
-                        console.log(`🎨 Processing coordinates with ${coordinates.length} rings`);
+                        if (debugConfig.enabled && debugConfig.logAreaProcessing) console.log(`🎨 Processing coordinates with ${coordinates.length} rings`);
                         
                         // Check if feature already has an area entity to prevent duplicates
                         if (feature.get('areaEntity')) {
-                            console.log(`🎨 Feature already has area entity, skipping duplicate creation`);
+                            if (debugConfig.enabled && debugConfig.logAreaProcessing) console.log(`🎨 Feature already has area entity, skipping duplicate creation`);
                             return;
                         }
 
                         // Convert coordinates to Cesium Cartesian3 array
                         const cesiumPositions = [];
                         for (const ring of coordinates) {
-                            console.log(`🎨 Processing ring with ${ring.length} points`);
+                            if (debugConfig.enabled && debugConfig.logCoordinateProcessing) console.log(`🎨 Processing ring with ${ring.length} points`);
                             for (const coord of ring) {
                                 const lonLat = ol.proj.transform(coord, window.map.getView().getProjection(), 'EPSG:4326');
                                 const cartesian = Cesium.Cartesian3.fromDegrees(lonLat[0], lonLat[1], 0);
                                 cesiumPositions.push(cartesian);
-                                console.log(`🎨 Added point: [${lonLat[0]}, ${lonLat[1]}] -> Cartesian3`);
+                                if (debugConfig.enabled && debugConfig.logCoordinateProcessing) console.log(`🎨 Added point: [${lonLat[0]}, ${lonLat[1]}] -> Cartesian3`);
                             }
                         }
 
-                        console.log(`🎨 Created ${cesiumPositions.length} Cesium positions`);
+                        if (debugConfig.enabled && debugConfig.logCoordinateProcessing) console.log(`🎨 Created ${cesiumPositions.length} Cesium positions`);
 
                         // Create polygon hierarchy
                         const hierarchy = new Cesium.PolygonHierarchy(cesiumPositions);
-                        console.log(`🎨 Created polygon hierarchy`);
+                        if (debugConfig.enabled && debugConfig.logAreaProcessing) console.log(`🎨 Created polygon hierarchy`);
 
                         // Calculate texture rotation based on nearby ways
                         const polygonCoords = coordinates[0].map(coord => 
                             ol.proj.transform(coord, window.map.getView().getProjection(), 'EPSG:4326')
                         );
-                        
-                        // DISABLED: Canvas rotation causes gaps in tiling
-                        const textureRotation = 0; // No rotation for now
-                        console.log(`🎨 Texture rotation disabled - canvas rotation causes tiling gaps`);
+                        const textureRotation = window.modelRenderer ? 
+                            window.modelRenderer.calculateTextureRotation(polygonCoords, modelFilename) : 
+                            0; // No rotation if modelRenderer not available
 
-                        console.log(`🎨 Calculated texture rotation for value search: ${(textureRotation * 180 / Math.PI).toFixed(1)}°`);
+                        if (debugConfig.enabled && debugConfig.logAreaProcessing) console.log(`🎨 Calculated texture rotation for value search: ${(textureRotation * 180 / Math.PI).toFixed(1)}°`);
 
                         // Create textured material
                         const material = new Cesium.ImageMaterialProperty({
                             image: `/3dmodelsosm/src/models/${modelFilename}`,
                             transparent: true,
-                            color: new Cesium.Color(1.0, 1.0, 1.0, 0.8) // Slight transparency
+                            color: new Cesium.Color(1.0, 1.0, 1.0, 0.8), // Slight transparency
+                            stRotation: textureRotation !== 0 ? textureRotation : undefined
                         });
                         
-                        console.log(`🎨 Created material with texture: ${modelFilename}, rotation: ${(textureRotation * 180 / Math.PI).toFixed(1)}°`);
+                        if (debugConfig.enabled && debugConfig.logAreaProcessing) console.log(`🎨 Created material with texture: ${modelFilename}, stRotation: ${(textureRotation * 180 / Math.PI).toFixed(1)}°`);
 
                         // Create the entity
                         const areaEntity = new Cesium.Entity({
@@ -427,7 +442,7 @@ function processQueryResults(allFeatures, key, value) {
                             }
                         });
 
-                        console.log(`🎨 Created area entity:`, areaEntity);
+                        if (debugConfig.enabled && debugConfig.logAreaProcessing) console.log(`🎨 Created area entity:`, areaEntity);
 
                         // Store the entity on the feature for later management
                         feature.set('areaEntity', areaEntity);
@@ -436,21 +451,21 @@ function processQueryResults(allFeatures, key, value) {
                         const dataSource = window.areaTextureManager.getDataSource();
                         if (dataSource) {
                             dataSource.entities.add(areaEntity);
-                            console.log(`🎨 Added textured area entity to 3D scene. Total entities: ${dataSource.entities.values.length}`);
+                            if (debugConfig.enabled && debugConfig.logAreaProcessing) console.log(`🎨 Added textured area entity to 3D scene. Total entities: ${dataSource.entities.values.length}`);
 
                             // Force a render
                             if (window.ol3d.getCesiumScene) {
                                 const scene = window.ol3d.getCesiumScene();
                                 if (scene && scene.requestRender) {
                                     scene.requestRender();
-                                    console.log('🎨 Requested scene render');
+                                    if (debugConfig.enabled && debugConfig.logAreaProcessing) console.log('🎨 Requested scene render');
                                 }
                             }
                         } else {
                             console.warn('🎨 No 3D mode available, area entity stored but not rendered');
                         }
 
-                        console.log(`🎨 SUCCESS: Created Cesium entity for area texture ${modelFilename} with ${cesiumPositions.length} vertices`);
+                        if (debugConfig.enabled && debugConfig.logAreaProcessing) console.log(`🎨 SUCCESS: Created Cesium entity for area texture ${modelFilename} with ${cesiumPositions.length} vertices`);
                     } else {
                         console.warn(`🎨 No valid coordinates found for area texture`);
                     }
@@ -489,7 +504,7 @@ function processQueryResults(allFeatures, key, value) {
                         }
 
                         feature.set('wayModels', wayModels);
-                        console.log(`🛤️ SUCCESS: Placed ${wayModels.length} models along way with tags:`, tagsObj);
+                        if (debugConfig.enabled && debugConfig.logModelAssignment) console.log(`🛤️ SUCCESS: Placed ${wayModels.length} models along way with tags:`, tagsObj);
                     }
                 } else {
                     // Point model
@@ -506,10 +521,10 @@ function processQueryResults(allFeatures, key, value) {
                     feature.set('modelHeightOffset', 0);
                 }
 
-                console.log(`🎯 SUCCESS: Assigned 3D model ${modelFilename} (${modelUrl}) to feature with tags:`, tagsObj);
-                console.log(`🎯 Model options:`, modelOptions);
-                console.log(`🎯 Feature now has model property:`, feature.get('model'));
-                console.log(`🎯 Feature geometry type:`, geometry ? geometry.getType() : 'null');
+                if (debugConfig.enabled && debugConfig.logModelAssignment) console.log(`🎯 SUCCESS: Assigned 3D model ${modelFilename} (${modelUrl}) to feature with tags:`, tagsObj);
+                if (debugConfig.enabled && debugConfig.logModelAssignment) console.log(`🎯 Model options:`, modelOptions);
+                if (debugConfig.enabled && debugConfig.logModelAssignment) console.log(`🎯 Feature now has model property:`, feature.get('model'));
+                if (debugConfig.enabled && debugConfig.logModelAssignment) console.log(`🎯 Feature geometry type:`, geometry ? geometry.getType() : 'null');
             } else {
                 // Handle point/line models (existing functionality)
                 const modelUrl = `/3dmodelsosm/src/models/${modelFilename}`;
@@ -545,7 +560,7 @@ function processQueryResults(allFeatures, key, value) {
                         }
 
                         feature.set('wayModels', wayModels);
-                        console.log(`🛤️ SUCCESS: Placed ${wayModels.length} models along way with tags:`, tagsObj);
+                        if (debugConfig.enabled && debugConfig.logModelAssignment) console.log(`🛤️ SUCCESS: Placed ${wayModels.length} models along way with tags:`, tagsObj);
                     }
                 } else {
                     // Point model
@@ -562,13 +577,13 @@ function processQueryResults(allFeatures, key, value) {
                     feature.set('modelHeightOffset', 0);
                 }
 
-                console.log(`🎯 SUCCESS: Assigned 3D model ${modelFilename} (${modelUrl}) to feature with tags:`, tagsObj);
-                console.log(`🎯 Model options:`, modelOptions);
-                console.log(`🎯 Feature now has model property:`, feature.get('model'));
-                console.log(`🎯 Feature geometry type:`, geometry ? geometry.getType() : 'null');
+                if (debugConfig.enabled && debugConfig.logModelAssignment) console.log(`🎯 SUCCESS: Assigned 3D model ${modelFilename} (${modelUrl}) to feature with tags:`, tagsObj);
+                if (debugConfig.enabled && debugConfig.logModelAssignment) console.log(`🎯 Model options:`, modelOptions);
+                if (debugConfig.enabled && debugConfig.logModelAssignment) console.log(`🎯 Feature now has model property:`, feature.get('model'));
+                if (debugConfig.enabled && debugConfig.logModelAssignment) console.log(`🎯 Feature geometry type:`, geometry ? geometry.getType() : 'null');
             }
         } else {
-            if (osmTags.length > 0) {
+            if (osmTags.length > 0 && debugConfig.enabled && debugConfig.logModelAssignment) {
                 console.log(`❌ No model assigned to feature ${index + 1} with tags:`, osmTags);
             }
         }

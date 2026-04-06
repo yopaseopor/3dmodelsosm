@@ -460,18 +460,12 @@ window.modelRenderer = {
         if (repType === 'polygon_texture') {
             const polygonCoordinates = feature.get(`repetition_${repIndex}_polygonCoordinates`);
             const spacing = feature.get(`repetition_${repIndex}_spacing`);
+            const rotation = feature.get(`repetition_${repIndex}_rotation`) || 0;
             const imageUri = repModel.uri;
 
             if (polygonCoordinates && imageUri) {
-                // Force recalculation of rotation instead of using stored value
-                const polygonCoords4326 = polygonCoordinates.map(coord => 
-                    ol.proj.transform(coord, window.map.getView().getProjection(), 'EPSG:4326')
-                );
-                const recalculatedRotation = this.calculateTextureRotation(polygonCoords4326, imageUri);
-                console.log(`🖼️ DEBUG: Force recalculated rotation for repetition ${repIndex}: ${(recalculatedRotation * 180 / Math.PI).toFixed(1)}° for ${imageUri}`); // UNCONDITIONAL DEBUG
-                
-                if (debugConfig.enabled) console.log(`🖼️ Adding polygon texture for ${repIndex} with ${polygonCoordinates.length} coordinates and recalculated rotation: ${(recalculatedRotation * 180 / Math.PI).toFixed(1)}°`);
-                this.addAreaTexture(polygonCoordinates, imageUri, { spacing: spacing, rotation: recalculatedRotation }, cesiumScene);
+                if (debugConfig.enabled) console.log(`🖼️ Adding polygon texture for ${repIndex} with ${polygonCoordinates.length} coordinates and rotation: ${(rotation * 180 / Math.PI).toFixed(1)}°`);
+                this.addAreaTexture(polygonCoordinates, imageUri, { spacing: spacing, rotation: rotation }, cesiumScene);
                 return;
             }
         }
@@ -626,12 +620,10 @@ window.modelRenderer = {
         let textureRotation;
         if (repModel && repModel.rotation !== undefined) {
             textureRotation = repModel.rotation;
-            console.log(`🖼️ DEBUG: Using provided rotation from repModel: ${(textureRotation * 180 / Math.PI).toFixed(1)}°`); // UNCONDITIONAL DEBUG
-            if (debugConfig.enabled) console.log(`🖼️ Using provided rotation: ${(textureRotation * 180 / Math.PI).toFixed(1)}°`);
+            if (debugConfig.enabled) console.log(`🖼️ Using provided rotation from repModel: ${(textureRotation * 180 / Math.PI).toFixed(1)}°`);
         } else {
             // Find nearby ways and calculate rotation
             textureRotation = this.calculateTextureRotation(polygonCoordinates, imageUri);
-            console.log(`🖼️ DEBUG: Calculated texture rotation: ${(textureRotation * 180 / Math.PI).toFixed(1)}°`); // UNCONDITIONAL DEBUG
             if (debugConfig.enabled) console.log(`🖼️ Calculated texture rotation: ${(textureRotation * 180 / Math.PI).toFixed(1)}°`);
         }
 
@@ -661,19 +653,58 @@ window.modelRenderer = {
                 console.warn(`🖼️ Could not apply texture repeat - texturedPolygon structure not as expected`);
             }
 
-            // Use Cesium's stRotation property for texture rotation
-            // No canvas manipulation - just set the rotation angle
-            console.log(`🖼️ DEBUG: textureRotation value: ${textureRotation}, degrees: ${(textureRotation * 180 / Math.PI).toFixed(1)}°`);
+            // Apply rotation by rotating the image on a canvas with seamless tiling
             if (textureRotation !== 0) {
-                if (debugConfig.enabled) console.log(`🖼️ Applying stRotation: ${(textureRotation * 180 / Math.PI).toFixed(1)}°`);
+                if (debugConfig.enabled) console.log(`🖼️ Applying rotation with seamless pattern: ${(textureRotation * 180 / Math.PI).toFixed(1)}°`);
                 
+                // Create a 3x3 tiled pattern to ensure seamless edges when rotated
+                const tileSize = imageWidth;
+                const patternSize = tileSize * 3;
+                
+                const patternCanvas = document.createElement('canvas');
+                patternCanvas.width = patternSize;
+                patternCanvas.height = patternSize;
+                const patternCtx = patternCanvas.getContext('2d');
+                
+                // Draw image in 3x3 grid
+                for (let x = 0; x < 3; x++) {
+                    for (let y = 0; y < 3; y++) {
+                        patternCtx.drawImage(img, x * tileSize, y * tileSize, tileSize, tileSize);
+                    }
+                }
+                
+                // Create larger canvas for rotation
+                const diagonal = Math.sqrt(patternSize * patternSize + patternSize * patternSize);
+                const rotatedCanvasSize = Math.ceil(diagonal);
+                
+                const rotatedCanvas = document.createElement('canvas');
+                rotatedCanvas.width = rotatedCanvasSize;
+                rotatedCanvas.height = rotatedCanvasSize;
+                const rotatedCtx = rotatedCanvas.getContext('2d');
+                
+                // Clear and rotate
+                rotatedCtx.clearRect(0, 0, rotatedCanvasSize, rotatedCanvasSize);
+                rotatedCtx.translate(rotatedCanvasSize / 2, rotatedCanvasSize / 2);
+                rotatedCtx.rotate(textureRotation);
+                rotatedCtx.drawImage(patternCanvas, -patternSize / 2, -patternSize / 2, patternSize, patternSize);
+                
+                // Create data URL
+                const rotatedImageDataUrl = rotatedCanvas.toDataURL();
+                
+                // Update material with rotated image
                 if (texturedPolygon && texturedPolygon.polygon && texturedPolygon.polygon.material) {
-                    texturedPolygon.polygon.material.stRotation = textureRotation;
-                    console.log(`🖼️ DEBUG: Applied stRotation`);
-                    if (debugConfig.enabled) console.log(`🖼️ Applied stRotation`);
+                    texturedPolygon.polygon.material.image = rotatedImageDataUrl;
+                    // Scale repeat to account for 3x3 pattern
+                    texturedPolygon.polygon.material.repeat = new Cesium.Cartesian2(textureRepeatX / 3, textureRepeatY / 3);
+                    if (debugConfig.enabled) console.log(`🖼️ Applied rotated seamless pattern (3x3 tiling, canvas: ${rotatedCanvasSize}x${rotatedCanvasSize})`);
+                    
+                    // Clean up canvas elements to prevent memory leaks
+                    patternCanvas.width = 0;
+                    patternCanvas.height = 0;
+                    rotatedCanvas.width = 0;
+                    rotatedCanvas.height = 0;
                 }
             }
-
 
             if (debugConfig.enabled) console.log(`🖼️ Fixed texture repeat: ${textureRepeatX.toFixed(2)} x ${textureRepeatY.toFixed(2)} (polygon ${widthMeters.toFixed(1)}m x ${heightMeters.toFixed(1)}m, desired tile size ${desiredTextureSizeMeters}m)`);
         };
@@ -683,10 +714,6 @@ window.modelRenderer = {
         // Initial repeat (will be updated when image loads)
         const initialRepeatX = widthMeters;
         const initialRepeatY = heightMeters;
-
-        // Calculate polygon center for entity rotation
-        const centerLon = (minLon + maxLon) / 2;
-        const centerPosition = Cesium.Cartesian3.fromDegrees(centerLon, centerLat, 0.001);
 
         // Create polygon hierarchy
         const polygonHierarchy = new Cesium.PolygonHierarchy(cartesianPositions);
@@ -723,46 +750,23 @@ window.modelRenderer = {
      * @returns {number} Rotation angle in radians (0 if no rotation needed)
      */
     calculateTextureRotation: function(polygonCoordinates, textureName) {
-        console.log(`🖼️ DEBUG: calculateTextureRotation called for texture: ${textureName}`); // UNCONDITIONAL DEBUG
+        if (debugConfig.enabled) console.log(`🖼️ calculateTextureRotation called for texture: ${textureName}`);
 
         // Special handling for crossing textures - align with parent footway
-        console.log(`🖼️ DEBUG: Checking if texture is crossing: ${textureName}`); // UNCONDITIONAL DEBUG
+        if (debugConfig.enabled) {
+            console.log(`🖼️ Checking if texture is crossing: ${textureName}`);
+            console.log(`🖼️ Texture name lowercase: ${textureName.toLowerCase()}`);
+        }
         
         // Check for multiple possible crossing texture names
         const isCrossingTexture = textureName.toLowerCase().includes('i_crossing.png') || 
-                                textureName.toLowerCase().includes('crossing') ||
-                                textureName.toLowerCase().includes('panot');
-        
-        console.log(`🖼️ DEBUG: isCrossingTexture: ${isCrossingTexture}`); // UNCONDITIONAL DEBUG
-        
-        if (isCrossingTexture) {
-            console.log(`🖼️ DEBUG: Special handling for crossing texture - looking for parent footway`); // UNCONDITIONAL DEBUG
-            const crossingRotation = this.calculateCrossingTextureRotation(polygonCoordinates, textureName);
-            console.log(`🖼️ DEBUG: Crossing rotation result: ${crossingRotation}`); // UNCONDITIONAL DEBUG
-            if (crossingRotation !== null) {
-                console.log(`🖼️ DEBUG: Crossing texture rotation found: ${(crossingRotation * 180 / Math.PI).toFixed(1)}°`); // UNCONDITIONAL DEBUG
-                return crossingRotation;
-            } else {
-                console.log(`🖼️ DEBUG: Crossing rotation returned null, falling back to general rotation`); // UNCONDITIONAL DEBUG
-            }
-        } else {
-            console.log(`🖼️ DEBUG: Not a crossing texture, using general rotation`); // UNCONDITIONAL DEBUG
-        }
-
-        try {
-            // Get all map layers to find ways
-            const layers = window.map.getLayers().getArray();
-            const nearbyWays = [];
-
-            console.log(`🖼️ DEBUG: Searching ${layers.length} layers for nearby ways...`); // UNCONDITIONAL DEBUG
-
             // Search through all layers for ways that cross or are adjacent to the polygon
             layers.forEach((layer, layerIndex) => {
                 if (layer.getSource && typeof layer.getSource === 'function') {
                     const source = layer.getSource();
                     if (source && source.getFeatures) {
                         const features = source.getFeatures();
-                        console.log(`🖼️ DEBUG: Layer ${layerIndex}: ${features.length} features`); // UNCONDITIONAL DEBUG
+                        if (debugConfig.enabled) console.log(`🖼️ Layer ${layerIndex}: ${features.length} features`);
 
                         features.forEach((feature, featureIndex) => {
                             const geometry = feature.getGeometry();
@@ -770,7 +774,7 @@ window.modelRenderer = {
                                 // Check if this way crosses or is adjacent to our polygon
                                 if (this.wayIntersectsOrAdjacentToPolygon(geometry, polygonCoordinates)) {
                                     nearbyWays.push(feature);
-                                    console.log(`🖼️ DEBUG: Found nearby way in layer ${layerIndex}, feature ${featureIndex}`); // UNCONDITIONAL DEBUG
+                                    if (debugConfig.enabled) console.log(`🖼️ Found nearby way in layer ${layerIndex}, feature ${featureIndex}`);
                                 }
                             }
                         });
@@ -778,10 +782,10 @@ window.modelRenderer = {
                 }
             });
 
-            console.log(`🖼️ DEBUG: Found ${nearbyWays.length} nearby ways for texture rotation`); // UNCONDITIONAL DEBUG
+            if (debugConfig.enabled) console.log(`🖼️ Found ${nearbyWays.length} nearby ways for texture rotation`);
 
             if (nearbyWays.length === 0) {
-                console.log(`🖼️ DEBUG: No nearby ways found - returning 0 rotation`); // UNCONDITIONAL DEBUG
+                if (debugConfig.enabled) console.log(`🖼️ No nearby ways found - returning 0 rotation`);
                 return 0;
             }
 
@@ -791,38 +795,19 @@ window.modelRenderer = {
                 const coords = geometry.getType() === 'LineString' ?
                     geometry.getCoordinates() :
                     geometry.getCoordinates().flat();
-
-                if (debugConfig.enabled) console.log(`🖼️ Way ${index} has ${coords.length} coordinates`);
-
-                // Convert to EPSG:4326 if needed
-                const lonLatCoords = coords.map(coord =>
-                    ol.proj.transform(coord, window.map.getView().getProjection(), 'EPSG:4326')
-                );
-
-                if (debugConfig.enabled) console.log(`🖼️ Way ${index} first few coords:`, lonLatCoords.slice(0, 3));
-
-                const bearing = this.calculateWayBearing(lonLatCoords);
-                if (debugConfig.enabled) console.log(`🖼️ Way ${index} bearing: ${(bearing * 180 / Math.PI).toFixed(1)}°`);
+                
+                const bearing = this.calculateBearing(coords);
+                console.log(`🖼️ DEBUG: Way ${index} bearing: ${(bearing * 180 / Math.PI).toFixed(1)}°`); // UNCONDITIONAL DEBUG
                 return bearing;
-            }).filter(bearing => bearing !== null);
-
-            if (debugConfig.enabled) console.log(`🖼️ Valid bearings calculated: ${bearings.length} out of ${nearbyWays.length}`);
-
-            if (bearings.length === 0) {
-                if (debugConfig.enabled) console.log(`🖼️ Could not calculate bearings - returning 0 rotation`);
-                return 0;
-            }
-
+            });
+            
             // Calculate average bearing
-            const averageBearing = bearings.reduce((sum, bearing) => sum + bearing, 0) / bearings.length;
-
-            if (debugConfig.enabled) console.log(`🖼️ Calculated average bearing from ${bearings.length} ways: ${(averageBearing * 180 / Math.PI).toFixed(1)}°`);
-
-            // For textures, we want the texture to flow in the direction of the way
-            // So we rotate the texture to align with the way's bearing
-            // Cesium texture rotation: positive values rotate clockwise
-            return -averageBearing;
-
+            const avgBearing = bearings.reduce((sum, bearing) => sum + bearing, 0) / bearings.length;
+            console.log(`🖼️ DEBUG: Average bearing: ${(avgBearing * 180 / Math.PI).toFixed(1)}°`); // UNCONDITIONAL DEBUG
+            if (debugConfig.enabled) console.log(`🖼️ Average bearing for texture rotation: ${(avgBearing * 180 / Math.PI).toFixed(1)}°`);
+            
+            return avgBearing;
+            
         } catch (error) {
             console.error(`🖼️ Error calculating texture rotation:`, error);
             return 0;
@@ -836,74 +821,120 @@ window.modelRenderer = {
      * @returns {number|null} Rotation angle in radians, or null if not found
      */
     calculateCrossingTextureRotation: function(polygonCoordinates, textureName) {
-        // Calculate rotation from the polygon's own geometry
-        // For crossing areas, the polygon represents the crossing itself
-        // We calculate the bearing of its longest segment to determine orientation
-        
-        if (!polygonCoordinates || polygonCoordinates.length < 2) {
+        console.log(`🖼️ DEBUG: calculateCrossingTextureRotation called for: ${textureName}`); // UNCONDITIONAL DEBUG
+        console.log(`🖼️ DEBUG: Polygon coordinates count: ${polygonCoordinates.length}`); // UNCONDITIONAL DEBUG
+        if (debugConfig.enabled) console.log(`🚶 calculateCrossingTextureRotation called for crossing texture: ${textureName}`);
+        if (debugConfig.enabled) console.log(`🚶 Polygon coordinates count: ${polygonCoordinates.length}`);
+
+        try {
+            // Get all map layers to find footways
+            const layers = window.map.getLayers().getArray();
+            const footways = [];
+
+            console.log(`🖼️ DEBUG: Searching ${layers.length} layers for footways...`); // UNCONDITIONAL DEBUG
+            if (debugConfig.enabled) console.log(`🚶 Searching ${layers.length} layers for footways...`);
+
+            // Search through all layers for footway ways
+            layers.forEach((layer, layerIndex) => {
+                if (layer.getSource && typeof layer.getSource === 'function') {
+                    const source = layer.getSource();
+                    if (source && source.getFeatures) {
+                        const features = source.getFeatures();
+                        console.log(`🖼️ DEBUG: Layer ${layerIndex}: ${features.length} features`); // UNCONDITIONAL DEBUG
+                        if (debugConfig.enabled) console.log(`🚶 Layer ${layerIndex}: ${features.length} features`);
+
+                        features.forEach((feature, featureIndex) => {
+                            const geometry = feature.getGeometry();
+                            const tags = feature.getProperties();
+                            
+                            // Look for footway ways (not crossing areas)
+                            if (geometry && (geometry.getType() === 'LineString' || geometry.getType() === 'MultiLineString') &&
+                                (tags['highway'] === 'footway' || tags['footway'] || tags['highway'] === 'path' || tags['highway'] === 'pedestrian')) {
+                                
+                                // Check if this footway intersects or is very close to our crossing polygon
+                                const intersects = this.wayIntersectsOrAdjacentToPolygon(geometry, polygonCoordinates);
+                                console.log(`�️ DEBUG: Footway ${featureIndex} intersection check: ${intersects}`); // UNCONDITIONAL DEBUG
+                                
+                                if (intersects) {
+                                    footways.push({ feature, geometry, tags });
+                                    console.log(`🖼️ DEBUG: Found intersecting footway in layer ${layerIndex}, feature ${featureIndex}`); // UNCONDITIONAL DEBUG
+                                    if (debugConfig.enabled) console.log(`🚶 Found intersecting footway in layer ${layerIndex}, feature ${featureIndex}:`, tags);
+                                }
+                            }
+                        });
+                    }
+                }
+            });
+
+            console.log(`🖼️ DEBUG: Found ${footways.length} footways near the crossing`); // UNCONDITIONAL DEBUG
+            if (debugConfig.enabled) console.log(`🚶 Found ${footways.length} footways near the crossing`);
+
+            if (footways.length === 0) {
+                console.log(`🖼️ DEBUG: No footways found near crossing - returning null`); // UNCONDITIONAL DEBUG
+                if (debugConfig.enabled) console.log(`🚶 No footways found near crossing - will use general rotation`);
+                return null;
+            }
+
+            // Calculate bearing of the footway(s)
+            const bearings = footways.map((footway, index) => {
+                const geometry = footway.geometry;
+                const coords = geometry.getType() === 'LineString' ?
+                    geometry.getCoordinates() :
+                    geometry.getCoordinates().flat();
+
+                console.log(`�️ DEBUG: Footway ${index} has ${coords.length} coordinates`); // UNCONDITIONAL DEBUG
+
+                // Convert to EPSG:4326 if needed
+                const lonLatCoords = coords.map(coord =>
+                    ol.proj.transform(coord, window.map.getView().getProjection(), 'EPSG:4326')
+                );
+
+                console.log(`�️ DEBUG: Footway ${index} first few coords:`, lonLatCoords.slice(0, 3)); // UNCONDITIONAL DEBUG
+
+                const bearing = this.calculateWayBearing(lonLatCoords);
+                console.log(`🖼️ DEBUG: Footway ${index} bearing: ${(bearing * 180 / Math.PI).toFixed(1)}°`); // UNCONDITIONAL DEBUG
+                if (debugConfig.enabled) console.log(`🚶 Footway ${index} bearing: ${(bearing * 180 / Math.PI).toFixed(1)}°`);
+                return bearing;
+            }).filter(bearing => bearing !== null);
+
+            console.log(`🖼️ DEBUG: Valid footway bearings calculated: ${bearings.length}`); // UNCONDITIONAL DEBUG
+            if (debugConfig.enabled) console.log(`🚶 Valid footway bearings calculated: ${bearings.length}`);
+
+            if (bearings.length === 0) {
+                console.log(`🖼️ DEBUG: Could not calculate footway bearings - returning null`); // UNCONDITIONAL DEBUG
+                if (debugConfig.enabled) console.log(`🚶 Could not calculate footway bearings`);
+                return null;
+            }
+
+            // Use the first footway bearing (or average if multiple)
+            const footwayBearing = bearings.length === 1 ? bearings[0] : 
+                bearings.reduce((sum, bearing) => sum + bearing, 0) / bearings.length;
+
+            console.log(`🖼️ DEBUG: Using footway bearing for crossing texture: ${(footwayBearing * 180 / Math.PI).toFixed(1)}°`); // UNCONDITIONAL DEBUG
+            if (debugConfig.enabled) console.log(`🚶 Using footway bearing for crossing texture: ${(footwayBearing * 180 / Math.PI).toFixed(1)}°`);
+
+            // For crossing textures, we want the crossing stripes to be perpendicular to the footway direction
+            // So we rotate 90 degrees from the footway bearing
+            const crossingRotation = footwayBearing + Math.PI / 2; // Add 90 degrees
+            
+            console.log(`🖼️ DEBUG: Crossing texture rotation (perpendicular to footway): ${(crossingRotation * 180 / Math.PI).toFixed(1)}°`); // UNCONDITIONAL DEBUG
+            if (debugConfig.enabled) console.log(`🚶 Crossing texture rotation (perpendicular to footway): ${(crossingRotation * 180 / Math.PI).toFixed(1)}°`);
+
+            // Cesium texture rotation: positive values rotate clockwise
+            const finalRotation = -crossingRotation;
+            console.log(`🖼️ DEBUG: Final crossing rotation (Cesium format): ${(finalRotation * 180 / Math.PI).toFixed(1)}°`); // UNCONDITIONAL DEBUG
+            
+            return finalRotation;
+
+        } catch (error) {
+            console.error(`🚶 Error calculating crossing texture rotation:`, error);
             return null;
         }
-
-        // Convert to EPSG:4326 if needed
-        const coords4326 = polygonCoordinates.map(coord => {
-            if (coord.length === 2) {
-                return coord; // Already [lon, lat]
-            } else {
-                return ol.proj.transform(coord, window.map.getView().getProjection(), 'EPSG:4326');
-            }
-        });
-
-        // Find the longest segment to determine orientation
-        let maxDistance = 0;
-        let bestStart, bestEnd;
-        
-        for (let i = 0; i < coords4326.length - 1; i++) {
-            const start = coords4326[i];
-            const end = coords4326[i + 1];
-            
-            const dLat = (end[1] - start[1]) * Math.PI / 180;
-            const dLon = (end[0] - start[0]) * Math.PI / 180;
-            const lat1 = start[1] * Math.PI / 180;
-            const lat2 = end[1] * Math.PI / 180;
-            
-            const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
-                      Math.cos(lat1) * Math.cos(lat2) *
-                      Math.sin(dLon/2) * Math.sin(dLon/2);
-            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-            const distance = 6371000 * c; // Earth's radius in meters
-            
-            if (distance > maxDistance) {
-                maxDistance = distance;
-                bestStart = start;
-                bestEnd = end;
-            }
-        }
-
-        if (!bestStart || !bestEnd) {
-            return 0;
-        }
-
-        // Calculate bearing from start to end
-        const dLat = (bestEnd[1] - bestStart[1]) * Math.PI / 180;
-        const dLon = (bestEnd[0] - bestStart[0]) * Math.PI / 180;
-        const lat1 = bestStart[1] * Math.PI / 180;
-        const lat2 = bestEnd[1] * Math.PI / 180;
-        
-        const y = Math.sin(dLon) * Math.cos(lat2);
-        const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
-        const bearing = Math.atan2(y, x);
-
-        console.log(`🚶 Crossing texture bearing: ${(bearing * 180 / Math.PI).toFixed(1)}°`);
-
-        // For textures, we want them to align with the bearing direction
-        // Cesium rotation is clockwise, so we negate the bearing
-        return -bearing;
     },
 
     /**
      * Check if a way intersects or is adjacent to a polygon
      * @param {ol.geom.LineString|ol.geom.MultiLineString} wayGeometry - The way geometry
-     * @param {Array<Array<number>>} polygonCoords - Polygon coordinates
      * @param {Array<Array<number>>} polygonCoords - Polygon coordinates [lon, lat]
      * @returns {boolean} True if the way intersects or is adjacent
      */

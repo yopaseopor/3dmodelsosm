@@ -4,11 +4,18 @@
  * Places additional models next to the original model without affecting points or building extrusion
  */
 
+// Debug configuration
+const modelRepetitionDebugConfig = {
+    enabled: false,
+    logProcessing: false,
+    logFeatureCreation: false
+};
+
 // Configuration for repetition
 const repetitionConfig = {
     line: {
         interval: 0.10,  // meters between repetitions - further decreased for maximum kerb repetition density
-        maxModels: 1500,
+        maxModels: 100,  // Reduced from 1500 to prevent excessive memory usage
         sideOffset: 0,
         config: {
             scale: 1.0,
@@ -186,11 +193,11 @@ function generateAreaRepetitions(coordinates, modelConfig) {
  * @param {string} geometryType - Type of geometry ('line', 'area')
  */
 function applyModelRepetitions(feature, modelFilename, modelConfig, geometryType) {
-    console.log(`🔄 applyModelRepetitions called for geometryType: ${geometryType}, model: ${modelFilename}`);
+    if (modelRepetitionDebugConfig.enabled && modelRepetitionDebugConfig.logProcessing) console.log(`🔄 applyModelRepetitions called for geometryType: ${geometryType}, model: ${modelFilename}`);
     
     const geometry = feature.getGeometry();
     if (!geometry) {
-        console.log('🔄 No geometry found, skipping');
+        if (modelRepetitionDebugConfig.enabled) console.log('🔄 No geometry found, skipping');
         return;
     }
 
@@ -200,22 +207,22 @@ function applyModelRepetitions(feature, modelFilename, modelConfig, geometryType
         const coordinates = geometry.getCoordinates().map(coord =>
             ol.proj.transform(coord, window.map.getView().getProjection(), 'EPSG:4326')
         );
-        console.log(`🔄 Processing line with ${coordinates.length} coordinates`);
+        if (modelRepetitionDebugConfig.enabled && modelRepetitionDebugConfig.logProcessing) console.log(`🔄 Processing line with ${coordinates.length} coordinates`);
         repetitions = generateLineRepetitions(coordinates, modelConfig);
     } else if (geometryType === 'area' && geometry.getType() === 'Polygon') {
         const coordinates = geometry.getCoordinates()[0].map(coord =>
             ol.proj.transform(coord, window.map.getView().getProjection(), 'EPSG:4326')
         );
-        console.log(`🔄 Processing area with ${coordinates.length} coordinates`);
+        if (modelRepetitionDebugConfig.enabled && modelRepetitionDebugConfig.logProcessing) console.log(`🔄 Processing area with ${coordinates.length} coordinates`);
         repetitions = generateAreaRepetitions([coordinates], modelConfig);
     } else {
-        console.log(`🔄 Geometry type ${geometry.getType()} not supported for repetitions`);
+        if (modelRepetitionDebugConfig.enabled) console.log(`🔄 Geometry type ${geometry.getType()} not supported for repetitions`);
     }
 
     // Create additional features for repetitions
     const repetitionFeatures = [];
     if (repetitions.length > 0) {
-        console.log(`🔄 Creating ${repetitions.length} repetition features`);
+        if (modelRepetitionDebugConfig.enabled && modelRepetitionDebugConfig.logProcessing) console.log(`🔄 Creating ${repetitions.length} repetition features`);
 
         repetitions.forEach((rep, index) => {
             // Create new point feature at repetition position
@@ -267,10 +274,10 @@ function applyModelRepetitions(feature, modelFilename, modelConfig, geometryType
             // Store repetition feature for processing
             repetitionFeatures.push(repetitionFeature);
             
-            console.log(`🔄 Created repetition feature ${index + 1} at position: [${rep.position[0].toFixed(6)}, ${rep.position[1].toFixed(6)}]`);
+            if (modelRepetitionDebugConfig.enabled && modelRepetitionDebugConfig.logFeatureCreation && index < 5) console.log(`🔄 Created repetition feature ${index + 1} at position: [${rep.position[0].toFixed(6)}, ${rep.position[1].toFixed(6)}]`);
         });
 
-        console.log(`🔄 Successfully generated ${repetitions.length} repetition features`);
+        if (modelRepetitionDebugConfig.enabled) console.log(`🔄 Successfully generated ${repetitions.length} repetition features`);
         
         // Store repetition data on the original feature (like footway repetitions do)
         repetitions.forEach((rep, index) => {
@@ -287,9 +294,9 @@ function applyModelRepetitions(feature, modelFilename, modelConfig, geometryType
             feature.set(`${repetitionKey}_rotation`, rep.config ? rep.config.rotation || [0, 0, 0] : [0, 0, 0]);
         });
         
-        console.log(`🔄 Stored ${repetitions.length} repetition models on original feature`);
+        if (modelRepetitionDebugConfig.enabled) console.log(`🔄 Stored ${repetitions.length} repetition models on original feature`);
     } else {
-        console.log(`🔄 No repetitions generated for this feature`);
+        if (modelRepetitionDebugConfig.enabled) console.log(`🔄 No repetitions generated for this feature`);
     }
 }
 

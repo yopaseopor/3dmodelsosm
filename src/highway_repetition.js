@@ -4,74 +4,81 @@
  * Provides configurable repetition options for different highway tags
  */
 
+// Debug configuration
+const highwayRepetitionDebugConfig = {
+    enabled: false,
+    logProcessing: false,
+    logStorage: false
+};
+
 // Configuration for highway repetition - can be customized per highway type
 const highwayRepetitionConfig = {
     // Default configuration for all highway types
     default: {
         interval: 0.30, // meters between models (very dense but not overlapping)
         sideOffset: 0, // meters to side (tight alignment alongside highway)
-        maxModels: 1500 // maximum number of repeated models per highway (maximum coverage)
+        maxModels: 100 // Reduced from 1500 to prevent excessive memory usage
     },
     
     // Specific configurations per highway type (can be customized)
     residential: {
         interval: 0.30, // meters between models for residential roads
         sideOffset: 0, // directly on the road line
-        maxModels: 1500
+        maxModels: 100 // Reduced from 1500
     },
     
     footway: {
         interval: 0.30, // meters between models for footways
         sideOffset: 0, // directly on the footway line
-        maxModels: 1500
+        maxModels: 100 // Reduced from 1500
     },
     
     service: {
         interval: 0.50, // meters between models for service roads
         sideOffset: 0, // directly on the service road line
-        maxModels: 1000
+        maxModels: 80 // Reduced from 1000
     },
     
     primary: {
         interval: 0.20, // meters between models for primary roads
         sideOffset: 0, // directly on the primary road line
-        maxModels: 2000
+        maxModels: 150 // Reduced from 2000
     },
     
     secondary: {
         interval: 0.25, // meters between models for secondary roads
         sideOffset: 0, // directly on the secondary road line
-        maxModels: 1800
+        maxModels: 120 // Reduced from 1800
     },
     
     tertiary: {
         interval: 0.25, // meters between models for tertiary roads
         sideOffset: 0, // directly on the tertiary road line
-        maxModels: 1800
+        maxModels: 120 // Reduced from 1800
     },
     
     track: {
         interval: 0.40, // meters between models for tracks
         sideOffset: 0, // directly on the track line
-        maxModels: 800
+        maxModels: 60 // Reduced from 800
     },
     
     path: {
         interval: 0.35, // meters between models for paths
         sideOffset: 0, // directly on the path line
-        maxModels: 1200
+        maxModels: 80 // Reduced from 1200
     },
     
     cycleway: {
         interval: 0.25, // meters between models for cycleways
         sideOffset: 0, // directly on the cycleway line
-        maxModels: 1500
+        maxModels: 100 // Reduced from 1500
     },
     
     pedestrian: {
         interval: 0.20, // meters between models for pedestrian areas
         sideOffset: 0, // directly on the pedestrian line
-        maxModels: 2000
+        maxModels: 150 // Reduced from 2000
     }
 };
 
@@ -190,24 +197,24 @@ function generateHighwayRepetitions(coordinates, highwayType) {
  * @param {string} highwayType - Type of highway (e.g., 'residential', 'footway')
  */
 function applyHighwayRepetitions(feature, modelFilename, modelConfig, highwayType) {
-    console.log(`🛣️ applyHighwayRepetitions called for highwayType: ${highwayType}, model: ${modelFilename}`);
+    if (highwayRepetitionDebugConfig.enabled && highwayRepetitionDebugConfig.logProcessing) console.log(`🛣️ applyHighwayRepetitions called for highwayType: ${highwayType}, model: ${modelFilename}`);
     
     const geometry = feature.getGeometry();
     if (!geometry || geometry.getType() !== 'LineString') {
-        console.log('🛣️ Geometry not a LineString, skipping');
+        if (highwayRepetitionDebugConfig.enabled) console.log('🛣️ Geometry not a LineString, skipping');
         return;
     }
 
     const coordinates = geometry.getCoordinates().map(coord =>
         ol.proj.transform(coord, window.map.getView().getProjection(), 'EPSG:4326')
     );
-    console.log(`🛣️ Processing highway ${highwayType} with ${coordinates.length} coordinates`);
+    if (highwayRepetitionDebugConfig.enabled && highwayRepetitionDebugConfig.logProcessing) console.log(`🛣️ Processing highway ${highwayType} with ${coordinates.length} coordinates`);
 
     const repetitions = generateHighwayRepetitions(coordinates, highwayType);
 
     // Store repetition data on original feature (like footway repetitions do)
     if (repetitions.length > 0) {
-        console.log(`🛣️ Storing ${repetitions.length} highway repetition configurations on original feature`);
+        if (highwayRepetitionDebugConfig.enabled && highwayRepetitionDebugConfig.logStorage) console.log(`🛣️ Storing ${repetitions.length} highway repetition configurations on original feature`);
 
         repetitions.forEach((rep, index) => {
             const repetitionKey = `repetition_${index}`;
@@ -223,12 +230,12 @@ function applyHighwayRepetitions(feature, modelFilename, modelConfig, highwayTyp
             feature.set(`${repetitionKey}_heightOffset`, 0); // ON THE GROUND
             feature.set(`${repetitionKey}_rotation`, [0, 0, 0]);
 
-            console.log(`🛣️ Stored highway repetition ${index + 1} configuration`);
+            if (highwayRepetitionDebugConfig.enabled && highwayRepetitionDebugConfig.logStorage && index < 5) console.log(`🛣️ Stored highway repetition ${index + 1} configuration`);
         });
 
-        console.log(`🛣️ Successfully stored ${repetitions.length} highway repetition configurations`);
+        if (highwayRepetitionDebugConfig.enabled) console.log(`🛣️ Successfully stored ${repetitions.length} highway repetition configurations`);
     } else {
-        console.log(`🛣️ No highway repetitions to store`);
+        if (highwayRepetitionDebugConfig.enabled) console.log(`🛣️ No highway repetitions to store`);
     }
 }
 

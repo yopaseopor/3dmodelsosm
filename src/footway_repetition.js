@@ -4,11 +4,18 @@
  * Places models at close intervals next to each other along footway ways
  */
 
+// Debug configuration
+const footwayRepetitionDebugConfig = {
+    enabled: false,
+    logProcessing: false,
+    logStorage: false
+};
+
 // Configuration for footway repetition
 const footwayRepetitionConfig = {
     interval: 0.30, // meters between models (very dense but not overlapping)
     sideOffset: 0, // meters to the side (tight alignment alongside footway)
-    maxModels: 1500 // maximum number of repeated models per footway (maximum coverage)
+    maxModels: 100 // Reduced from 1500 to prevent excessive memory usage
 };
 
 /**
@@ -135,24 +142,24 @@ function generateFootwayRepetitions(coordinates, modelConfig, modelFilename) {
  * @param {Object} vectorSource - The vector source to add repetition features to
  */
 function applyFootwayRepetitions(feature, modelFilename, modelConfig, vectorSource) {
-    console.log(`🚶 applyFootwayRepetitions called for model: ${modelFilename}`);
+    if (footwayRepetitionDebugConfig.enabled && footwayRepetitionDebugConfig.logProcessing) console.log(`🚶 applyFootwayRepetitions called for model: ${modelFilename}`);
 
     const geometry = feature.getGeometry();
     if (!geometry || geometry.getType() !== 'LineString') {
-        console.log('🚶 Geometry not a LineString, skipping');
+        if (footwayRepetitionDebugConfig.enabled) console.log('🚶 Geometry not a LineString, skipping');
         return;
     }
 
     const coordinates = geometry.getCoordinates().map(coord =>
         ol.proj.transform(coord, window.map.getView().getProjection(), 'EPSG:4326')
     );
-    console.log(`🚶 Processing footway with ${coordinates.length} coordinates`);
+    if (footwayRepetitionDebugConfig.enabled && footwayRepetitionDebugConfig.logProcessing) console.log(`🚶 Processing footway with ${coordinates.length} coordinates`);
 
     const repetitions = generateFootwayRepetitions(coordinates, modelConfig, modelFilename);
 
     // Create additional 3D models for repetitions (don't create new features)
     if (repetitions.length > 0) {
-        console.log(`🚶 Creating ${repetitions.length} footway repetition 3D models`);
+        if (footwayRepetitionDebugConfig.enabled && footwayRepetitionDebugConfig.logProcessing) console.log(`🚶 Creating ${repetitions.length} footway repetition 3D models`);
 
         repetitions.forEach((rep, index) => {
             // Set model for repetition directly on the original feature
@@ -180,12 +187,12 @@ function applyFootwayRepetitions(feature, modelFilename, modelConfig, vectorSour
                 feature.set(`${repetitionKey}_rotation`, [0, 0, 0]);
             }
 
-            console.log(`🚶 Added footway repetition 3D model ${index + 1} at position: [${rep.position[0].toFixed(6)}, ${rep.position[1].toFixed(6)}]`);
+            if (footwayRepetitionDebugConfig.enabled && footwayRepetitionDebugConfig.logStorage && index < 5) console.log(`🚶 Added footway repetition 3D model ${index + 1} at position: [${rep.position[0].toFixed(6)}, ${rep.position[1].toFixed(6)}]`);
         });
 
-        console.log(`🚶 Successfully generated ${repetitions.length} footway repetition 3D models`);
+        if (footwayRepetitionDebugConfig.enabled) console.log(`🚶 Successfully generated ${repetitions.length} footway repetition 3D models`);
     } else {
-        console.log(`🚶 No footway repetitions generated`);
+        if (footwayRepetitionDebugConfig.enabled) console.log(`🚶 No footway repetitions generated`);
     }
 }
 

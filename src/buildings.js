@@ -290,6 +290,45 @@ function removeBuildingsFromScene() {
 }
 
 /**
+ * Clean up building entities to prevent memory leaks
+ * Removes entities when count exceeds limit
+ */
+function cleanupBuildingEntities() {
+    const maxBuildings = 500; // Maximum building entities to keep
+    
+    if (buildingEntities.size > maxBuildings) {
+        console.log(`🏗️ Cleaning up building entities: ${buildingEntities.size} buildings, reducing to ${maxBuildings}`);
+        
+        if (!ol3dInstance) return;
+        
+        const dataSources = ol3dInstance.getDataSources();
+        let dataSource = null;
+        for (let i = 0; i < dataSources.length; i++) {
+            const ds = dataSources.get(i);
+            if (ds.name === 'Buildings') {
+                dataSource = ds;
+                break;
+            }
+        }
+        
+        if (!dataSource) return;
+        
+        // Remove oldest entities (first ones in the map)
+        const toRemove = buildingEntities.size - maxBuildings;
+        let removed = 0;
+        
+        for (const [feature, entity] of buildingEntities) {
+            if (removed >= toRemove) break;
+            dataSource.entities.remove(entity);
+            buildingEntities.delete(feature);
+            removed++;
+        }
+        
+        console.log(`🏗️ Removed ${removed} building entities`);
+    }
+}
+
+/**
  * Update building visibility in 3D scene
  * @param {boolean} visible - Whether buildings should be visible
  */
@@ -360,6 +399,11 @@ function processBuildingFeatures(features) {
                         dataSource.entities.add(entity);
                         window.buildings.buildingEntities.set(feature, entity);
                         console.log(`🏗️ Added new building entity to 3D scene from GeoJSON`);
+                        
+                        // Clean up periodically to prevent memory leaks
+                        if (window.buildings.buildingEntities.size % 50 === 0) {
+                            window.buildings.cleanupBuildingEntities();
+                        }
                     }
                 }
             } else {
@@ -434,6 +478,7 @@ window.buildings = {
     createBuildingEntity,
     addBuildingsToScene,
     removeBuildingsFromScene,
+    cleanupBuildingEntities,
     setBuildingsVisible,
     processBuildingFeatures,
     updateBuildingExtrusion

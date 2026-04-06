@@ -19,10 +19,12 @@ const availableModels = [
     'w_highway_traffic_signals.glb',
     'w_highway_traffic_signals_cycle.glb',
     'w_highway_traffic_signals_pedestrian.glb',
+    'w_man_made_pole.glb',
     'w_recycling_type_container.glb',
     'w_leisure_garden.glb',
     'w_leisure_playground.glb',
     'w_natural_tree.glb',
+    'w_traffic_sign_ES_R2.glb',
     'ES_CAT_BCN_casa_batllo.glb',
     'ES_CAT_BCN_casa_mila.glb',
    'ES_CAT_BCN_hotel_arts.glb',
@@ -30,6 +32,7 @@ const availableModels = [
     'ES_CAT_BCN_torre_glories.glb',
     'ES_CAT_BCN_torre_mapfre.glb',
     'i_asfalt.jpg',
+    'i_aigua.jpg',
     'i_crossing.png',
     'i_gespa.jpg',
     'i_marbre.jpg',
@@ -50,8 +53,12 @@ const modelMappings = [
     { tags: ['highway=traffic_signals', 'traffic_signals=pedestrian_crossing'], model: 'w_highway_traffic_signals_pedestrian.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Traffic signals model for pedestrian crossing
     // General traffic signals last
     { tags: ['highway=traffic_signals'], model: 'w_highway_traffic_signals.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Traffic signals model for highway=traffic_signals
+    { tags: ['man_made=pole'], model: 'w_man_made_pole.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Tree model for natural=tree
     { tags: ['natural=tree'], model: 'w_natural_tree.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Tree model for natural=tree
     { tags: ['natural=wood'], model: 'test.gltf', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Could use forest model
+    { tags: ['waterway=stream'], model: 'i_aigua.jpg', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Could use forest model
+    { tags: ['waterway=stream'], model: 'i_aigua.jpg', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Could use forest model
+    { tags: ['traffic_sign=ES:R2'], model: 'w_traffic_sign_ES_R2.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Could use forest model
     { tags: ['wikidata=Q575953'], model: 'ES_CAT_BCN_casa_batllo.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Casa Batlló
     { tags: ['wikidata=Q207870'], model: 'ES_CAT_BCN_casa_mila.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Casa Mila
     { tags: ['wikidata=Q1425790'], model: 'ES_CAT_BCN_hotel_arts.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Hotel Arts Barcelona model

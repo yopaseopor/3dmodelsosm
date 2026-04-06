@@ -5,6 +5,21 @@ import { getCurrentLanguage } from './i18n/index.js';
 // Import external layers
 import { allLayers } from './layers/index.js';
 
+// Import centralized debug configuration
+if (typeof window !== 'undefined' && window.globalDebugConfig) {
+    var debugConfig = window.globalDebugConfig.overlayIntegration;
+} else {
+    // Fallback debug configuration if centralized config not available
+    var debugConfig = {
+        enabled: false,
+        logOverlayLoading: false,      // Log overlay loading operations
+        logFeatureProcessing: false,   // Log individual feature processing
+        logModelAssignment: false,     // Log model assignment details
+        logGeometryDetection: false,   // Log geometry detection details
+        logAreaProcessing: false       // Log area texture processing
+    };
+}
+
 // Function to convert overlay to OpenLayers layer
 function createOlLayer(overlay) {
     // Spinner element
@@ -34,28 +49,28 @@ function createOlLayer(overlay) {
                         })
                         .then(data => {
                             setOverlaySpinner(false);
-                            console.log('Received GeoJSON data for ' + overlay.title, data);
-                            console.log('Number of features in GeoJSON:', data.features ? data.features.length : 'unknown');
+                            if (debugConfig.enabled && debugConfig.logOverlayLoading) console.log('Received GeoJSON data for ' + overlay.title, data);
+                            if (debugConfig.enabled && debugConfig.logOverlayLoading) console.log('Number of features in GeoJSON:', data.features ? data.features.length : 'unknown');
                             const features = new ol.format.GeoJSON().readFeatures(data, {
                                 featureProjection: projection
                             });
                             
-                            console.log('Parsed features count:', features.length);
-                            console.log('First few features:', features.slice(0, 3).map(f => ({ 
+                            if (debugConfig.enabled && debugConfig.logFeatureProcessing) console.log('Parsed features count:', features.length);
+                            if (debugConfig.enabled && debugConfig.logFeatureProcessing) console.log('First few features:', features.slice(0, 3).map(f => ({ 
                                 type: f.getGeometry().getType(),
                                 properties: f.getProperties() 
                             })));
                             
                             // Assign 3D models to features based on their properties
-                            console.log('🎯 About to assign models to', features.length, 'features');
+                            if (debugConfig.enabled && debugConfig.logModelAssignment) console.log('🎯 About to assign models to', features.length, 'features');
                             features.forEach((feature, index) => {
-                                if (index < 5) { // Log first 5
+                                if (index < 5 && debugConfig.enabled && debugConfig.logFeatureProcessing) { // Log first 5
                                     console.log('🎯 Processing feature', index, 'properties:', feature.getProperties());
                                 }
                                 assignModelToFeature(feature, features);
                             });
                             
-                            console.log('Added ' + features.length + ' features for ' + overlay.title);
+                            if (debugConfig.enabled && debugConfig.logOverlayLoading) console.log('Added ' + features.length + ' features for ' + overlay.title);
                             vectorSource.addFeatures(features);
                             // Dispatch event to trigger global summary update
                             window.dispatchEvent(new CustomEvent('overlayFeaturesLoaded'));
@@ -88,7 +103,7 @@ function createOlLayer(overlay) {
                     })
                     .then(data => {
                         setOverlaySpinner(false);
-                        console.log('Received data for ' + overlay.title);
+                        if (debugConfig.enabled && debugConfig.logOverlayLoading) console.log('Received data for ' + overlay.title);
                         if (!data || !data.elements) {
                             console.warn('No elements found in response for ' + overlay.title);
                             return;
@@ -103,7 +118,7 @@ function createOlLayer(overlay) {
                             assignModelToFeature(feature);
                         });
                         
-                        console.log('Added ' + features.length + ' features for ' + overlay.title);
+                        if (debugConfig.enabled && debugConfig.logOverlayLoading) console.log('Added ' + features.length + ' features for ' + overlay.title);
                         vectorSource.addFeatures(features);
                         // Dispatch event to trigger global summary update
                         window.dispatchEvent(new CustomEvent('overlayFeaturesLoaded'));
@@ -138,7 +153,7 @@ function createOlLayer(overlay) {
     if (overlay.geojson) {
         layer.on('change:visible', function() {
             if (layer.getVisible() && vectorSource.getFeatures().length === 0) {
-                console.log('🎯 Layer became visible, triggering GeoJSON loader for', overlay.title);
+                if (debugConfig.enabled && debugConfig.logOverlayLoading) console.log('🎯 Layer became visible, triggering GeoJSON loader for', overlay.title);
                 // Trigger the loader manually
                 vectorSource.loadFeatures([0, 0, 0, 0], 0, window.map.getView().getProjection());
             }
@@ -175,9 +190,9 @@ function createOverlayGroup(title, layers) {
 
 // Helper function to assign 3D models to features
 function assignModelToFeature(feature, allFeatures = null) {
-    console.log('Processing feature geometry:', feature.getGeometry() ? feature.getGeometry().getType() : 'null', 'tags:', feature.getProperties());
+    if (debugConfig.enabled && debugConfig.logFeatureProcessing) console.log('Processing feature geometry:', feature.getGeometry() ? feature.getGeometry().getType() : 'null', 'tags:', feature.getProperties());
     const properties = feature.getProperties();
-    console.log('🎯 Assigning model to GeoJSON feature with properties:', properties);
+    if (debugConfig.enabled && debugConfig.logModelAssignment) console.log('🎯 Assigning model to GeoJSON feature with properties:', properties);
     
     // Filter OSM tags
     const osmTags = Object.keys(properties).filter(prop =>
@@ -189,26 +204,26 @@ function assignModelToFeature(feature, allFeatures = null) {
     osmTags.forEach(tag => {
         tagsObj[tag] = properties[tag];
     });
-    console.log('assignModelToFeature tagsObj:', tagsObj);
-    console.log('geometryType initial:', geometryType);
+    if (debugConfig.enabled && debugConfig.logModelAssignment) console.log('assignModelToFeature tagsObj:', tagsObj);
+    if (debugConfig.enabled && debugConfig.logGeometryDetection) console.log('geometryType initial:', geometryType);
 
     let geometryType = 'point'; // default
     let wayCoordinates = null;
     let nodeIndex = null;
     
-    console.log(`🎯 Geometry detection for feature with tags:`, tagsObj, `geometry:`, geometry ? geometry.getType() : 'null');
+    if (debugConfig.enabled && debugConfig.logGeometryDetection) console.log(`🎯 Geometry detection for feature with tags:`, tagsObj, `geometry:`, geometry ? geometry.getType() : 'null');
     
     if (geometry) {
         const geomType = geometry.getType();
-        console.log(`🎯 Geometry type: ${geomType}`);
+        if (debugConfig.enabled && debugConfig.logGeometryDetection) console.log(`🎯 Geometry type: ${geomType}`);
         if (geomType === 'Polygon' || geomType === 'MultiPolygon') {
             geometryType = 'area';
         } else if (geomType === 'LineString' || geomType === 'MultiLineString') {
             // Check if this is a way tagged as an area
-            console.log(`🎯 Checking area tags on LineString: area:highway=${tagsObj['area:highway']}`);
+            if (debugConfig.enabled && debugConfig.logGeometryDetection) console.log(`🎯 Checking area tags on LineString: area:highway=${tagsObj['area:highway']}`);
             if (tagsObj['area:highway'] || tagsObj['area:amenity'] || tagsObj['area:leisure'] || tagsObj['area:natural'] || tagsObj['area:landuse']) {
                 geometryType = 'area';
-                console.log(`🎨 Detected area-tagged way, treating as area geometry`);
+                if (debugConfig.enabled && debugConfig.logGeometryDetection) console.log(`🎨 Detected area-tagged way, treating as area geometry`);
             } else {
                 geometryType = 'line';
             }
@@ -221,8 +236,8 @@ function assignModelToFeature(feature, allFeatures = null) {
             // Use the middle node for bearing calculation, or first if only one segment
             nodeIndex = Math.floor(wayCoordinates.length / 2);
             
-            console.log(`📐 Way coordinates extracted: ${wayCoordinates.length} nodes, calculating bearing at node ${nodeIndex}`);
-            console.log(`📐 Way coordinate sample:`, wayCoordinates.slice(0, 3).map((coord, i) => 
+            if (debugConfig.enabled && debugConfig.logGeometryDetection) console.log(`📐 Way coordinates extracted: ${wayCoordinates.length} nodes, calculating bearing at node ${nodeIndex}`);
+            if (debugConfig.enabled && debugConfig.logGeometryDetection) console.log(`📐 Way coordinate sample:`, wayCoordinates.slice(0, 3).map((coord, i) => 
                 `[${i}]: [${coord[0].toFixed(6)}, ${coord[1].toFixed(6)}]`
             ));
         } else if (geomType === 'Point') {
@@ -238,7 +253,7 @@ function assignModelToFeature(feature, allFeatures = null) {
                     // Override the bearing in the model configuration by setting a synthetic bearing
                     tagsObj._parentWayBearing = parentBearing;
                     
-                    console.log(`🎯 Using parent way bearing ${(parentBearing * 180 / Math.PI).toFixed(2)}° for point feature`);
+                    if (debugConfig.enabled && debugConfig.logGeometryDetection) console.log(`🎯 Using parent way bearing ${(parentBearing * 180 / Math.PI).toFixed(2)}° for point feature`);
                 }
             }
         }
@@ -254,9 +269,9 @@ function assignModelToFeature(feature, allFeatures = null) {
         geometryType = 'line';
     }
 
-    console.log(`🔍 Final geometry type determination: ${geometryType} for tags:`, tagsObj);
+    if (debugConfig.enabled && debugConfig.logGeometryDetection) console.log(`🔍 Final geometry type determination: ${geometryType} for tags:`, tagsObj);
     const modelMapping = window.models ? window.models.getModelForTags(tagsObj, wayCoordinates, nodeIndex, geometryType) : null;
-    console.log(`🎯 Model mapping for tags:`, tagsObj, `geometry type: ${geometryType}:`, modelMapping);
+    if (debugConfig.enabled && debugConfig.logModelAssignment) console.log(`🎯 Model mapping for tags:`, tagsObj, `geometry type: ${geometryType}:`, modelMapping);
     
     if (modelMapping) {
         const modelFilename = modelMapping.model;
@@ -264,9 +279,9 @@ function assignModelToFeature(feature, allFeatures = null) {
         const mappingGeometryType = modelMapping.geometryType;
         
         if (mappingGeometryType === 'area') {
-            console.log('🎨 Area code reached for tags:', tagsObj, 'geometryType:', mappingGeometryType);
+            if (debugConfig.enabled && debugConfig.logAreaProcessing) console.log('🎨 Area code reached for tags:', tagsObj, 'geometryType:', mappingGeometryType);
             // Handle area textures/materials
-            console.log(`🎨 Applying area texture ${modelFilename} to polygon or line`);
+            if (debugConfig.enabled && debugConfig.logAreaProcessing) console.log(`🎨 Applying area texture ${modelFilename} to polygon or line`);
             
             // Create a Cesium entity for the textured area or line
             try {
@@ -278,7 +293,7 @@ function assignModelToFeature(feature, allFeatures = null) {
                     if (cesiumPositions.length > 0) {
                         // Check if feature already has an area entity to prevent duplicates
                         if (feature.get('areaEntity')) {
-                            console.log(`🎨 Feature already has area entity, skipping duplicate creation`);
+                            if (debugConfig.enabled && debugConfig.logAreaProcessing) console.log(`🎨 Feature already has area entity, skipping duplicate creation`);
                             return;
                         }
                         
@@ -286,10 +301,9 @@ function assignModelToFeature(feature, allFeatures = null) {
                         const polygonCoords = coordinates.map(coord => 
                             ol.proj.transform(coord, window.map.getView().getProjection(), 'EPSG:4326')
                         );
-                        
-                        // DISABLED: Canvas rotation causes gaps in tiling
-                        const textureRotation = 0; // No rotation for now
-                        console.log(`🎨 Texture rotation disabled - canvas rotation causes tiling gaps`);
+                        const textureRotation = window.modelRenderer ? 
+                            window.modelRenderer.calculateTextureRotation(polygonCoords, modelFilename) : 
+                            0; // No rotation if modelRenderer not available
                         
                         console.log(`🎨 Calculated texture rotation for overlay: ${(textureRotation * 180 / Math.PI).toFixed(1)}°`);
                         
@@ -300,7 +314,8 @@ function assignModelToFeature(feature, allFeatures = null) {
                                 hierarchy: hierarchy,
                                 material: new Cesium.ImageMaterialProperty({
                                     image: `/3dmodelsosm/src/models/${modelFilename}`,
-                                    repeat: new Cesium.Cartesian2(1, 1)
+                                    repeat: new Cesium.Cartesian2(1, 1),
+                                    stRotation: textureRotation !== 0 ? textureRotation : undefined
                                 }),
                                 height: 0.001, // Small height to ensure consistent rendering order
                                 extrudedHeight: 0.001
@@ -342,10 +357,9 @@ function assignModelToFeature(feature, allFeatures = null) {
                         const lineCoords = coordinates.map(coord => 
                             ol.proj.transform(coord, window.map.getView().getProjection(), 'EPSG:4326')
                         );
-                        
-                        // DISABLED: Canvas rotation causes gaps in tiling
-                        const textureRotation = 0; // No rotation for now
-                        console.log(`🎨 Texture rotation disabled - canvas rotation causes tiling gaps`);
+                        const textureRotation = window.modelRenderer ? 
+                            window.modelRenderer.calculateTextureRotation(lineCoords, modelFilename) : 
+                            0; // No rotation if modelRenderer not available
                         
                         console.log(`🎨 Calculated texture rotation for overlay line: ${(textureRotation * 180 / Math.PI).toFixed(1)}°`);
                         
@@ -355,7 +369,8 @@ function assignModelToFeature(feature, allFeatures = null) {
                                 width: 5,
                                 material: new Cesium.ImageMaterialProperty({
                                     image: `/3dmodelsosm/src/models/${modelFilename}`,
-                                    repeat: new Cesium.Cartesian2(coordinates.length * 0.1, 1)
+                                    repeat: new Cesium.Cartesian2(coordinates.length * 0.1, 1),
+                                    stRotation: textureRotation !== 0 ? textureRotation : undefined
                                 })
                             }
                         });

@@ -2,8 +2,22 @@
  * Key Search Implementation for OSM Tags
  */
 
+// Import centralized debug configuration
+if (typeof window !== 'undefined' && window.globalDebugConfig) {
+    var debugConfig = window.globalDebugConfig.keySearch;
+} else {
+    // Fallback debug configuration if centralized config not available
+    var debugConfig = {
+        enabled: false,
+        logKeySearch: false,           // Log key search operations
+        logSelection: false,          // Log result selection
+        logExecution: false,          // Log query execution
+        logUI: false                  // Log UI interactions
+    };
+}
+
 function initKeySearch() {
-    // console.log('🔑 initKeySearch called');
+    // if (debugConfig.enabled && debugConfig.logKeySearch) console.log('🔑 initKeySearch called');
 
     // Wait for translations to be available
     if (typeof window.getTranslation !== 'function') {
@@ -35,7 +49,7 @@ function initKeySearch() {
     // Initialize search input with debugging
     searchInput.on('input', function() {
         const query = $(this).val().trim();
-        // console.log('🔑 Key search input:', query);
+        if (debugConfig.enabled && debugConfig.logUI) console.log('🔑 Key search input:', query);
 
         // Store current key for potential generic query execution
         if (query) {
@@ -45,7 +59,7 @@ function initKeySearch() {
             // Synchronize with value search - set the key for value queries
             const valueSearchInput = $('#value-search');
             if (valueSearchInput.length) {
-                // console.log('🔗 Syncing key with value search:', query);
+                if (debugConfig.enabled && debugConfig.logUI) console.log('🔗 Syncing key with value search:', query);
                 valueSearchInput.data('selectedKey', query);
             }
         } else {
@@ -72,7 +86,7 @@ function initKeySearch() {
 
         // Debounce search
         searchTimeout = setTimeout(() => {
-            console.log('🔑 Performing key search for:', query);
+            if (debugConfig.enabled && debugConfig.logKeySearch) console.log('🔑 Performing key search for:', query);
             performKeySearch(query);
         }, 300);
     });
@@ -80,7 +94,7 @@ function initKeySearch() {
     // Handle result selection
     resultsContainer.on('click', '.key-search-result', function() {
         const result = $(this).data('result');
-        console.log('🔑 Clicked key result data:', result);
+        if (debugConfig.enabled && debugConfig.logSelection) console.log('🔑 Clicked key result data:', result);
         if (result) {
             selectKeyResult(result);
         } else {
@@ -113,7 +127,7 @@ function initKeySearch() {
                 e.preventDefault();
                 if (highlighted.length) {
                     const result = highlighted.data('result');
-                    console.log('🔑 Enter key result data:', result);
+                    if (debugConfig.enabled && debugConfig.logSelection) console.log('🔑 Enter key result data:', result);
                     if (result) {
                         selectKeyResult(result);
                     } else {
@@ -129,13 +143,13 @@ function initKeySearch() {
     });
 
     function performKeySearch(query) {
-        // console.log('🔑 performKeySearch called with:', query);
-        // console.log('🔑 taginfoData.loaded:', window.taginfoData.loaded);
+        if (debugConfig.enabled && debugConfig.logKeySearch) console.log('🔑 performKeySearch called with:', query);
+        if (debugConfig.enabled && debugConfig.logKeySearch) console.log('🔑 taginfoData.loaded:', window.taginfoData.loaded);
 
         if (!window.taginfoData.loaded) {
-            // console.log('🔑 Taginfo data not loaded, initializing...');
+            if (debugConfig.enabled && debugConfig.logKeySearch) console.log('🔑 Taginfo data not loaded, initializing...');
             window.initTaginfoAPI().then(() => {
-                // console.log('🔑 Taginfo API initialized, retrying search');
+                if (debugConfig.enabled && debugConfig.logKeySearch) console.log('🔑 Taginfo API initialized, retrying search');
                 performKeySearch(query);
             }).catch(error => {
                 console.error('🔑 Failed to initialize taginfo API:', error);
@@ -143,11 +157,11 @@ function initKeySearch() {
             return;
         }
 
-        // console.log('🔑 Searching for keys with query:', query);
-        // console.log('🔑 Available keys in map:', window.taginfoData.keys.size);
+        if (debugConfig.enabled && debugConfig.logKeySearch) console.log('🔑 Searching for keys with query:', query);
+        if (debugConfig.enabled && debugConfig.logKeySearch) console.log('🔑 Available keys in map:', window.taginfoData.keys.size);
 
         const results = window.searchKeys(query, 10);
-        // console.log('🔑 Key search results:', results);
+        if (debugConfig.enabled && debugConfig.logKeySearch) console.log('🔑 Key search results:', results);
         displayKeyResults(results, query);
 
         // Trigger custom event for other components
@@ -155,19 +169,19 @@ function initKeySearch() {
     }
 
     function displayKeyResults(results, query) {
-        // console.log('🔑 displayKeyResults called with:', results.length, 'results');
+        if (debugConfig.enabled && debugConfig.logKeySearch) console.log('🔑 displayKeyResults called with:', results.length, 'results');
         resultsContainer.empty();
 
         if (results.length === 0) {
-            // console.log('🔑 No results to display');
+            if (debugConfig.enabled && debugConfig.logKeySearch) console.log('🔑 No results to display');
             resultsContainer.append(`<div class="no-results">${window.getTranslation ? window.getTranslation('noKeysFound') : 'No keys found'}</div>`);
             resultsContainer.show();
             return;
         }
 
-        // console.log('🔑 Displaying results...');
+        if (debugConfig.enabled && debugConfig.logKeySearch) console.log('🔑 Displaying results...');
         results.forEach((result, index) => {
-            // console.log('🔑 Result', index, ':', result.key);
+            if (debugConfig.enabled && debugConfig.logKeySearch) console.log('🔑 Result', index, ':', result.key);
 
             // Find which definition contains the search term to show the most relevant one
             let bestDefinition = result.definition_en || result.definition_ca || result.definition_es || result.definition || `${window.getTranslation ? window.getTranslation('noDescriptionAvailable') : 'No description available'}`;
@@ -232,7 +246,7 @@ function initKeySearch() {
     }
 
     function selectKeyResult(result) {
-        console.log('🔑 selectKeyResult called with:', result);
+        if (debugConfig.enabled && debugConfig.logSelection) console.log('🔑 selectKeyResult called with:', result);
 
         if (!result) {
             console.error('🔑 selectKeyResult: result is undefined or null');
@@ -252,7 +266,7 @@ function initKeySearch() {
 
             showKeyExecuteButton(result.key);
 
-            console.log('✅ Key selected:', result.key);
+            if (debugConfig.enabled && debugConfig.logSelection) console.log('✅ Key selected:', result.key);
         } else {
             console.error('🔑 selectKeyResult: result missing key property:', result);
         }
@@ -298,7 +312,7 @@ function initKeySearch() {
         e.stopPropagation();
         const key = $(this).data('key');
         const value = $(this).data('value');
-        console.log('🔑 Value suggestion clicked:', key, value);
+        if (debugConfig.enabled && debugConfig.logUI) console.log('🔑 Value suggestion clicked:', key, value);
         currentKey = `${key}${value && value !== '*' ? '=' + value : (value === '*' ? '=*' : '')}`;
         $('#key-search').val(key + (value && value !== '*' ? '=' + value : (value === '*' ? '=*' : '')));
         showKeyExecuteButton(currentKey);
@@ -317,7 +331,7 @@ function initKeySearch() {
 
     // Handle clear button click
     $('#clear-key-search-btn').on('click', function() {
-        console.log('🧹 Key search clear button clicked');
+        if (debugConfig.enabled && debugConfig.logUI) console.log('🧹 Key search clear button clicked');
 
         currentKey = null;
         currentResults = [];
@@ -328,7 +342,7 @@ function initKeySearch() {
         $('#execute-key-query-btn').hide().prop('disabled', false).text('Execute Key Query');
         $(this).hide();
 
-        console.log('✅ Key search cleared');
+        if (debugConfig.enabled && debugConfig.logUI) console.log('✅ Key search cleared');
     });
 
     function showKeyExecuteButton(key) {
@@ -363,17 +377,17 @@ function initKeySearch() {
             return;
         }
 
-        console.log('🚀 Map is ready, getting bbox');
+        if (debugConfig.enabled && debugConfig.logExecution) console.log('🚀 Map is ready, getting bbox');
 
         // Get current map bbox
         const view = window.map.getView();
         const extent = view.calculateExtent();
         const bbox = ol.proj.transformExtent(extent, view.getProjection(), 'EPSG:4326');
 
-        console.log('🚀 Map extent:', extent);
-        console.log('🚀 Map projection:', view.getProjection());
-        console.log('🚀 Map bbox:', bbox);
-        console.log('🚀 Bbox formatted:', `${bbox[1]},${bbox[0]},${bbox[3]},${bbox[2]}`);
+        if (debugConfig.enabled && debugConfig.logExecution) console.log('🚀 Map extent:', extent);
+        if (debugConfig.enabled && debugConfig.logExecution) console.log('🚀 Map projection:', view.getProjection());
+        if (debugConfig.enabled && debugConfig.logExecution) console.log('🚀 Map bbox:', bbox);
+        if (debugConfig.enabled && debugConfig.logExecution) console.log('🚀 Bbox formatted:', `${bbox[1]},${bbox[0]},${bbox[3]},${bbox[2]}`);
 
         // Validate bbox coordinates
         if (bbox.some(coord => isNaN(coord) || Math.abs(coord) > 180)) {
@@ -384,7 +398,7 @@ function initKeySearch() {
 
         // Get element types from UI (default to all)
         const elementTypes = ['node', 'way', 'relation']; // For generic key queries, search all types
-        console.log('🚀 Element types:', elementTypes);
+        if (debugConfig.enabled && debugConfig.logExecution) console.log('🚀 Element types:', elementTypes);
 
     // Generate query: if value is null => generic key query, else key=value
     const query = window.generateOverpassQuery(key, value, bbox, elementTypes);
@@ -882,9 +896,11 @@ function formatNumber(num) {
 
 // Initialize when DOM is ready
 $(document).ready(function() {
-    // console.log('🔑 DOM ready, initializing key search');
+    // if (debugConfig.enabled && debugConfig.logKeySearch) console.log('🔑 DOM ready, initializing key search');
     initKeySearch();
 });
 
 // Export for use in other modules
-window.initKeySearch = initKeySearch;
+if (typeof window !== 'undefined') {
+    window.initKeySearch = initKeySearch;
+}
