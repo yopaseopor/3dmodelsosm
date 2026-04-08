@@ -3,7 +3,7 @@
 
 // Memory management configuration
 const memoryConfig = {
-    maxModelsPerFrame: 50,           // Limit models added per frame
+    maxModelsPerFrame: 40,           // Limit models added per frame
     loadDistance: 1000,              // Load models within this distance (meters)
     unloadDistance: 1500,            // Unload models beyond this distance (meters)
     lodDistances: {                  // Level of Detail distances
@@ -12,8 +12,12 @@ const memoryConfig = {
         low: 1000                     // Low detail within 1000m
     },
     cameraUpdateThrottle: 100,       // Throttle camera updates (ms)
-    maxTotalModels: 500              // Maximum total models to prevent excessive resource usage
+    maxTotalModels: 400              // Cap concurrent 3D models (memory / GPU)
 };
+
+/** Max canvas edge for rotated area textures (pixels); lower = less RAM / GPU upload */
+const AREA_TEXTURE_MAX_CANVAS = 2048;
+const AREA_TEXTURE_JPEG_QUALITY = 0.78;
 
 // Import centralized debug configuration
 if (typeof window !== 'undefined' && window.globalDebugConfig) {
@@ -22,10 +26,15 @@ if (typeof window !== 'undefined' && window.globalDebugConfig) {
     // Fallback debug configuration if centralized config not available
     var debugConfig = {
         enabled: false,
-        maxRepetitionLogs: 5,           // Limit repetition model logs
-        logModelLoading: true,           // Log when models are loaded
-        logRepetitionModels: false       // Log repetition model details
+        maxRepetitionLogs: 5,
+        logModelLoading: false,
+        logRepetitionModels: false,
+        logTextureProcessing: false
     };
+}
+
+function modelRendererTexLog() {
+    return debugConfig.enabled && debugConfig.logTextureProcessing;
 }
 
 window.modelRenderer = {
@@ -61,7 +70,7 @@ window.modelRenderer = {
         }
         
         // Clean up pool before creating new model if it's getting large
-        if (pool.length > 20) {
+        if (pool.length > 15) {
             this.cleanupModelPool();
         }
         
@@ -104,7 +113,7 @@ window.modelRenderer = {
      * Removes oldest unused models when pool exceeds limit
      */
     cleanupModelPool: function() {
-        const maxPoolSize = 100; // Maximum total models in pool
+        const maxPoolSize = 60; // Maximum total pooled primitives (memory)
         let totalPoolSize = 0;
         
         // Calculate total pool size
@@ -275,7 +284,7 @@ window.modelRenderer = {
                     if (debugConfig.enabled) console.log(`🎯 Layer summary: ${modelsFound} models, ${repetitionsFound} features with repetitions`);
                 }
             } catch (e) {
-                console.log('Error accessing layer source:', e.message);
+                console.error('Error accessing layer source:', e.message);
             }
         }
         
@@ -459,6 +468,7 @@ window.modelRenderer = {
         const repType = feature.get(`repetition_${repIndex}_type`);
         if (repType === 'polygon_texture') {
             const polygonCoordinates = feature.get(`repetition_${repIndex}_polygonCoordinates`);
+            const polygonHoles = feature.get(`repetition_${repIndex}_polygonHoles`) || [];
             const spacing = feature.get(`repetition_${repIndex}_spacing`);
             const imageUri = repModel.uri;
 
@@ -468,10 +478,18 @@ window.modelRenderer = {
                     ol.proj.transform(coord, window.map.getView().getProjection(), 'EPSG:4326')
                 );
                 const recalculatedRotation = this.calculateTextureRotation(polygonCoords4326, imageUri);
-                console.log(`🖼️ DEBUG: Force recalculated rotation for repetition ${repIndex}: ${(recalculatedRotation * 180 / Math.PI).toFixed(1)}° for ${imageUri}`); // UNCONDITIONAL DEBUG
+                if (modelRendererTexLog()) console.log(`🖼️ Recalculated repetition rotation ${repIndex}: ${(recalculatedRotation * 180 / Math.PI).toFixed(1)}° ${imageUri}`);
                 
                 if (debugConfig.enabled) console.log(`🖼️ Adding polygon texture for ${repIndex} with ${polygonCoordinates.length} coordinates and recalculated rotation: ${(recalculatedRotation * 180 / Math.PI).toFixed(1)}°`);
-                this.addAreaTexture(polygonCoordinates, imageUri, { spacing: spacing, rotation: recalculatedRotation }, cesiumScene);
+                this.addAreaTexture(
+                    {
+                        outer: polygonCoordinates,
+                        holes: polygonHoles
+                    },
+                    imageUri,
+                    { spacing: spacing, rotation: recalculatedRotation },
+                    cesiumScene
+                );
                 return;
             }
         }
@@ -589,15 +607,16 @@ window.modelRenderer = {
 
     // Add image billboard for PNG/JPG files
     addImageBillboard: function(position, imageUri, repModel, cesiumScene) {
-        // For area textures, we should use a single textured polygon instead of individual billboards
-        // This method is kept for backward compatibility but should ideally be replaced with addAreaTexture
-        if (debugConfig.enabled) console.warn('🖼️ addImageBillboard called - consider using addAreaTexture for full polygon coverage');
-        this.addImageBillboard(position, imageUri, repModel, cesiumScene);
+        if (debugConfig.enabled) {
+            console.warn('🖼️ addImageBillboard is deprecated; use addAreaTexture for polygon coverage');
+        }
     },
 
     // Add textured polygon for area coverage
-    addAreaTexture: function(polygonCoordinates, imageUri, repModel, cesiumScene) {
-        if (debugConfig.enabled) console.log(`🖼️ addAreaTexture called with ${polygonCoordinates.length} coordinates, texture: ${imageUri}`);
+    addAreaTexture: function(polygonData, imageUri, repModel, cesiumScene) {
+        const polygonCoordinates = Array.isArray(polygonData) ? polygonData : polygonData.outer;
+        const polygonHoles = Array.isArray(polygonData) ? [] : (polygonData.holes || []);
+        if (debugConfig.enabled) console.log(`🖼️ addAreaTexture called with ${polygonCoordinates.length} outer coordinates and ${polygonHoles.length} hole(s), texture: ${imageUri}`);
 
         const sceneToUse = cesiumScene || window.ol3d.getCesiumScene();
 
@@ -605,6 +624,12 @@ window.modelRenderer = {
         const cartesianPositions = polygonCoordinates.map(coord =>
             Cesium.Cartesian3.fromDegrees(coord[0], coord[1], 0)
         );
+        const cartesianHoleHierarchies = polygonHoles.map(holeRing => {
+            const holePositions = holeRing.map(coord =>
+                Cesium.Cartesian3.fromDegrees(coord[0], coord[1], 0)
+            );
+            return new Cesium.PolygonHierarchy(holePositions);
+        });
 
         // Calculate bounding box in degrees
         let minLon = Infinity, maxLon = -Infinity, minLat = Infinity, maxLat = -Infinity;
@@ -626,13 +651,10 @@ window.modelRenderer = {
         let textureRotation;
         if (repModel && repModel.rotation !== undefined) {
             textureRotation = repModel.rotation;
-            console.log(`🖼️ DEBUG: Using provided rotation from repModel: ${(textureRotation * 180 / Math.PI).toFixed(1)}°`); // UNCONDITIONAL DEBUG
-            if (debugConfig.enabled) console.log(`🖼️ Using provided rotation: ${(textureRotation * 180 / Math.PI).toFixed(1)}°`);
+            if (modelRendererTexLog()) console.log(`🖼️ Using provided rotation from repModel: ${(textureRotation * 180 / Math.PI).toFixed(1)}°`);
         } else {
-            // Find nearby ways and calculate rotation
             textureRotation = this.calculateTextureRotation(polygonCoordinates, imageUri);
-            console.log(`🖼️ DEBUG: Calculated texture rotation: ${(textureRotation * 180 / Math.PI).toFixed(1)}°`); // UNCONDITIONAL DEBUG
-            if (debugConfig.enabled) console.log(`🖼️ Calculated texture rotation: ${(textureRotation * 180 / Math.PI).toFixed(1)}°`);
+            if (modelRendererTexLog()) console.log(`🖼️ Calculated texture rotation: ${(textureRotation * 180 / Math.PI).toFixed(1)}°`);
         }
 
         // Load image to get dimensions for proper scaling
@@ -661,16 +683,66 @@ window.modelRenderer = {
                 console.warn(`🖼️ Could not apply texture repeat - texturedPolygon structure not as expected`);
             }
 
-            // Use Cesium's stRotation property for texture rotation
-            // No canvas manipulation - just set the rotation angle
-            console.log(`🖼️ DEBUG: textureRotation value: ${textureRotation}, degrees: ${(textureRotation * 180 / Math.PI).toFixed(1)}°`);
+            // Create single large canvas covering entire polygon area
+            // Draw texture pattern at correct rotation, no tiling
+            if (modelRendererTexLog()) console.log(`🖼️ textureRotation: ${(textureRotation * 180 / Math.PI).toFixed(1)}°`);
             if (textureRotation !== 0) {
-                if (debugConfig.enabled) console.log(`🖼️ Applying stRotation: ${(textureRotation * 180 / Math.PI).toFixed(1)}°`);
+                if (modelRendererTexLog()) console.log(`🖼️ Creating rotated texture canvas: ${(textureRotation * 180 / Math.PI).toFixed(1)}°`);
                 
+                const imageWidth = img.width;
+                const imageHeight = img.height;
+                // Use actual image dimensions, not minimum
+                const tileWidth = imageWidth;
+                const tileHeight = imageHeight;
+                const tileSize = Math.min(imageWidth, imageHeight); // For spacing calculation
+                
+                // Calculate canvas size based on polygon dimensions
+                const desiredTextureSizeMeters = repModel.spacing || 1.0;
+                const pixelsPerMeter = tileSize / desiredTextureSizeMeters;
+                let canvasWidth = Math.floor(widthMeters * pixelsPerMeter);
+                let canvasHeight = Math.floor(heightMeters * pixelsPerMeter);
+                
+                const scale = Math.min(1, AREA_TEXTURE_MAX_CANVAS / Math.max(canvasWidth, canvasHeight));
+                canvasWidth = Math.floor(canvasWidth * scale);
+                canvasHeight = Math.floor(canvasHeight * scale);
+                const scaledTileWidth = Math.floor(tileWidth * scale);
+                const scaledTileHeight = Math.floor(tileHeight * scale);
+                
+                if (modelRendererTexLog()) console.log(`🖼️ Canvas: ${canvasWidth}x${canvasHeight}px, tile: ${scaledTileWidth}x${scaledTileHeight}px`);
+                
+                const canvas = document.createElement('canvas');
+                canvas.width = canvasWidth;
+                canvas.height = canvasHeight;
+                const ctx = canvas.getContext('2d');
+                
+                // Rotate context around center with +45° offset
+                ctx.translate(canvasWidth / 2, canvasHeight / 2);
+                ctx.rotate(textureRotation + (45 * Math.PI / 180)); // Add 45 degrees
+                
+                // Calculate how many tiles needed to cover area when rotated
+                const diagonal = Math.sqrt(canvasWidth * canvasWidth + canvasHeight * canvasHeight);
+                const tilesX = Math.ceil(diagonal / scaledTileWidth) + 2;
+                const tilesY = Math.ceil(diagonal / scaledTileHeight) + 2;
+                
+                // Draw tiles covering entire area
+                for (let x = 0; x < tilesX; x++) {
+                    for (let y = 0; y < tilesY; y++) {
+                        ctx.drawImage(img, 
+                            -diagonal / 2 - scaledTileWidth + x * scaledTileWidth,
+                            -diagonal / 2 - scaledTileHeight + y * scaledTileHeight,
+                            scaledTileWidth,
+                            scaledTileHeight);
+                    }
+                }
+                
+                // Create data URL
+                const rotatedImageDataUrl = canvas.toDataURL('image/jpeg', AREA_TEXTURE_JPEG_QUALITY);
+                
+                // Update material with single rotated image and set repeat to 1
                 if (texturedPolygon && texturedPolygon.polygon && texturedPolygon.polygon.material) {
-                    texturedPolygon.polygon.material.stRotation = textureRotation;
-                    console.log(`🖼️ DEBUG: Applied stRotation`);
-                    if (debugConfig.enabled) console.log(`🖼️ Applied stRotation`);
+                    texturedPolygon.polygon.material.image = rotatedImageDataUrl;
+                    texturedPolygon.polygon.material.repeat = new Cesium.Cartesian2(1, 1);
+                    if (modelRendererTexLog()) console.log(`🖼️ Applied rotated texture canvas`);
                 }
             }
 
@@ -689,7 +761,7 @@ window.modelRenderer = {
         const centerPosition = Cesium.Cartesian3.fromDegrees(centerLon, centerLat, 0.001);
 
         // Create polygon hierarchy
-        const polygonHierarchy = new Cesium.PolygonHierarchy(cartesianPositions);
+        const polygonHierarchy = new Cesium.PolygonHierarchy(cartesianPositions, cartesianHoleHierarchies);
 
         // Create textured polygon using Entity system for consistency
         const dataSource = window.areaTextureManager.getDataSource();
@@ -700,7 +772,7 @@ window.modelRenderer = {
         
         texturedPolygon = dataSource.entities.add(new Cesium.Entity({
             polygon: {
-                hierarchy: new Cesium.PolygonHierarchy(cartesianPositions),
+                hierarchy: polygonHierarchy,
                 height: 0.001, // Consistent height with Entity system
                 extrudedHeight: 0.001,
                 material: new Cesium.ImageMaterialProperty({
@@ -723,54 +795,61 @@ window.modelRenderer = {
      * @returns {number} Rotation angle in radians (0 if no rotation needed)
      */
     calculateTextureRotation: function(polygonCoordinates, textureName) {
-        console.log(`🖼️ DEBUG: calculateTextureRotation called for texture: ${textureName}`); // UNCONDITIONAL DEBUG
+        if (modelRendererTexLog()) console.log(`🖼️ calculateTextureRotation: ${textureName}`);
 
-        // Special handling for crossing textures - align with parent footway
-        console.log(`🖼️ DEBUG: Checking if texture is crossing: ${textureName}`); // UNCONDITIONAL DEBUG
-        
-        // Check for multiple possible crossing texture names
-        const isCrossingTexture = textureName.toLowerCase().includes('i_crossing.png') || 
-                                textureName.toLowerCase().includes('crossing') ||
-                                textureName.toLowerCase().includes('panot');
-        
-        console.log(`🖼️ DEBUG: isCrossingTexture: ${isCrossingTexture}`); // UNCONDITIONAL DEBUG
-        
+        const isCrossingTexture = textureName.toLowerCase().includes('i_crossing.png') ||
+                                textureName.toLowerCase().includes('crossing');
+
+        if (modelRendererTexLog()) console.log(`🖼️ isCrossingTexture: ${isCrossingTexture}`);
+
         if (isCrossingTexture) {
-            console.log(`🖼️ DEBUG: Special handling for crossing texture - looking for parent footway`); // UNCONDITIONAL DEBUG
+            if (modelRendererTexLog()) console.log(`🖼️ crossing texture path`);
             const crossingRotation = this.calculateCrossingTextureRotation(polygonCoordinates, textureName);
-            console.log(`🖼️ DEBUG: Crossing rotation result: ${crossingRotation}`); // UNCONDITIONAL DEBUG
+            if (modelRendererTexLog()) console.log(`🖼️ crossing rotation: ${crossingRotation}`);
             if (crossingRotation !== null) {
-                console.log(`🖼️ DEBUG: Crossing texture rotation found: ${(crossingRotation * 180 / Math.PI).toFixed(1)}°`); // UNCONDITIONAL DEBUG
+                if (modelRendererTexLog()) console.log(`🖼️ crossing bearing °: ${(crossingRotation * 180 / Math.PI).toFixed(1)}`);
                 return crossingRotation;
-            } else {
-                console.log(`🖼️ DEBUG: Crossing rotation returned null, falling back to general rotation`); // UNCONDITIONAL DEBUG
             }
         } else {
-            console.log(`🖼️ DEBUG: Not a crossing texture, using general rotation`); // UNCONDITIONAL DEBUG
+            const isLimitTexture = textureName.toLowerCase().includes('i_panot.jpg') ||
+                                  textureName.toLowerCase().includes('i_parking.png') ||
+                                  textureName.toLowerCase().includes('i_asfalt.jpg') ||
+                                  textureName.toLowerCase().includes('i_gespa.jpg') ||
+                                  textureName.toLowerCase().includes('i_aigua.jpg') ||
+                                  textureName.toLowerCase().includes('i_terra_verd.jpg');
+
+            if (modelRendererTexLog()) console.log(`🖼️ isLimitTexture: ${isLimitTexture}`);
+
+            if (isLimitTexture) {
+                if (modelRendererTexLog()) console.log(`🖼️ limit/adjacent texture path (polygon longest edge)`);
+                const limitRotation = this.calculateCrossingTextureRotation(polygonCoordinates, textureName);
+                if (modelRendererTexLog()) console.log(`🖼️ limit rotation: ${limitRotation}`);
+                if (limitRotation !== null) {
+                    if (modelRendererTexLog()) console.log(`🖼️ limit bearing °: ${(limitRotation * 180 / Math.PI).toFixed(1)}`);
+                    return limitRotation;
+                }
+            }
         }
 
         try {
-            // Get all map layers to find ways
-            const layers = window.map.getLayers().getArray();
+            const layers = this.getAllMapLayers(window.map.getLayers().getArray());
             const nearbyWays = [];
 
-            console.log(`🖼️ DEBUG: Searching ${layers.length} layers for nearby ways...`); // UNCONDITIONAL DEBUG
+            if (modelRendererTexLog()) console.log(`🖼️ scanning ${layers.length} layers for ways`);
 
-            // Search through all layers for ways that cross or are adjacent to the polygon
             layers.forEach((layer, layerIndex) => {
                 if (layer.getSource && typeof layer.getSource === 'function') {
                     const source = layer.getSource();
                     if (source && source.getFeatures) {
                         const features = source.getFeatures();
-                        console.log(`🖼️ DEBUG: Layer ${layerIndex}: ${features.length} features`); // UNCONDITIONAL DEBUG
+                        if (modelRendererTexLog()) console.log(`🖼️ layer ${layerIndex}: ${features.length} features`);
 
                         features.forEach((feature, featureIndex) => {
                             const geometry = feature.getGeometry();
                             if (geometry && (geometry.getType() === 'LineString' || geometry.getType() === 'MultiLineString')) {
-                                // Check if this way crosses or is adjacent to our polygon
                                 if (this.wayIntersectsOrAdjacentToPolygon(geometry, polygonCoordinates)) {
                                     nearbyWays.push(feature);
-                                    console.log(`🖼️ DEBUG: Found nearby way in layer ${layerIndex}, feature ${featureIndex}`); // UNCONDITIONAL DEBUG
+                                    if (modelRendererTexLog()) console.log(`🖼️ nearby way L${layerIndex} F${featureIndex}`);
                                 }
                             }
                         });
@@ -778,50 +857,87 @@ window.modelRenderer = {
                 }
             });
 
-            console.log(`🖼️ DEBUG: Found ${nearbyWays.length} nearby ways for texture rotation`); // UNCONDITIONAL DEBUG
+            if (modelRendererTexLog()) console.log(`🖼️ nearby ways: ${nearbyWays.length}`);
 
-            if (nearbyWays.length === 0) {
-                console.log(`🖼️ DEBUG: No nearby ways found - returning 0 rotation`); // UNCONDITIONAL DEBUG
+            const isParkingTexture = textureName.toLowerCase().includes('i_parking');
+            let sourceWays = nearbyWays;
+            if (isParkingTexture) {
+                const kerbWays = nearbyWays.filter(f => f.get && f.get('barrier') === 'kerb');
+                if (kerbWays.length > 0) {
+                    if (modelRendererTexLog()) console.log(`🖼️ parking: using ${kerbWays.length} kerb way(s)`);
+                    sourceWays = kerbWays;
+                }
+            }
+
+            if (sourceWays.length === 0) {
+                const closestFallbackSegment = this.findClosestWaySegmentToPolygon(
+                    layers,
+                    polygonCoordinates,
+                    40,
+                    isParkingTexture ? { key: 'barrier', value: 'kerb' } : null
+                );
+                if (closestFallbackSegment) {
+                    if (modelRendererTexLog()) console.log(`🖼️ fallback segment d=${closestFallbackSegment.distance.toFixed(2)}m °=${(closestFallbackSegment.bearing * 180 / Math.PI).toFixed(1)}`);
+                    return -closestFallbackSegment.bearing;
+                }
+                if (modelRendererTexLog()) console.log(`🖼️ no ways → rotation 0`);
                 return 0;
             }
 
-            // Calculate average bearing of nearby ways
-            const bearings = nearbyWays.map((feature, index) => {
+            // Pick the closest relevant way segment instead of averaging many ways.
+            // Averaging can cancel out opposite directions and default texture to north.
+            let bestSegment = null;
+            sourceWays.forEach((feature, index) => {
                 const geometry = feature.getGeometry();
                 const coords = geometry.getType() === 'LineString' ?
                     geometry.getCoordinates() :
                     geometry.getCoordinates().flat();
 
-                if (debugConfig.enabled) console.log(`🖼️ Way ${index} has ${coords.length} coordinates`);
+                if (modelRendererTexLog()) console.log(`🖼️ way ${index}: ${coords.length} coords`);
 
                 // Convert to EPSG:4326 if needed
                 const lonLatCoords = coords.map(coord =>
                     ol.proj.transform(coord, window.map.getView().getProjection(), 'EPSG:4326')
                 );
 
-                if (debugConfig.enabled) console.log(`🖼️ Way ${index} first few coords:`, lonLatCoords.slice(0, 3));
+                if (modelRendererTexLog()) console.log(`🖼️ way ${index} sample`, lonLatCoords.slice(0, 2));
 
-                const bearing = this.calculateWayBearing(lonLatCoords);
-                if (debugConfig.enabled) console.log(`🖼️ Way ${index} bearing: ${(bearing * 180 / Math.PI).toFixed(1)}°`);
-                return bearing;
-            }).filter(bearing => bearing !== null);
+                for (let i = 0; i < lonLatCoords.length - 1; i++) {
+                    const start = lonLatCoords[i];
+                    const end = lonLatCoords[i + 1];
+                    const segment = [start, end];
+                    const segmentDistance = this.lineSegmentDistanceToPolygonMeters(segment, polygonCoordinates);
+                    const segmentLength = this.haversineDistance(start, end);
+                    const segmentBearing = this.calculateSegmentBearing(start, end);
 
-            if (debugConfig.enabled) console.log(`🖼️ Valid bearings calculated: ${bearings.length} out of ${nearbyWays.length}`);
+                    if (segmentBearing === null) continue;
 
-            if (bearings.length === 0) {
-                if (debugConfig.enabled) console.log(`🖼️ Could not calculate bearings - returning 0 rotation`);
+                    if (!bestSegment ||
+                        segmentDistance < bestSegment.distance - 0.001 ||
+                        (Math.abs(segmentDistance - bestSegment.distance) < 0.001 && segmentLength > bestSegment.length)) {
+                        bestSegment = {
+                            distance: segmentDistance,
+                            length: segmentLength,
+                            bearing: segmentBearing,
+                            wayIndex: index
+                        };
+                    }
+                }
+            });
+
+            if (!bestSegment) {
+                if (modelRendererTexLog()) console.log(`🖼️ no best segment → 0`);
                 return 0;
             }
 
-            // Calculate average bearing
-            const averageBearing = bearings.reduce((sum, bearing) => sum + bearing, 0) / bearings.length;
-
-            if (debugConfig.enabled) console.log(`🖼️ Calculated average bearing from ${bearings.length} ways: ${(averageBearing * 180 / Math.PI).toFixed(1)}°`);
+            if (modelRendererTexLog()) {
+                console.log(`🖼️ best seg way ${bestSegment.wayIndex} d=${bestSegment.distance.toFixed(2)}m °=${(bestSegment.bearing * 180 / Math.PI).toFixed(1)}`);
+            }
 
             // For textures, we want the texture to flow in the direction of the way
             // So we rotate the texture to align with the way's bearing
             // Cesium texture rotation: positive values rotate clockwise
-            return -averageBearing;
+            return -bestSegment.bearing;
 
         } catch (error) {
             console.error(`🖼️ Error calculating texture rotation:`, error);
@@ -892,8 +1008,10 @@ window.modelRenderer = {
         const y = Math.sin(dLon) * Math.cos(lat2);
         const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
         const bearing = Math.atan2(y, x);
-
-        console.log(`🚶 Crossing texture bearing: ${(bearing * 180 / Math.PI).toFixed(1)}°`);
+        
+        if (modelRendererTexLog()) {
+            console.log(`🖼️ polygon-edge bearing °: ${(bearing * 180 / Math.PI).toFixed(1)} (seg ${maxDistance.toFixed(1)}m)`);
+        }
 
         // For textures, we want them to align with the bearing direction
         // Cesium rotation is clockwise, so we negate the bearing
@@ -922,6 +1040,10 @@ window.modelRenderer = {
             for (let i = 0; i < wayLonLat.length - 1; i++) {
                 const segment = [wayLonLat[i], wayLonLat[i + 1]];
                 if (this.lineIntersectsPolygon(segment, polygonCoords)) {
+                    return true;
+                }
+                // Also treat segments that run very close to (or along) polygon limits as adjacent.
+                if (this.lineAdjacentToPolygon(segment, polygonCoords, 10)) {
                     return true;
                 }
             }
@@ -968,13 +1090,222 @@ window.modelRenderer = {
      * Check if two line segments intersect
      */
     linesIntersect: function(a, b, c, d) {
-        const det = (b[0] - a[0]) * (d[1] - c[1]) - (d[0] - c[0]) * (b[1] - a[1]);
-        if (det === 0) return false; // Lines are parallel
+        const eps = 1e-10;
+        const orientation = (p, q, r) => {
+            const value = (q[1] - p[1]) * (r[0] - q[0]) - (q[0] - p[0]) * (r[1] - q[1]);
+            if (Math.abs(value) < eps) return 0;
+            return value > 0 ? 1 : 2;
+        };
 
-        const lambda = ((d[1] - c[1]) * (d[0] - a[0]) + (c[0] - d[0]) * (d[1] - a[1])) / det;
-        const gamma = ((a[1] - b[1]) * (d[0] - a[0]) + (b[0] - a[0]) * (d[1] - a[1])) / det;
+        const onSegment = (p, q, r) => {
+            return q[0] <= Math.max(p[0], r[0]) + eps &&
+                   q[0] >= Math.min(p[0], r[0]) - eps &&
+                   q[1] <= Math.max(p[1], r[1]) + eps &&
+                   q[1] >= Math.min(p[1], r[1]) - eps;
+        };
 
-        return (0 < lambda && lambda < 1) && (0 < gamma && gamma < 1);
+        const o1 = orientation(a, b, c);
+        const o2 = orientation(a, b, d);
+        const o3 = orientation(c, d, a);
+        const o4 = orientation(c, d, b);
+
+        if (o1 !== o2 && o3 !== o4) {
+            return true;
+        }
+
+        // Colinear / touching endpoints are also intersections for area-edge matching.
+        if (o1 === 0 && onSegment(a, c, b)) return true;
+        if (o2 === 0 && onSegment(a, d, b)) return true;
+        if (o3 === 0 && onSegment(c, a, d)) return true;
+        if (o4 === 0 && onSegment(c, b, d)) return true;
+
+        return false;
+    },
+
+    /**
+     * Check whether a line segment is adjacent to any polygon edge within threshold meters.
+     * Useful for ways that run next to or along polygon limits without crossing.
+     */
+    lineAdjacentToPolygon: function(lineSegment, polygonCoords, thresholdMeters = 10) {
+        const [a, b] = lineSegment;
+
+        for (let i = 0; i < polygonCoords.length; i++) {
+            const j = (i + 1) % polygonCoords.length;
+            const c = polygonCoords[i];
+            const d = polygonCoords[j];
+
+            // Intersections (including colinear overlap / touching) are handled as adjacent too.
+            if (this.linesIntersect(a, b, c, d)) {
+                return true;
+            }
+
+            const minDistance = Math.min(
+                this.pointToSegmentDistanceMeters(a, c, d),
+                this.pointToSegmentDistanceMeters(b, c, d),
+                this.pointToSegmentDistanceMeters(c, a, b),
+                this.pointToSegmentDistanceMeters(d, a, b)
+            );
+
+            if (minDistance <= thresholdMeters) {
+                return true;
+            }
+        }
+
+        return false;
+    },
+
+    /**
+     * Distance from point P to segment AB in meters.
+     */
+    pointToSegmentDistanceMeters: function(point, segStart, segEnd) {
+        const toMeters = (lon, lat, refLat) => {
+            const x = lon * 111320 * Math.cos(refLat * Math.PI / 180);
+            const y = lat * 111320;
+            return [x, y];
+        };
+
+        const refLat = (point[1] + segStart[1] + segEnd[1]) / 3;
+        const p = toMeters(point[0], point[1], refLat);
+        const a = toMeters(segStart[0], segStart[1], refLat);
+        const b = toMeters(segEnd[0], segEnd[1], refLat);
+
+        const abx = b[0] - a[0];
+        const aby = b[1] - a[1];
+        const apx = p[0] - a[0];
+        const apy = p[1] - a[1];
+        const abLenSq = abx * abx + aby * aby;
+
+        if (abLenSq === 0) {
+            const dx = p[0] - a[0];
+            const dy = p[1] - a[1];
+            return Math.sqrt(dx * dx + dy * dy);
+        }
+
+        const t = Math.max(0, Math.min(1, (apx * abx + apy * aby) / abLenSq));
+        const closestX = a[0] + t * abx;
+        const closestY = a[1] + t * aby;
+        const dx = p[0] - closestX;
+        const dy = p[1] - closestY;
+        return Math.sqrt(dx * dx + dy * dy);
+    },
+
+    /**
+     * Minimum distance from line segment to polygon edges in meters.
+     */
+    lineSegmentDistanceToPolygonMeters: function(lineSegment, polygonCoords) {
+        const [a, b] = lineSegment;
+        let minDistance = Infinity;
+
+        for (let i = 0; i < polygonCoords.length; i++) {
+            const j = (i + 1) % polygonCoords.length;
+            const c = polygonCoords[i];
+            const d = polygonCoords[j];
+
+            if (this.linesIntersect(a, b, c, d)) {
+                return 0;
+            }
+
+            const distance = Math.min(
+                this.pointToSegmentDistanceMeters(a, c, d),
+                this.pointToSegmentDistanceMeters(b, c, d),
+                this.pointToSegmentDistanceMeters(c, a, b),
+                this.pointToSegmentDistanceMeters(d, a, b)
+            );
+
+            if (distance < minDistance) {
+                minDistance = distance;
+            }
+        }
+
+        return Number.isFinite(minDistance) ? minDistance : Infinity;
+    },
+
+    /**
+     * Find closest line segment from any way to the target polygon.
+     */
+            findClosestWaySegmentToPolygon: function(layers, polygonCoordinates, maxDistanceMeters = 40, preferredTag = null) {
+        let bestSegment = null;
+
+            layers.forEach((layer) => {
+            if (!layer.getSource || typeof layer.getSource !== 'function') return;
+            const source = layer.getSource();
+            if (!source || !source.getFeatures) return;
+
+            source.getFeatures().forEach((feature) => {
+                const geometry = feature.getGeometry();
+                if (!geometry || (geometry.getType() !== 'LineString' && geometry.getType() !== 'MultiLineString')) {
+                    return;
+                }
+
+                const coords = geometry.getType() === 'LineString'
+                    ? geometry.getCoordinates()
+                    : geometry.getCoordinates().flat();
+                const lonLatCoords = coords.map(coord =>
+                    ol.proj.transform(coord, window.map.getView().getProjection(), 'EPSG:4326')
+                );
+
+                for (let i = 0; i < lonLatCoords.length - 1; i++) {
+                    const start = lonLatCoords[i];
+                    const end = lonLatCoords[i + 1];
+                    const bearing = this.calculateSegmentBearing(start, end);
+                    if (bearing === null) continue;
+
+                    const distance = this.lineSegmentDistanceToPolygonMeters([start, end], polygonCoordinates);
+                    const length = this.haversineDistance(start, end);
+                    if (distance > maxDistanceMeters) continue;
+
+                    // If a preferred tag is requested (e.g. barrier=kerb for parking),
+                    // favor segments coming from those features.
+                    const isPreferred = preferredTag &&
+                        feature.get &&
+                        feature.get(preferredTag.key) === preferredTag.value;
+
+                    if (!bestSegment) {
+                        bestSegment = { distance, length, bearing, isPreferred };
+                    } else {
+                        const betterByPreference = isPreferred && !bestSegment.isPreferred;
+                        const closer = distance < bestSegment.distance - 0.001;
+                        const similarDistanceLonger = Math.abs(distance - bestSegment.distance) < 0.001 && length > bestSegment.length;
+                        if (betterByPreference || closer || (similarDistanceLonger && (!betterByPreference && !bestSegment.isPreferred))) {
+                            bestSegment = { distance, length, bearing, isPreferred };
+                        }
+                    }
+                }
+            });
+        });
+
+        return bestSegment;
+    },
+
+    /**
+     * Flatten map layers recursively to include layers inside groups.
+     */
+    getAllMapLayers: function(layers) {
+        const result = [];
+        (layers || []).forEach((layer) => {
+            if (layer && layer.getLayers && typeof layer.getLayers === 'function') {
+                result.push(...this.getAllMapLayers(layer.getLayers().getArray()));
+            } else {
+                result.push(layer);
+            }
+        });
+        return result;
+    },
+
+    /**
+     * Bearing for a single segment [start -> end].
+     */
+    calculateSegmentBearing: function(start, end) {
+        if (!start || !end) return null;
+        if (start[0] === end[0] && start[1] === end[1]) return null;
+
+        const dLon = (end[0] - start[0]) * Math.PI / 180;
+        const lat1 = start[1] * Math.PI / 180;
+        const lat2 = end[1] * Math.PI / 180;
+        const y = Math.sin(dLon) * Math.cos(lat2);
+        const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
+        const bearing = Math.atan2(y, x);
+        return (bearing + 2 * Math.PI) % (2 * Math.PI);
     },
 
     /**
@@ -1102,29 +1433,21 @@ window.modelRenderer = {
 
     // Main entry point for adding all models
     addAllModels: function() {
-        console.log('🎯 Manually adding 3D models to Cesium scene...');
+        if (debugConfig.enabled) console.log('🎯 addAllModels: scanning layers for 3D models');
         if (!window.ol3d) {
-            console.log('🎯 window.ol3d is null, cannot add models');
+            if (debugConfig.enabled) console.log('🎯 ol3d unavailable');
             return;
         }
 
         const cesiumScene = window.ol3d.getCesiumScene();
         if (cesiumScene && cesiumScene.primitives) {
             try {
-                let modelsAdded = 0;
-                
-                // Count models before adding
-                const originalCount = modelsAdded;
-                
-                // Recursively process all layers including group layers
                 this.processLayersRecursively(window.map.getLayers().getArray(), cesiumScene);
-
-                console.log(`🎯 Added ${modelsAdded - originalCount} GLTF models using model renderer`);
             } catch (error) {
-                console.error('🎯 Error with model renderer approach:', error);
+                console.error('🎯 model renderer error:', error);
             }
-        } else {
-            console.log('🎯 Cesium scene not available for manual model addition');
+        } else if (debugConfig.enabled) {
+            console.log('🎯 Cesium scene unavailable');
         }
     },
 
@@ -1142,4 +1465,6 @@ window.modelRenderer = {
     },
 };
 
-console.log('🎯 model_renderer.js loaded successfully');
+if (typeof debugConfig !== 'undefined' && debugConfig.enabled) {
+    console.log('🎯 model_renderer.js loaded');
+}

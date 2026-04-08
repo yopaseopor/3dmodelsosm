@@ -305,10 +305,14 @@ function assignModelToFeature(feature, allFeatures = null) {
                             window.modelRenderer.calculateTextureRotation(polygonCoords, modelFilename) : 
                             0; // No rotation if modelRenderer not available
                         
-                        console.log(`🎨 Calculated texture rotation for overlay: ${(textureRotation * 180 / Math.PI).toFixed(1)}°`);
+                        if (debugConfig.enabled && debugConfig.logAreaProcessing) {
+                            console.log(`🎨 overlay texture °: ${(textureRotation * 180 / Math.PI).toFixed(1)}`);
+                        }
                         
                         const hierarchy = new Cesium.PolygonHierarchy(cesiumPositions);
-                        console.log(`🎨 Creating area entity for tags:`, tagsObj, `model: ${modelFilename}, timestamp: ${Date.now()}`);
+                        if (debugConfig.enabled && debugConfig.logAreaProcessing) {
+                            console.log(`🎨 overlay area entity`, modelFilename);
+                        }
                         const areaEntity = new Cesium.Entity({
                             polygon: {
                                 hierarchy: hierarchy,
@@ -338,13 +342,15 @@ function assignModelToFeature(feature, allFeatures = null) {
                             if (!dataSource) {
                                 dataSource = new Cesium.CustomDataSource('AreaTextures');
                                 dataSources.add(dataSource);
-                                console.log('🎨 Created new AreaTextures data source');
+                                if (debugConfig.enabled && debugConfig.logAreaProcessing) console.log('🎨 AreaTextures data source');
                             }
                             dataSource.entities.add(areaEntity);
-                            console.log(`🎨 Added textured area entity to 3D scene`);
+                            if (debugConfig.enabled && debugConfig.logAreaProcessing) console.log(`🎨 overlay area entity added`);
                         }
                         
-                        console.log(`🎨 SUCCESS: Created Cesium entity for area texture ${modelFilename} with ${cesiumPositions.length} vertices`);
+                        if (debugConfig.enabled && debugConfig.logAreaProcessing) {
+                            console.log(`🎨 overlay area ok ${modelFilename} verts=${cesiumPositions.length}`);
+                        }
                     } else {
                         console.warn(`🎨 No valid coordinates found for area texture`);
                     }
@@ -361,7 +367,9 @@ function assignModelToFeature(feature, allFeatures = null) {
                             window.modelRenderer.calculateTextureRotation(lineCoords, modelFilename) : 
                             0; // No rotation if modelRenderer not available
                         
-                        console.log(`🎨 Calculated texture rotation for overlay line: ${(textureRotation * 180 / Math.PI).toFixed(1)}°`);
+                        if (debugConfig.enabled && debugConfig.logAreaProcessing) {
+                            console.log(`🎨 overlay line texture °: ${(textureRotation * 180 / Math.PI).toFixed(1)}`);
+                        }
                         
                         const areaEntity = new Cesium.Entity({
                             polyline: {
@@ -391,13 +399,15 @@ function assignModelToFeature(feature, allFeatures = null) {
                             if (!dataSource) {
                                 dataSource = new Cesium.CustomDataSource('AreaTextures');
                                 dataSources.add(dataSource);
-                                console.log('🎨 Created new AreaTextures data source');
+                                if (debugConfig.enabled && debugConfig.logAreaProcessing) console.log('🎨 AreaTextures data source');
                             }
                             dataSource.entities.add(areaEntity);
-                            console.log(`🎨 Added textured polyline entity to 3D scene`);
+                            if (debugConfig.enabled && debugConfig.logAreaProcessing) console.log(`🎨 overlay polyline added`);
                         }
                         
-                        console.log(`🎨 SUCCESS: Created Cesium entity for line texture ${modelFilename} with ${positions.length} positions`);
+                        if (debugConfig.enabled && debugConfig.logAreaProcessing) {
+                            console.log(`🎨 overlay line ok ${modelFilename} pts=${positions.length}`);
+                        }
                     } else {
                         console.warn(`🎨 No valid coordinates found for line texture`);
                     }
@@ -410,7 +420,9 @@ function assignModelToFeature(feature, allFeatures = null) {
             
         } else if (mappingGeometryType === 'line') {
             // Handle way textures or models along ways
-            console.log(`🛤️ Applying way model/texture ${modelFilename} along linestring`);
+            if (debugConfig.enabled && debugConfig.logFeatureProcessing) {
+                console.log(`🛤️ way model ${modelFilename}`);
+            }
             
             // For ways, we can either:
             // 1. Place multiple models along the way (like existing behavior)

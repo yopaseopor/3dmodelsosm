@@ -308,5 +308,3 @@ window.modelRepetition = {
     repetitionConfig
 };
 
-// Debug: Confirm model_repetition.js is loaded
-console.log('🔄 model_repetition.js loaded successfully');

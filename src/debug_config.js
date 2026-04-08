@@ -10,10 +10,15 @@ const globalDebugConfig = {
     // Module-specific debug flags
     modelRenderer: {
         enabled: false,
-        logModelLoading: true,
+        logModelLoading: false,
         logRepetitionModels: false,
         logTextureProcessing: false,
         logGeometryOperations: false
+    },
+
+    /** Verbose logs for cesium_models.js (area entities, texture steps) */
+    cesiumModels: {
+        verbose: false
     },
     
     valueSearch: {

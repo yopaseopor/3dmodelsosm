@@ -6,7 +6,7 @@
 // Available 3D models
 const availableModels = [
     'Untitled.glb',
-    'i_parking.jpg',
+    'i_parking.png',
     'test.gltf',
     'w_amenity_bicycle_parking.glb',
     'w_amenity_waste_basket.glb',
@@ -76,7 +76,7 @@ const modelMappings = [
    { tags: ['highway=residential'], model: 'w_highway_residential.glb', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Residential area models
    // { tags: ['building=residential'], model: 'w_highway_residential.glb', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Residential building areas
   // { tags: ['building'], model: 'w_highway_residential.glb', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Generic building areas
-   { tags: ['amenity=parking'], model: 'i_parking.jpg', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Parking area models
+   { tags: ['amenity=parking'], model: 'i_parking.png', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Parking area models
   { tags: ['area:highway=footway', 'footway=sidewalk'], model: 'i_llamborda.jpg', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway area texture
   { tags: ['area:highway=footway', 'footway=crossing'], model: 'i_panot.jpg', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway point models
 { tags: ['area:highway=residential'], model: 'i_asfalt.jpg', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Residential area-tagged ways
