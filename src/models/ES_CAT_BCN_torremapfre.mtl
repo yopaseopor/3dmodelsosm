@@ -1,0 +1,46 @@
+# Blender MTL File: 'ES_CAT_BCN_hotearts.blend'
+# Material Count: 4
+
+newmtl Material.002
+Ns 94.117644
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.0 0.0 0.0
+Ni 1.000000
+d 1.000000
+illum 3
+map_Kd images\\ES_CAT_BCN_torremapfre1.png
+
+newmtl Material.004
+Ns 94.117644
+Ka 1.000000 1.000000 1.000000
+Kd 0.640000 0.640000 0.640000
+Ks 0.500000 0.500000 0.500000
+Ke 0.0 0.0 0.0
+Ni 1.000000
+d 1.000000
+illum 3
+map_Kd images\\ES_CAT_BCN_torremapfre2.png
+
+newmtl Material.006
+Ns 225.000000
+Ka 1.000000 1.000000 1.000000
+Kd 0.800000 0.800000 0.800000
+Ks 0.500000 0.500000 0.500000
+Ke 0.0 0.0 0.0
+Ni 1.450000
+d 1.000000
+illum 2
+map_Kd images\\ES_CAT_BCN_torremapfre4.png
+
+newmtl Material.007
+Ns 225.000000
+Ka 1.000000 1.000000 1.000000
+Kd 0.800000 0.800000 0.800000
+Ks 0.500000 0.500000 0.500000
+Ke 0.0 0.0 0.0
+Ni 1.450000
+d 1.000000
+illum 2
+map_Kd images\\ES_CAT_BCN_torremapfre3.png

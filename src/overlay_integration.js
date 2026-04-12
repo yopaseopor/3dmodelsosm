@@ -219,11 +219,23 @@ function assignModelToFeature(feature, allFeatures = null) {
         if (geomType === 'Polygon' || geomType === 'MultiPolygon') {
             geometryType = 'area';
         } else if (geomType === 'LineString' || geomType === 'MultiLineString') {
+            // Check if LineString is closed (first and last coordinates are the same)
+            const isClosed = window.models && window.models.isLineStringClosed ? 
+                             window.models.isLineStringClosed(geometry) : false;
+            
             // Check if this is a way tagged as an area
             if (debugConfig.enabled && debugConfig.logGeometryDetection) console.log(`🎯 Checking area tags on LineString: area:highway=${tagsObj['area:highway']}`);
-            if (tagsObj['area:highway'] || tagsObj['area:amenity'] || tagsObj['area:leisure'] || tagsObj['area:natural'] || tagsObj['area:landuse']) {
+            const hasAreaTag = tagsObj['area:highway'] || tagsObj['area:amenity'] || tagsObj['area:leisure'] || tagsObj['area:natural'] || tagsObj['area:landuse'];
+            
+            if (isClosed || hasAreaTag) {
                 geometryType = 'area';
-                if (debugConfig.enabled && debugConfig.logGeometryDetection) console.log(`🎨 Detected area-tagged way, treating as area geometry`);
+                if (debugConfig.enabled && debugConfig.logGeometryDetection) {
+                    if (isClosed) {
+                        console.log(`🔗 DEBUG: Closed LineString detected, treating as area`);
+                    } else {
+                        console.log(`🎨 Detected area-tagged way, treating as area geometry`);
+                    }
+                }
             } else {
                 geometryType = 'line';
             }

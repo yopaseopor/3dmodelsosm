@@ -56,6 +56,13 @@ window.modelRenderer = {
      * Model Pooling System - Reuse Cesium model instances
      */
     getModelFromPool: function(modelUrl, cesiumScene) {
+        // Check if this is an image file - don't pool images as GLTF models
+        const isImageFile = modelUrl && (modelUrl.toLowerCase().endsWith('.png') || modelUrl.toLowerCase().endsWith('.jpg') || modelUrl.toLowerCase().endsWith('.jpeg'));
+        if (isImageFile) {
+            if (debugConfig.enabled) console.log(`♻️ Skipping model pooling for image file: ${modelUrl}`);
+            return null;
+        }
+        
         if (!this.modelPool.has(modelUrl)) {
             this.modelPool.set(modelUrl, []);
         }
@@ -352,7 +359,20 @@ window.modelRenderer = {
 
         // Use model pooling instead of creating new instances
         const modelUrl = feature.model.uri;
+        
+        // Check if this is an image file - skip GLTF loading for images
+        const isImageFile = modelUrl && (modelUrl.toLowerCase().endsWith('.png') || modelUrl.toLowerCase().endsWith('.jpg') || modelUrl.toLowerCase().endsWith('.jpeg'));
+        if (isImageFile) {
+            if (debugConfig.enabled) console.log(`🎯 Skipping GLTF loading for image file: ${modelUrl}`);
+            return;
+        }
+        
         const pooledModel = this.getModelFromPool(modelUrl, cesiumScene);
+        
+        // If pooledModel is null (image file), skip processing
+        if (!pooledModel) {
+            return;
+        }
         
         // Create model matrix for positioning BEFORE setting on model
         const heightOffset = feature.get('modelHeightOffset') || 0.0;
@@ -510,9 +530,9 @@ window.modelRenderer = {
         
         // Check if model is an image file (PNG/JPG)
         const modelUri = repModel.uri;
-        const isImageFile = modelUri && (modelUri.toLowerCase().endsWith('.png') || modelUri.toLowerCase().endsWith('.jpg') || modelUri.toLowerCase().endsWith('.jpeg'));
+        const isRepImageFile = modelUri && (modelUri.toLowerCase().endsWith('.png') || modelUri.toLowerCase().endsWith('.jpg') || modelUri.toLowerCase().endsWith('.jpeg'));
         
-        if (isImageFile) {
+        if (isRepImageFile) {
             // Handle image files using billboards
             if (debugConfig.enabled) console.log(`🚶 Loading image file as billboard: ${modelUri}`);
             this.addImageBillboard(repLonLat, modelUri, repModel, cesiumScene);
@@ -554,6 +574,14 @@ window.modelRenderer = {
         if (debugConfig.enabled) console.log(`🚶 Applied rotation to repetition model ${repIndex}: [${(repModelRotation || [0, 0, 0]).map(r => (r * 180 / Math.PI).toFixed(2) + '°').join(', ')}]`);
         
         if (debugConfig.enabled) console.log(`🚶 Repetition model url: ${repModel.uri}`);
+        
+        // Check if this is an image file - skip GLTF loading for images
+        const isRepModelImageFile = repModel.uri && (repModel.uri.toLowerCase().endsWith('.png') || repModel.uri.toLowerCase().endsWith('.jpg') || repModel.uri.toLowerCase().endsWith('.jpeg'));
+        if (isRepModelImageFile) {
+            if (debugConfig.enabled) console.log(`🚶 Skipping GLTF loading for image file: ${repModel.uri}`);
+            return;
+        }
+        
         const sceneToUse = cesiumScene || window.ol3d.getCesiumScene();
         const repCesiumModel = sceneToUse.primitives.add(Cesium.Model.fromGltf({
             url: repModel.uri,
@@ -715,9 +743,45 @@ window.modelRenderer = {
                 canvas.height = canvasHeight;
                 const ctx = canvas.getContext('2d');
                 
-                // Rotate context around center with +45° offset
+                // Rotate context around center - apply different offsets based on texture type and orientation
                 ctx.translate(canvasWidth / 2, canvasHeight / 2);
-                ctx.rotate(textureRotation + (45 * Math.PI / 180)); // Add 45 degrees
+                const isCrossingTexture = imageUri.toLowerCase().includes('i_crossing.png') ||
+                                        imageUri.toLowerCase().includes('crossing');
+                const isParkingTexture = imageUri.toLowerCase().includes('i_parking');
+                
+                let finalRotation;
+                if (isCrossingTexture) {
+                    finalRotation = textureRotation + (45 * Math.PI / 180); // Add 45 degrees for crossings
+                } else if (isParkingTexture) {
+                    // For parking textures, apply different offsets based on street orientation
+                    const bearingDegrees = ((textureRotation * 180 / Math.PI) + 360) % 360; // Normalize to 0-360
+                    const isNorthSouth = (bearingDegrees >= 315 || bearingDegrees < 45) || // North (0° ± 45°)
+                                       (bearingDegrees >= 135 && bearingDegrees < 225); // South (180° ± 45°)
+                    const isEastWest = (bearingDegrees >= 45 && bearingDegrees < 135) || // East (90° ± 45°)
+                                     (bearingDegrees >= 225 && bearingDegrees < 315); // West (270° ± 45°)
+                    
+                    if (isNorthSouth) {
+                        finalRotation = textureRotation + (35 * Math.PI / 180); // Add 35 degrees for north-south parking
+                        if (modelRendererTexLog()) {
+                            console.log(`🖼️ North-South parking detected (bearing: ${bearingDegrees.toFixed(1)}°), applying 35° offset`);
+                        }
+                    } else if (isEastWest) {
+                        finalRotation = textureRotation + (45 * Math.PI / 180); // Add 45 degrees for east-west parking
+                        if (modelRendererTexLog()) {
+                            console.log(`🖼️ East-West parking detected (bearing: ${bearingDegrees.toFixed(1)}°), applying 45° offset`);
+                        }
+                    } else {
+                        finalRotation = textureRotation; // Fallback: no offset
+                    }
+                } else {
+                    finalRotation = textureRotation; // Use direct rotation for other textures
+                }
+                
+                if (modelRendererTexLog()) {
+                    console.log(`🖼️ ${isCrossingTexture ? 'Crossing' : (isParkingTexture ? 'Parking' : 'Other')} texture - base: ${(textureRotation * 180 / Math.PI).toFixed(1)}°, final: ${(finalRotation * 180 / Math.PI).toFixed(1)}°`);
+                }
+                
+                ctx.rotate(finalRotation);
                 
                 // Calculate how many tiles needed to cover area when rotated
                 const diagonal = Math.sqrt(canvasWidth * canvasWidth + canvasHeight * canvasHeight);
@@ -811,10 +875,12 @@ window.modelRenderer = {
                 return crossingRotation;
             }
         } else {
-            const isLimitTexture = textureName.toLowerCase().includes('i_panot.jpg') ||
+            const isLimitTexture = textureName.toLowerCase().includes('i_llamborda.jpg') ||
                                   textureName.toLowerCase().includes('i_parking.png') ||
+                                  textureName.toLowerCase().includes('i_parking.jpg') ||
                                   textureName.toLowerCase().includes('i_asfalt.jpg') ||
                                   textureName.toLowerCase().includes('i_gespa.jpg') ||
+                                  textureName.toLowerCase().includes('i_manhole_drain.jpg') ||
                                   textureName.toLowerCase().includes('i_aigua.jpg') ||
                                   textureName.toLowerCase().includes('i_terra_verd.jpg');
 

@@ -6,25 +6,26 @@
 // Available 3D models
 const availableModels = [
     'Untitled.glb',
-    'i_parking.png',
     'test.gltf',
     'w_amenity_bicycle_parking.glb',
     'w_amenity_waste_basket.glb',
     'w_area_highway_footway.glb',
-    'w_barrier_kerb.glb',
+    'w_barrier_kerb.gltf',
     'w_highway_footway.glb',
     'w_highway_residential.glb',
     'w_highway_street_lamp.glb',
     'w_highway_street_lamp_straight_mast.glb',
-    'w_highway_traffic_signals.glb',
-    'w_highway_traffic_signals_cycle.glb',
-    'w_highway_traffic_signals_pedestrian.glb',
+    'w_highway_traffic_signals.gltf',
+    'w_highway_traffic_signals_cycle.gltf',
+    'w_highway_traffic_signals_pedestrian.gltf',
     'w_man_made_pole.glb',
     'w_recycling_type_container.glb',
     'w_leisure_garden.glb',
     'w_leisure_playground.glb',
     'w_natural_tree.glb',
-    'w_traffic_sign_ES_R2.glb',
+    'w_traffic_sign_ES_R2.gltf',
+    'w_traffic_sign_ES_R101.gltf',
+    'w_waterway_stream.gltf',
     'ES_CAT_BCN_casa_batllo.glb',
     'ES_CAT_BCN_casa_mila.glb',
    'ES_CAT_BCN_hotel_arts.glb',
@@ -35,7 +36,10 @@ const availableModels = [
     'i_aigua.jpg',
     'i_crossing.png',
     'i_gespa.jpg',
+    'i_kerb.jpg',
     'i_marbre.jpg',
+    'i_manhole_drain.jpg',
+    'i_parking.png',
     'i_terra_verd.jpg',
     'i_panot.jpg',
         'i_llamborda.jpg'
@@ -49,17 +53,16 @@ const modelMappings = [
     { tags: ['highway=street_lamp', 'lamp_mount=straight_mast'], model: 'w_highway_street_lamp_straight_mast.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
     { tags: ['highway=street_lamp'], model: 'w_highway_street_lamp.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Street lamp model for highway=street_lamp
     // More specific traffic signals first
-    { tags: ['highway=traffic_signals', 'traffic_signals=cyclist_crossing'], model: 'w_highway_traffic_signals_cycle.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Traffic signals model for cyclist crossing
-    { tags: ['highway=traffic_signals', 'traffic_signals=pedestrian_crossing'], model: 'w_highway_traffic_signals_pedestrian.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Traffic signals model for pedestrian crossing
+    { tags: ['highway=traffic_signals', 'traffic_signals=cyclist_crossing'], model: 'w_highway_traffic_signals_cycle.gltf', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Traffic signals model for cyclist crossing
+    { tags: ['highway=traffic_signals', 'traffic_signals=pedestrian_crossing'], model: 'w_highway_traffic_signals_pedestrian.gltf', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Traffic signals model for pedestrian crossing
     // General traffic signals last
-    { tags: ['highway=traffic_signals'], model: 'w_highway_traffic_signals.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Traffic signals model for highway=traffic_signals
+    { tags: ['highway=traffic_signals'], model: 'w_highway_traffic_signals.gltf', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Traffic signals model for highway=traffic_signals
     { tags: ['man_made=pole'], model: 'w_man_made_pole.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Tree model for natural=tree
     { tags: ['natural=tree'], model: 'w_natural_tree.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Tree model for natural=tree
     { tags: ['natural=wood'], model: 'test.gltf', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Could use forest model
-    { tags: ['waterway=stream'], model: 'i_aigua.jpg', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Could use forest model
-    { tags: ['waterway=stream'], model: 'i_aigua.jpg', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Could use forest model
-    { tags: ['traffic_sign=ES:R2'], model: 'w_traffic_sign_ES_R2.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Could use forest model
-    { tags: ['wikidata=Q575953'], model: 'ES_CAT_BCN_casa_batllo.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Casa Batlló
+    { tags: ['traffic_sign=ES:R2'], model: 'w_traffic_sign_ES_R2.gltf', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Could use forest model
+    { tags: ['traffic_sign=ES:R101'], model: 'w_traffic_sign_ES_R101.gltf', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Could use forest model
+        { tags: ['wikidata=Q575953'], model: 'ES_CAT_BCN_casa_batllo.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Casa Batlló
     { tags: ['wikidata=Q207870'], model: 'ES_CAT_BCN_casa_mila.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Casa Mila
     { tags: ['wikidata=Q1425790'], model: 'ES_CAT_BCN_hotel_arts.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Hotel Arts Barcelona model
     { tags: ['wikidata=Q336246'], model: 'ES_CAT_BCN_torre_glories.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Glories model
@@ -76,24 +79,59 @@ const modelMappings = [
    { tags: ['highway=residential'], model: 'w_highway_residential.glb', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Residential area models
    // { tags: ['building=residential'], model: 'w_highway_residential.glb', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Residential building areas
   // { tags: ['building'], model: 'w_highway_residential.glb', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Generic building areas
-   { tags: ['amenity=parking'], model: 'i_parking.png', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Parking area models
-  { tags: ['area:highway=footway', 'footway=sidewalk'], model: 'i_llamborda.jpg', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway area texture
-  { tags: ['area:highway=footway', 'footway=crossing'], model: 'i_panot.jpg', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway point models
+    { tags: ['amenity=parking'], model: '', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Parking area models
+  { tags: ['area:barrier=kerb'], model: 'noimage.jpg', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway area texture
+      { tags: ['area:highway=footway', 'footway=sidewalk'], model: 'noimage.jpg', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway area texture
+  { tags: ['area:highway=footway', 'footway=crossing'], model: 'noimage.jpg', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway point models
 { tags: ['area:highway=residential'], model: 'i_asfalt.jpg', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Residential area-tagged ways
   { tags: ['leisure=garden'], model: '', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Garden area models
    { tags: ['leisure=playground'], model: '', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Playground area models
-   
+   { tags: ['waterway=stream'], model: '', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Stream area models (closed streams)
+   { tags: ['manhole=drain'], model: 'i_manhole_drain.jpg', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Manhole point models
+   { tags: ['manhole=drain'], model: 'i_manhole_drain.jpg', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Manhole area models (for closed LineStrings)
+  
   // Way models (new functionality) - models placed along ways
   { tags: ['highway=footway'], model: 'w_highway_footway.glb', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway line models
     { tags: ['footway=sidewalk'], model: 'w_highway_footway.glb', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Sidewalk line models
    { tags: ['highway=residential'], model: 'w_highway_residential.glb', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Residential road line models
-    { tags: ['barrier=kerb'], model: 'w_barrier_kerb.glb', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Kerb
-//{ tags: ['area:highway=footway'], model: 'w_highway_footway.glb', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway line models
+    { tags: ['barrier=kerb'], model: 'w_barrier_kerb.gltf', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Kerb
+{ tags: ['waterway=drain'], model: 'w_waterway_stream.gltf', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Drain area models (closed drains)
+   
+    //{ tags: ['area:highway=footway'], model: 'w_highway_footway.glb', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway line models
    
     //{ tags: ['barrier=kerb'], model: 'w_barrier_kerb.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Kerb repetitions
     
     //{ tags: ['highway=footway','footway=sidewalk'], model: 'w_area_highway_footway.glb', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway line models
 ];
+
+/**
+ * Check if a LineString is closed (first and last coordinates are the same)
+ * @param {ol.geom.LineString|Array<Array<number>>} geometry - OpenLayers LineString geometry or coordinates array
+ * @returns {boolean} True if the LineString is closed
+ */
+function isLineStringClosed(geometry) {
+    let coordinates;
+    if (geometry && geometry.getCoordinates) {
+        // OpenLayers geometry object
+        coordinates = geometry.getCoordinates();
+    } else if (Array.isArray(geometry)) {
+        // Direct coordinates array
+        coordinates = geometry;
+    } else {
+        return false;
+    }
+    
+    if (!coordinates || coordinates.length < 3) {
+        return false; // Need at least 3 coordinates to form a closed shape
+    }
+    
+    const first = coordinates[0];
+    const last = coordinates[coordinates.length - 1];
+    
+    // Compare first and last coordinates with tolerance for floating point precision
+    const tolerance = 1e-6;
+    return Math.abs(first[0] - last[0]) < tolerance && Math.abs(first[1] - last[1]) < tolerance;
+}
 
 /**
  * Calculate the bearing (direction) of the way at a specific node index
@@ -216,7 +254,8 @@ window.models = {
     modelMappings,
     getModelForTags,
     modelExists,
-    calculateBearing
+    calculateBearing,
+    isLineStringClosed
 };
 
 // Debug: Confirm models.js is loaded

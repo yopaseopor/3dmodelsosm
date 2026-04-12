@@ -14,8 +14,8 @@ const modelRepetitionDebugConfig = {
 // Configuration for repetition
 const repetitionConfig = {
     line: {
-        interval: 0.10,  // meters between repetitions - further decreased for maximum kerb repetition density
-        maxModels: 100,  // Reduced from 1500 to prevent excessive memory usage
+        interval: 0.20,  // meters between repetitions - further decreased for maximum kerb repetition density
+        maxModels: 1500,  // Reduced from 1500 to prevent excessive memory usage
         sideOffset: 0,
         config: {
             scale: 1.0,

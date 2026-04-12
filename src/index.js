@@ -444,10 +444,20 @@ $(function () {
         let geometryType = 'point';
         const geomType = geometry ? geometry.getType() : null;
         if (geomType === 'LineString') {
+            // Check if LineString is closed (first and last coordinates are the same)
+            const isClosed = window.models && window.models.isLineStringClosed ? 
+                             window.models.isLineStringClosed(geometry) : false;
+            
             // Check for area tags: area=yes, area:* tags, or tags starting with area:
             const hasAreaTag = tagsObj['area'] === 'yes' ||
                                Object.keys(tagsObj).some(key => key.startsWith('area:'));
-            geometryType = hasAreaTag ? 'area' : 'line';
+            
+            // Treat as area if closed or has area tags
+            geometryType = (isClosed || hasAreaTag) ? 'area' : 'line';
+            
+            if (isClosed) {
+                console.log(`🔗 DEBUG: Closed LineString detected, treating as area`);
+            }
         } else if (geomType === 'Polygon' || geomType === 'MultiPolygon') {
             geometryType = 'area';
         }
@@ -667,10 +677,20 @@ $(function () {
 								let geometryType = 'point';
 								const geomType = geometry ? geometry.getType() : null;
 								if (geomType === 'LineString') {
+									// Check if LineString is closed (first and last coordinates are the same)
+									const isClosed = window.models && window.models.isLineStringClosed ? 
+													 window.models.isLineStringClosed(geometry) : false;
+									
 									// Check for area tags: area=yes, area:* tags, or tags starting with area:
 									const hasAreaTag = tagsObj['area'] === 'yes' ||
 													   Object.keys(tagsObj).some(key => key.startsWith('area:'));
-									geometryType = hasAreaTag ? 'area' : 'line';
+									
+									// Treat as area if closed or has area tags
+									geometryType = (isClosed || hasAreaTag) ? 'area' : 'line';
+									
+									if (isClosed) {
+										console.log(`🔗 DEBUG OSM XML: Closed LineString detected, treating as area`);
+									}
 								} else if (geomType === 'Polygon' || geomType === 'MultiPolygon') {
 									geometryType = 'area';
 								}

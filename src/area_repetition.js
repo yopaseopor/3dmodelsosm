@@ -53,6 +53,14 @@ const areaRepetitionConfigs = [
         description: 'Residential street areas'
     },*/
     {
+        tags: ['area:barrier=kerb'],
+        model: 'i_kerb.jpg',
+        config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] },
+        spacing: 1.0, // 1 meter spacing for area-tagged footways
+        maxModels: 5000,
+        description: 'Area-tagged kerb areas'
+    },
+    {
         tags: ['area:highway=footway', 'footway=crossing'],
         model: 'i_crossing.png',
         config: { scale: 10.0, heightOffset: 0.0, rotation: [0, 0, 0] },
@@ -62,7 +70,7 @@ const areaRepetitionConfigs = [
     },
     {
         tags: ['area:highway=footway'],
-        model: 'i_panot.jpg',
+        model: 'i_llamborda.jpg',
         config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] },
         spacing: 1.0, // 1 meter spacing for area-tagged footways
         maxModels: 5000,
@@ -95,18 +103,19 @@ const areaRepetitionConfigs = [
         spacing: 1, // 2 meter spacing for gardens
         maxModels: 10000,
         description: 'Garden'
-    },
+     },
 
     // Amenity areas
     {
-        tags: ['waterway=stream'],
-        model: 'i_aigua.jpg',
+        tags: ['manhole=drain'],
+        model: 'i_manhole_drain.jpg',
         config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] },
-        spacing: 1, // 2 meter spacing for playgrounds
-        maxModels: 10000,
-        description: 'Stream'
+        spacing: 0.5, // Small spacing for precise coverage
+        maxModels: 1, // Only need one instance for small manholes
+        description: 'Manhole drain - exact polygon coverage'
     },
 
+    
     // Amenity areas
     {
         tags: ['leisure=playground'],
@@ -193,8 +202,8 @@ function generateAreaRepetitions(coordinates, tags, holes = []) {
     const modelFilename = config.model;
     const isImageFile = modelFilename && (modelFilename.toLowerCase().endsWith('.png') || modelFilename.toLowerCase().endsWith('.jpg') || modelFilename.toLowerCase().endsWith('.jpeg'));
 
-    // For image files (textures), return single polygon object instead of grid points
-    if (isImageFile) {
+    // For image files (textures) OR manhole=drain, return single polygon object instead of grid points
+    if (isImageFile || tags['manhole'] === 'drain') {
         if (areaRepetitionDebugConfig.enabled) console.log(`🏞️ Using single polygon texture approach for ${modelFilename}`);
         
         // Calculate texture rotation based on nearby ways
@@ -213,7 +222,7 @@ function generateAreaRepetitions(coordinates, tags, holes = []) {
             type: 'polygon_texture',
             polygonCoordinates: coordinates,
             polygonHoles: holes,
-            model: modelFilename,
+            model: tags['manhole'] === 'drain' ? 'i_manhole_drain.jpg' : modelFilename,
             spacing: config.spacing,
             rotation: textureRotation
         }];
@@ -314,13 +323,15 @@ function applyAreaRepetitions(feature, modelFilename, modelConfig, tags) {
             // Keep all rings for each polygon in the multipolygon
             polygons = geometry.getCoordinates();
         } else if (geometryType === 'LineString') {
-            // Check if it's a closed LineString (represents an area)
-            const lineCoords = geometry.getCoordinates();
-            if (lineCoords.length >= 3 && 
-                lineCoords[0][0] === lineCoords[lineCoords.length - 1][0] && 
-                lineCoords[0][1] === lineCoords[lineCoords.length - 1][1]) {
+            // Check if it's a closed LineString (represents an area) using centralized function
+            const isClosed = window.models && window.models.isLineStringClosed ? 
+                             window.models.isLineStringClosed(geometry) : false;
+            
+            if (isClosed) {
+                const lineCoords = geometry.getCoordinates();
                 polygons = [[lineCoords.slice(0, -1)]]; // Single polygon with only outer ring
                 geometryType = 'Polygon'; // Treat as polygon for processing
+                if (areaRepetitionDebugConfig.enabled) console.log('🏞️ Closed LineString detected, treating as polygon for area repetition');
             } else {
                 if (areaRepetitionDebugConfig.enabled) console.log('🏞️ LineString not closed, skipping area repetition');
                 return;
