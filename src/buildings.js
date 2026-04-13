@@ -209,6 +209,56 @@ function createBuildingEntity(buildingData) {
     }
 }
 
+/**
+ * Helper function to process features in a layer for building extrusion
+ * @param {ol.layer.Layer} layer - Layer to process
+ * @param {Cesium.CustomDataSource} dataSource - Data source to add entities to
+ */
+function processLayerFeatures(layer, dataSource) {
+    const source = layer.getSource();
+    if (source && source.getFeatures) {
+        const features = source.getFeatures();
+        console.log(`🏗️ Processing ${features.length} features in layer for buildings`);
+        
+        features.forEach(feature => {
+            const buildingData = feature.get('extrudedBuilding');
+            if (buildingData) {
+                // Check if entity already exists for this feature
+                if (!buildingEntities.has(feature)) {
+                    const entity = createBuildingEntity(buildingData);
+                    if (entity && dataSource && dataSource.entities) {
+                        dataSource.entities.add(entity);
+                        buildingEntities.set(feature, entity);
+                        console.log(`🏗️ Added building entity for feature`);
+                    }
+                }
+            } else {
+                // Check if this feature should be extruded as a building
+                const tags = {};
+                feature.getKeys().forEach(key => {
+                    if (key !== 'geometry' && key !== 'extrudedBuilding') {
+                        tags[key] = feature.get(key);
+                    }
+                });
+                
+                if (isBuildingFeature(tags)) {
+                    console.log(`🏗️ Found building feature with tags:`, tags);
+                    const buildingOptions = createExtrudedBuilding(feature, tags);
+                    if (buildingOptions) {
+                        feature.set('extrudedBuilding', buildingOptions);
+                        const entity = createBuildingEntity(buildingOptions);
+                        if (entity && dataSource && dataSource.entities) {
+                            dataSource.entities.add(entity);
+                            buildingEntities.set(feature, entity);
+                            console.log(`🏗️ Created and added building entity`);
+                        }
+                    }
+                }
+            }
+        });
+    }
+}
+
 function addBuildingsToScene(ol3d) {
     if (!ol3d || !ol3d.getDataSources) {
         console.warn('OLCesium instance not available or getDataSources not supported');
@@ -239,26 +289,15 @@ function addBuildingsToScene(ol3d) {
 
     // Process all features that have building data
     window.map.getLayers().forEach(layer => {
-        if (layer.get('type') === 'overlay') {
+        // Process overlay layers (existing logic) - check if it's a group layer
+        if (layer.get('type') === 'overlay' && typeof layer.getLayers === 'function') {
             layer.getLayers().forEach(sublayer => {
-                const source = sublayer.getSource();
-                if (source && source.getFeatures) {
-                    const features = source.getFeatures();
-                    features.forEach(feature => {
-                        const buildingData = feature.get('extrudedBuilding');
-                        if (buildingData) {
-                            // Check if entity already exists for this feature
-                            if (!buildingEntities.has(feature)) {
-                                const entity = createBuildingEntity(buildingData);
-                                if (entity) {
-                                    dataSource.entities.add(entity);
-                                    buildingEntities.set(feature, entity);
-                                }
-                            }
-                        }
-                    });
-                }
+                processLayerFeatures(sublayer, dataSource);
             });
+        }
+        // Process GeoJSON layers (new logic)
+        else if (layer instanceof ol.layer.Vector) {
+            processLayerFeatures(layer, dataSource);
         }
     });
 
@@ -463,6 +502,30 @@ window.addEventListener('ol3dInitialized', function(event) {
     addBuildingsToScene(event.detail.ol3d);
 });
 
+/**
+ * Reprocess all layers for buildings (useful when GeoJSON layers are loaded before 3D mode)
+ */
+function reprocessAllLayersForBuildings() {
+    if (!window.map) return;
+    
+    console.log('🏗️ Reprocessing all layers for buildings');
+    window.map.getLayers().forEach(layer => {
+        // Process overlay layers - check if it's a group layer
+        if (layer.get('type') === 'overlay' && typeof layer.getLayers === 'function') {
+            layer.getLayers().forEach(sublayer => {
+                processLayerFeatures(sublayer, null);
+            });
+        }
+        // Process GeoJSON layers
+        else if (layer instanceof ol.layer.Vector) {
+            processLayerFeatures(layer, null);
+        }
+    });
+}
+
+// Export the reprocess function
+window.buildings.reprocessAllLayersForBuildings = reprocessAllLayersForBuildings;
+
 window.addEventListener('ol3dDestroyed', function() {
     console.log('🏗️ 3D mode destroyed, removing buildings from scene');
     removeBuildingsFromScene();
@@ -481,5 +544,6 @@ window.buildings = {
     cleanupBuildingEntities,
     setBuildingsVisible,
     processBuildingFeatures,
-    updateBuildingExtrusion
+    updateBuildingExtrusion,
+    reprocessAllLayersForBuildings
 };
