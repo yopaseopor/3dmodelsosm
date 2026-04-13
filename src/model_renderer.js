@@ -376,9 +376,21 @@ window.modelRenderer = {
         
         // Create model matrix for positioning BEFORE setting on model
         const heightOffset = feature.get('modelHeightOffset') || 0.0;
+        
+        // Get terrain elevation if available
+        let terrainElevation = 0;
+        if (window.terrainManager && window.terrainManager.getElevation) {
+            terrainElevation = window.terrainManager.getElevation(lonLat[0], lonLat[1]);
+        }
+        
+        const totalHeight = heightOffset + terrainElevation;
         let modelMatrix = Cesium.Transforms.eastNorthUpToFixedFrame(
-            Cesium.Cartesian3.fromDegrees(lonLat[0], lonLat[1], heightOffset)
+            Cesium.Cartesian3.fromDegrees(lonLat[0], lonLat[1], totalHeight)
         );
+        
+        if (debugConfig.enabled && terrainElevation > 0) {
+            console.log(`🎯 Model positioned at terrain elevation: ${terrainElevation.toFixed(1)}m + offset: ${heightOffset.toFixed(1)}m = ${totalHeight.toFixed(1)}m`);
+        }
         
         // Apply model rotation if specified
         const modelRotation = feature.get('modelRotation');
@@ -541,9 +553,21 @@ window.modelRenderer = {
         
         // Create model matrix for repetition model - GROUND LEVEL (like footway)
         const repHeightOffset = feature.get(`repetition_${repIndex}_heightOffset`) || 0; // Use stored height offset instead of hardcoded 10
+        
+        // Get terrain elevation if available
+        let repTerrainElevation = 0;
+        if (window.terrainManager && window.terrainManager.getElevation) {
+            repTerrainElevation = window.terrainManager.getElevation(repLonLat[0], repLonLat[1]);
+        }
+        
+        const repTotalHeight = repHeightOffset + repTerrainElevation;
         let repModelMatrix = Cesium.Transforms.eastNorthUpToFixedFrame(
-            Cesium.Cartesian3.fromDegrees(repLonLat[0], repLonLat[1], repHeightOffset)
+            Cesium.Cartesian3.fromDegrees(repLonLat[0], repLonLat[1], repTotalHeight)
         );
+        
+        if (debugConfig.enabled && repTerrainElevation > 0) {
+            console.log(`🚶 Repetition model ${repIndex} positioned at terrain elevation: ${repTerrainElevation.toFixed(1)}m + offset: ${repHeightOffset.toFixed(1)}m = ${repTotalHeight.toFixed(1)}m`);
+        }
         
         // Apply repetition model rotation
         let repModelRotation = null;

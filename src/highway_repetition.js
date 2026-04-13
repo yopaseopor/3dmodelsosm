@@ -60,7 +60,7 @@ const highwayRepetitionConfig = {
     track: {
         interval: 0.40, // meters between models for tracks
         sideOffset: 0, // directly on the track line
-        maxModels: 60 // Reduced from 800
+        maxModels: 800 // Reduced from 800
     },
     
     path: {

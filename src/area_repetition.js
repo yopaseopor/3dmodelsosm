@@ -79,6 +79,16 @@ const areaRepetitionConfigs = [
 
     // Amenity areas
     {
+        tags: ['amenity=motorcycle_parking'],
+        model: 'i_motorcycle_parking.jpg',
+        config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] },
+        spacing: 1, // 3 meter spacing for parking
+        maxModels: 3000,
+        description: 'Motorcycle parking areas'
+    },
+
+    // Amenity areas
+    {
         tags: ['amenity=parking'],
         model: 'i_parking.png',
         config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] },
@@ -111,7 +121,7 @@ const areaRepetitionConfigs = [
         model: 'i_manhole_drain.jpg',
         config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] },
         spacing: 0.5, // Small spacing for precise coverage
-        maxModels: 1, // Only need one instance for small manholes
+        maxModels: 10000, // Only need one instance for small manholes
         description: 'Manhole drain - exact polygon coverage'
     },
 

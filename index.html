@@ -49,6 +49,14 @@
 			  <button id="execute-query-btn" style="display:none; margin-top:5px; width:100%; padding:5px; background:#007cba; color:white; border:none; border-radius:3px; cursor:pointer; font-size:12px;" data-i18n="executeQuery">Execute Query</button>
 			  <button id="clear-search-btn" style="display:none; margin-top:3px; width:100%; padding:3px; background:#666; color:white; border:none; border-radius:3px; cursor:pointer; font-size:12px;" data-i18n="clearButton">Clear</button>
 			</div>
+			<!-- GeoTIFF Terrain Control -->
+			<div style="margin: 10px 0;">
+			  <button id="geotiff-toggle-btn" style="width: 100%; padding: 8px; background: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">
+				🏔️ Terrain Control
+			  </button>
+			  <small style="color: #ccc; display: block; margin-top: 5px; text-align: center;">Press Ctrl+T to toggle</small>
+			</div>
+			
 			<!-- Element Type Filter -->
 			<div class="element-type-filter">
 			  <label data-i18n="nodesCheckbox"><input type="checkbox" class="element-type-checkbox" value="node" checked> Nodes</label>
@@ -126,6 +134,8 @@
 	<!-- Opening Hours Library -->
 	<!-- Opening Hours Library (local copy) -->
 	<script src="src/vendor/opening_hours.min.js"></script>
+	<!-- GeoTIFF Library (local copy) -->
+	<script src="src/vendor/geotiff.min.js"></script>
 
 	<!-- Vector tile styles -->
 	<script src="src/assets/vector-tile-styles.js"></script>
@@ -155,6 +165,8 @@
 	<script src="src/footway_repetition.js"></script>
 	<script src="src/area_repetition.js"></script>
 	<script src="src/buildings.js"></script>
+	<script src="src/geotiff_terrain.js"></script>
+	<script src="src/geotiff_ui.js"></script>
 	<script src="src/taginfo_api.js"></script>
 	<script src="src/key_search.js"></script>
 	<script src="src/value_search.js"></script>
