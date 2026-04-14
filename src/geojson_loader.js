@@ -96,13 +96,13 @@ class GeoJSONLoader {
                 window.map.addLayer(layer);
                 console.log(`📍 GeoJSON layer "${layerName}" added to map`);
                 
-                // Process features for building extrusion if buildings module is available
-                if (window.buildings) {
+                // Process features for building extrusion and area repetition if modules are available
+                if (window.buildings || window.areaRepetition) {
                     setTimeout(() => {
                         const features = layer.getSource().getFeatures();
-                        console.log(`📍 Processing ${features.length} features for building detection`);
+                        console.log(`📍 Processing ${features.length} features for building and area repetition`);
                         
-                        features.forEach(feature => {
+                        features.forEach((feature, index) => {
                             const tags = {};
                             feature.getKeys().forEach(key => {
                                 if (key !== 'geometry' && key !== 'extrudedBuilding') {
@@ -110,20 +110,167 @@ class GeoJSONLoader {
                                 }
                             });
                             
-                            if (window.buildings.isBuildingFeature(tags)) {
-                                console.log(`📍 Found building feature with tags:`, tags);
+                            // Process for building extrusion
+                            if (window.buildings && window.buildings.isBuildingFeature(tags)) {
+                                console.log(`📍 Feature ${index}: Found building feature with tags:`, tags);
                                 const buildingOptions = window.buildings.createExtrudedBuilding(feature, tags);
                                 if (buildingOptions) {
                                     feature.set('extrudedBuilding', buildingOptions);
-                                    console.log(`📍 Created building extrusion for feature`);
+                                    console.log(`📍 Created building extrusion for feature ${index}`);
                                 }
+                            }
+                            
+                            // Get geometry type following the EXACT same logic as the existing system
+                            const geometry = feature.getGeometry();
+                            let geometryType = 'point';
+                            let wayCoordinates = null;
+                            let nodeIndex = null;
+                            
+                            if (geometry) {
+                                const geomType = geometry.getType();
+                                
+                                if (geomType === 'LineString') {
+                                    // Extract way coordinates for bearing calculation (EXACT same as overlays)
+                                    const coordinates = geometry.getCoordinates();
+                                    wayCoordinates = coordinates.map(coord => 
+                                        ol.proj.transform(coord, window.map.getView().getProjection(), 'EPSG:4326')
+                                    );
+                                    nodeIndex = Math.floor(wayCoordinates.length / 2);
+                                    
+                                    // Check if LineString is closed (EXACT same as overlays)
+                                    const isClosed = window.models && window.models.isLineStringClosed ? 
+                                                   window.models.isLineStringClosed(geometry) : false;
+                                    
+                                    // Check for area tags: area=yes, area:* tags, or tags starting with area: (EXACT same as overlays)
+                                    const hasAreaTag = tags['area'] === 'yes' ||
+                                                       Object.keys(tags).some(key => key.startsWith('area:'));
+                                    
+                                    // Treat as area if closed or has area tags (EXACT same as overlays)
+                                    geometryType = (isClosed || hasAreaTag) ? 'area' : 'line';
+                                    
+                                    if (isClosed) {
+                                        console.log(`Feature ${index}: Closed LineString detected, treating as area`);
+                                    }
+                                } else if (geomType === 'MultiLineString') {
+                                    geometryType = 'line';
+                                } else if (geomType === 'Polygon' || geomType === 'MultiPolygon') {
+                                    geometryType = 'area';
+                                }
+                            }
+
+                            if (geometryType === 'area') {
+                                console.log(`Feature ${index}: Found area feature with geometry ${geometry?.getType()}, tags:`, tags);
+                            }
+
+                            console.log(`Feature ${index}: Processing ${geometryType} feature with tags:`, tags);
+
+                            // Check if the tags match any model mapping (EXACT same approach as existing system)
+                            const modelMapping = window.models ? window.models.getModelForTags(tags, wayCoordinates, nodeIndex, geometryType) : null;
+                            if (modelMapping) {
+                                console.log(`Feature ${index}: SUCCESS: Found model mapping for ${geometryType} feature:`, modelMapping);
+                                const modelFilename = modelMapping.model;
+                                const modelConfig = modelMapping.config;
+
+                                // Set the model property for ol-cesium to use - EXACT same as existing system
+                                const modelUrl = `/3dmodelsosm/src/models/${modelFilename}`;
+                                const modelOptions = {
+                                    uri: modelUrl,
+                                    scale: modelConfig ? modelConfig.scale : 1.0,
+                                    heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+                                };
+
+                                feature.set('model', modelOptions);
+
+                                // Set additional model configuration for positioning (EXACT same as existing system)
+                                if (modelConfig) {
+                                    feature.set('modelHeightOffset', modelConfig.heightOffset + 10);
+                                    feature.set('modelRotation', modelConfig.rotation);
+                                } else {
+                                    feature.set('modelHeightOffset', 10);
+                                }
+
+                                console.log(`Feature ${index}: SUCCESS: Assigned 3D model ${modelFilename} to GeoJSON feature`);
+
+                                // Apply model repetitions for lines and areas (EXACT same logic as existing system)
+                                if (modelMapping.geometryType !== 'point' && window.modelRepetition) {
+                                    console.log(`Feature ${index}: Applying model repetitions for ${modelMapping.geometryType} feature`);
+                                    
+                                    if (modelMapping.geometryType === 'line' && window.highwayRepetition) {
+                                        // Handle highway lines (EXACT same as existing system)
+                                        const highway = tags.highway;
+                                        const waterway = tags.waterway;
+                                        
+                                        if (highway && highway !== 'footway' && highway !== 'path' && highway !== 'pedestrian') {
+                                            console.log(`Feature ${index}: Applying repetitions to highway ${highway} feature`);
+                                            try {
+                                                window.highwayRepetition.applyHighwayRepetitions(feature, modelFilename, modelConfig, highway);
+                                            } catch (error) {
+                                                console.error(`Feature ${index}: Error applying repetitions to highway ${highway} feature:`, error);
+                                                window.modelRepetition.applyModelRepetitions(feature, modelFilename, modelConfig, modelMapping.geometryType);
+                                            }
+                                        } else if (highway === 'footway' || highway === 'path' || highway === 'pedestrian') {
+                                            // Handle footway lines (EXACT same as existing system)
+                                            if (window.footwayRepetition) {
+                                                console.log(`Feature ${index}: Applying repetitions to footway ${highway} feature`);
+                                                try {
+                                                    window.footwayRepetition.applyFootwayRepetitions(feature, modelFilename, modelConfig, highway);
+                                                } catch (error) {
+                                                    console.error(`Feature ${index}: Error applying repetitions to footway ${highway} feature:`, error);
+                                                    window.modelRepetition.applyModelRepetitions(feature, modelFilename, modelConfig, modelMapping.geometryType);
+                                                }
+                                            }
+                                        } else if (waterway === 'drain') {
+                                            // Handle waterway drain lines
+                                            console.log(`Feature ${index}: Applying repetitions to waterway ${waterway} feature`);
+                                            try {
+                                                window.modelRepetition.applyModelRepetitions(feature, modelFilename, modelConfig, modelMapping.geometryType);
+                                            } catch (error) {
+                                                console.error(`Feature ${index}: Error applying repetitions to waterway ${waterway} feature:`, error);
+                                            }
+                                        }
+                                    } else if (modelMapping.geometryType === 'area' && window.areaRepetition) {
+                                        // Handle area repetitions (EXACT same as existing system)
+                                        const tags = feature.getProperties();
+                                        console.log(`Feature ${index}: Applying area repetitions to feature with tags:`, tags);
+                                        try {
+                                            // Extract area type from tags (EXACT same as existing system)
+                                            const areaType = tags.highway || tags.amenity || tags.landuse || 'unknown';
+                                            window.areaRepetition.applyAreaRepetitions(feature, modelFilename, modelConfig, tags);
+                                        } catch (error) {
+                                            console.error(`Feature ${index}: Error applying area repetitions:`, error);
+                                            window.modelRepetition.applyModelRepetitions(feature, modelFilename, modelConfig, modelMapping.geometryType);
+                                        }
+                                    } else {
+                                        // Fallback to old system (EXACT same as existing system)
+                                        window.modelRepetition.applyModelRepetitions(feature, modelFilename, modelConfig, modelMapping.geometryType);
+                                    }
+                                }
+                            } else {
+                                console.log(`Feature ${index}: No model mapping found for tags:`, tags);
                             }
                         });
                         
-                        // If we're in 3D mode, immediately add buildings to scene
+                        // If we're in 3D mode, immediately add to scene
                         if (window.ol3d && window.ol3d.getCesiumScene) {
-                            console.log(`📍 3D mode active, triggering building scene update`);
-                            window.buildings.addBuildingsToScene(window.ol3d);
+                            console.log(`📍 3D mode active, triggering model renderer update`);
+                            
+                            // Trigger model renderer to process all repetitions (buildings and area textures)
+                            if (window.modelRenderer) {
+                                window.modelRenderer.addAllModels();
+                            }
+                            
+                            // Also trigger buildings processing to catch any building entities
+                            if (window.buildings) {
+                                window.buildings.addBuildingsToScene(window.ol3d);
+                            }
+                            
+                            // Trigger area repetition processing for any pending area features
+                            if (window.areaRepetition) {
+                                console.log(`📍 Triggering area repetition processing`);
+                                // The area repetition data is already stored on features from the loading process
+                                // So we just need to trigger the model renderer to process them
+                                window.modelRenderer.addAllModels();
+                            }
                         }
                     }, 100);
                 }

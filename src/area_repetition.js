@@ -434,6 +434,7 @@ function applyAreaRepetitions(feature, modelFilename, modelConfig, tags) {
 window.areaRepetition = {
     applyAreaRepetitions: applyAreaRepetitions,
     generateAreaRepetitions: generateAreaRepetitions,
-    isPointInPolygon: isPointInPolygon
+    isPointInPolygon: isPointInPolygon,
+    getAreaRepetitionConfig: getAreaRepetitionConfig
 };
 

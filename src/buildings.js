@@ -174,10 +174,46 @@ function createExtrudedBuilding(feature, tags) {
  */
 function createBuildingEntity(buildingData) {
     try {
+        console.log(`🏗️ createBuildingEntity called with:`, buildingData);
         const { positions, height, color, tags } = buildingData;
+        
+        if (!positions || positions.length === 0) {
+            console.warn(`🏗️ No positions provided for building entity`);
+            return null;
+        }
+        
+        if (!height || height <= 0) {
+            console.warn(`🏗️ Invalid height for building entity:`, height);
+            return null;
+        }
+
+        console.log(`🏗️ Creating entity with ${positions.length} positions, height: ${height}m, color:`, color);
 
         // Create polygon hierarchy
         const hierarchy = new Cesium.PolygonHierarchy(positions);
+
+        // Create material with better appearance and texture support
+        let material;
+        
+        // Check if texture is specified in tags
+        if (tags.texture || tags.building_texture || tags.material) {
+            const textureUrl = tags.texture || tags.building_texture || tags.material;
+            console.log(`🏗️ Using texture for building:`, textureUrl);
+            
+            material = new Cesium.Material({
+                fabric: {
+                    type: 'Image',
+                    uniforms: {
+                        image: textureUrl,
+                        color: color
+                    }
+                }
+            });
+        } else {
+            // Use solid color material - ensure color is properly applied
+            console.log(`🏗️ Using solid color for building:`, color);
+            material = color; // Use color directly as material
+        }
 
         // Create the entity
         const entity = new Cesium.Entity({
@@ -185,12 +221,13 @@ function createBuildingEntity(buildingData) {
                 hierarchy: hierarchy,
                 extrudedHeight: height,
                 height: 0, // Base height (ground level)
-                material: color, // Remove alpha for full opacity
+                material: material,
                 outline: true,
-                outlineColor: Cesium.Color.RED, // Make outline more visible
-                outlineWidth: 2.0,
-                // Disable shadows and lighting for better performance
-                shadows: Cesium.ShadowMode.DISABLED
+                outlineColor: Cesium.Color.BLACK, // Black outline for better visibility
+                outlineWidth: 1.0,
+                // Enable proper lighting and shadows for better appearance
+                shadows: Cesium.ShadowMode.ENABLED,
+                enableLighting: true
             },
             // Add custom properties for identification
             properties: {
@@ -220,17 +257,22 @@ function processLayerFeatures(layer, dataSource) {
         const features = source.getFeatures();
         console.log(`🏗️ Processing ${features.length} features in layer for buildings`);
         
-        features.forEach(feature => {
+        features.forEach((feature, index) => {
             const buildingData = feature.get('extrudedBuilding');
             if (buildingData) {
                 // Check if entity already exists for this feature
                 if (!buildingEntities.has(feature)) {
+                    console.log(`🏗️ Feature ${index}: Found existing building data, creating entity`);
                     const entity = createBuildingEntity(buildingData);
                     if (entity && dataSource && dataSource.entities) {
                         dataSource.entities.add(entity);
                         buildingEntities.set(feature, entity);
-                        console.log(`🏗️ Added building entity for feature`);
+                        console.log(`🏗️ Added building entity for feature ${index}`);
+                    } else {
+                        console.warn(`🏗️ Failed to create entity for feature ${index}:`, entity);
                     }
+                } else {
+                    console.log(`🏗️ Feature ${index}: Entity already exists`);
                 }
             } else {
                 // Check if this feature should be extruded as a building
@@ -241,18 +283,30 @@ function processLayerFeatures(layer, dataSource) {
                     }
                 });
                 
-                if (isBuildingFeature(tags)) {
-                    console.log(`🏗️ Found building feature with tags:`, tags);
+                console.log(`🏗️ Feature ${index} tags:`, tags);
+                const isBuilding = isBuildingFeature(tags);
+                console.log(`🏗️ Feature ${index} isBuilding:`, isBuilding);
+                
+                if (isBuilding) {
+                    console.log(`🏗️ Feature ${index}: Found building feature with tags:`, tags);
                     const buildingOptions = createExtrudedBuilding(feature, tags);
+                    console.log(`🏗️ Feature ${index}: Created building options:`, buildingOptions);
                     if (buildingOptions) {
                         feature.set('extrudedBuilding', buildingOptions);
                         const entity = createBuildingEntity(buildingOptions);
+                        console.log(`🏗️ Feature ${index}: Created entity:`, entity);
                         if (entity && dataSource && dataSource.entities) {
                             dataSource.entities.add(entity);
                             buildingEntities.set(feature, entity);
-                            console.log(`🏗️ Created and added building entity`);
+                            console.log(`🏗️ Created and added building entity for feature ${index}`);
+                        } else {
+                            console.warn(`🏗️ Failed to add entity for feature ${index}:`, { entity, dataSource, entities: dataSource?.entities });
                         }
+                    } else {
+                        console.warn(`🏗️ Failed to create building options for feature ${index}`);
                     }
+                } else {
+                    console.log(`🏗️ Feature ${index}: Not a building, skipping`);
                 }
             }
         });
