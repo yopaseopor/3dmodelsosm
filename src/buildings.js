@@ -6,6 +6,7 @@
 // Global storage for building entities
 let buildingEntities = new Map(); // feature -> cesium entity
 let ol3dInstance = null;
+window.buildings = window.buildings || {};
 
 /**
  * Check if a feature represents a building
@@ -576,9 +577,6 @@ function reprocessAllLayersForBuildings() {
         }
     });
 }
-
-// Export the reprocess function
-window.buildings.reprocessAllLayersForBuildings = reprocessAllLayersForBuildings;
 
 window.addEventListener('ol3dDestroyed', function() {
     console.log('🏗️ 3D mode destroyed, removing buildings from scene');

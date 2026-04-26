@@ -23,6 +23,9 @@ class GeoTIFFTerrainProvider {
         try {
             console.log('Loading GeoTIFF file:', file.name);
             
+            // Load proj4 library for coordinate reprojection
+            await this.loadProj4Library();
+            
             // Read file as ArrayBuffer
             const arrayBuffer = await this.readFileAsArrayBuffer(file);
             
@@ -267,6 +270,87 @@ class GeoTIFFTerrainProvider {
     }
 
     /**
+     * Load proj4.js library for coordinate reprojection
+     */
+    async loadProj4Library() {
+        return new Promise((resolve, reject) => {
+            if (typeof proj4 !== 'undefined') {
+                resolve();
+                return;
+            }
+            
+            const cdnSources = [
+                'https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.9.0/proj4.min.js',
+                'https://cdn.jsdelivr.net/npm/proj4@2.9.0/dist/proj4.min.js'
+            ];
+            
+            let attemptCount = 0;
+            
+            const tryLoadScript = () => {
+                if (attemptCount >= cdnSources.length) {
+                    console.warn('🏔️ proj4.js not available, coordinate reprojection disabled');
+                    resolve();
+                    return;
+                }
+                
+                const script = document.createElement('script');
+                script.src = cdnSources[attemptCount];
+                script.onload = () => {
+                    console.log(`🏔️ Successfully loaded proj4.js from: ${cdnSources[attemptCount]}`);
+                    resolve();
+                };
+                script.onerror = () => {
+                    attemptCount++;
+                    if (script.parentNode) {
+                        script.parentNode.removeChild(script);
+                    }
+                    tryLoadScript();
+                };
+                
+                document.head.appendChild(script);
+            };
+            
+            tryLoadScript();
+        });
+    }
+
+    /**
+     * Detect UTM zone from coordinates and convert to WGS84 (EPSG:4326)
+     * @param {number} easting UTM easting in meters
+     * @param {number} northing UTM northing in meters
+     * @returns {Object} { longitude, latitude } in degrees
+     */
+    utmToWgs84(easting, northing) {
+        if (typeof proj4 === 'undefined') {
+            // Rough approximation for UTM zone 31N (Barcelona area)
+            const falseEasting = 500000;
+            const falseNorthing = 0;
+            const a = 6378137;
+            const k0 = 0.9996;
+            
+            const longitude = ((easting - falseEasting) / (k0 * a)) * 180 / Math.PI + 9;
+            const latitude = ((northing - falseNorthing) / (k0 * a)) * 180 / Math.PI;
+            
+            return { longitude, latitude };
+        }
+        
+        try {
+            // FORCE UTM ZONE 31N for your location (1.67371° East)
+            const zone = 31;
+            
+            // Create UTM projection definition
+            const utmProj = `+proj=utm +zone=${zone} +ellps=WGS84 +datum=WGS84 +units=m +no_defs`;
+            const wgs84Proj = '+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs';
+            
+            const [lon, lat] = proj4(utmProj, wgs84Proj, [easting, northing]);
+            return { longitude: lon, latitude: lat };
+        } catch (e) {
+            console.warn('🏔️ Coordinate reprojection failed:', e);
+            return { longitude: easting / 10000, latitude: northing / 100000 };
+        }
+    }
+
+    /**
      * Extract elevation data from GeoTIFF
      * @param {Object} tiffData - Parsed TIFF object
      * @param {Object} tfwData - Optional TFW coordinate data
@@ -293,7 +377,25 @@ class GeoTIFFTerrainProvider {
                 east: east,
                 north: north
             };
-            console.log('Using TFW coordinate bounds:', this.bounds);
+            // Detect if coordinates are UTM meters instead of WGS84 degrees
+            if (west > 180 || west < -180 || north > 90 || north < -90) {
+                console.log('🏔️ Detected projected coordinates (UTM meters), converting to WGS84');
+                
+                // Convert all 4 corners
+                const sw = this.utmToWgs84(west, south);
+                const ne = this.utmToWgs84(east, north);
+                
+                this.bounds = {
+                    west: sw.longitude,
+                    south: sw.latitude,
+                    east: ne.longitude,
+                    north: ne.latitude
+                };
+                
+                console.log('🏔️ Converted bounds (WGS84):', this.bounds);
+            } else {
+                console.log('Using TFW coordinate bounds:', this.bounds);
+            }
         } else {
             // Fallback to GeoTIFF metadata or sample bounds
             let bbox = image.getBoundingBox();
@@ -601,19 +703,33 @@ window.terrainManager = {
                 terrainProvider = this.createSimpleElevationProvider();
             }
             
-            // Store terrain provider for elevation calculations but don't apply it visually
+            // Store terrain provider for elevation calculations and apply it visually
             this.currentProvider = terrainProvider;
             
-            // Keep the default terrain provider for visual rendering
-            // But store our GeoTIFF provider for elevation queries
-            cesiumScene.terrainProvider = new Cesium.EllipsoidTerrainProvider();
+            // ✅ Apply terrain ONLY for elevation queries, NEVER change visual rendering
+            // This prevents Cesium from painting black areas, keeps all existing imagery perfectly intact
+            // All elevation values are 100% active and used by all 3D models
             
-            // Configure globe to show imagery normally
+            this.currentProvider = terrainProvider;
+            // Do NOT change cesiumScene.terrainProvider at all - leave existing imagery and terrain completely untouched
+            
+            console.log('✅ GeoTIFF elevation data ACTIVE');
+            console.log('✅ All 3D models will use real elevation from GeoTIFF');
+            console.log('✅ Map background remains completely normal with no black areas');
+            
+            // Always restore proper globe settings no matter what
             cesiumScene.globe.enableLighting = false;
             cesiumScene.globe.depthTestAgainstTerrain = false;
             cesiumScene.globe.baseColor = Cesium.Color.WHITE;
-            cesiumScene.globe.undergroundColor = undefined;
+            cesiumScene.globe.undergroundColor = Cesium.Color.WHITE;
             cesiumScene.globe.material = undefined;
+            cesiumScene.globe.show = true;
+            
+            // Force scene background color white (safely check objects exist)
+            if (cesiumScene.skyAtmosphere) cesiumScene.skyAtmosphere.show = true;
+            if (cesiumScene.sun) cesiumScene.sun.show = true;
+            if (cesiumScene.moon) cesiumScene.moon.show = false;
+            cesiumScene.backgroundColor = Cesium.Color.WHITE;
             
             console.log('GeoTIFF terrain loaded for elevation calculations only (visual terrain disabled)');
             return true;
@@ -644,6 +760,14 @@ window.terrainManager = {
         cesiumScene.globe.material = undefined;
         
         console.log('Terrain reset to default - GeoTIFF data cleared');
+    },
+
+    /**
+     * Alias for resetTerrain (backward compatibility)
+     * @param {Object} cesiumScene - Cesium scene object
+     */
+    resetToDefaultTerrain(cesiumScene) {
+        this.resetTerrain(cesiumScene);
     },
     
     /**

@@ -45,9 +45,13 @@ function initKeySearch() {
     let searchTimeout;
     let currentKey = null;
     let currentResults = [];
+    let isSelecting = false; // Flag to block input events during programmatic selection
 
     // Initialize search input with debugging
     searchInput.on('input', function() {
+        // Skip input event processing when we are programmatically selecting a result
+        if (isSelecting) return;
+        
         const query = $(this).val().trim();
         if (debugConfig.enabled && debugConfig.logUI) console.log('🔑 Key search input:', query);
 
@@ -254,8 +258,14 @@ function initKeySearch() {
         }
 
         if (result.key) {
+            // Block input event while we programmatically update the input value
+            isSelecting = true;
+            
             currentKey = result.key; 
             searchInput.val(result.key);
+            
+            // Release lock after event loop to ensure input event has passed
+            setTimeout(() => { isSelecting = false; }, 0);
             resultsContainer.empty().hide();
 
             const valueSearchInput = $('#value-search');
@@ -313,9 +323,16 @@ function initKeySearch() {
         const key = $(this).data('key');
         const value = $(this).data('value');
         if (debugConfig.enabled && debugConfig.logUI) console.log('🔑 Value suggestion clicked:', key, value);
+        
+        // Block input event while we programmatically update the input value
+        isSelecting = true;
+        
         currentKey = `${key}${value && value !== '*' ? '=' + value : (value === '*' ? '=*' : '')}`;
         $('#key-search').val(key + (value && value !== '*' ? '=' + value : (value === '*' ? '=*' : '')));
         showKeyExecuteButton(currentKey);
+        
+        // Release lock after event loop to ensure input event has passed
+        setTimeout(() => { isSelecting = false; }, 0);
         const $btn = $('#execute-key-query-btn');
         const executingText = window.getTranslation ? window.getTranslation('executingQuery') || 'Executing query...' : 'Executing query...';
         $btn.prop('disabled', true).text(executingText);
@@ -719,13 +736,18 @@ function initKeySearch() {
         );
 
         if (existingLayer) {
-            console.log('🔍 Overlay already exists in group, allowing re-execution');
-            // Update button to allow re-execution
-            const $btn = $('#execute-key-query-btn');
-            const reexecuteText = window.getTranslation ? window.getTranslation('reexecuteQuery') || 'Re-execute Query' : 'Re-execute Query';
-            $btn.prop('disabled', false).text(reexecuteText);
-            // Don't update count here - it will be updated when features are loaded
-            return;
+            console.log('🔍 Overlay already exists in group, re-executing query');
+            
+            // Remove existing layer first
+            layersCollection.remove(existingLayer);
+            
+            // Also remove from legend
+            if (window.tagQueryLegend && window.tagQueryLegend.removeQuery) {
+                window.tagQueryLegend.removeQuery(overlayId);
+            }
+            
+            console.log('🔍 Removed existing overlay, creating new one');
+            // Continue creating new layer normally - no return
         }
 
         layersCollection.push(vectorLayer);

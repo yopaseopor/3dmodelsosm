@@ -406,8 +406,9 @@ function processQueryResults(allFeatures, key, value) {
                         const polygonCoords = coordinates[0].map(coord => 
                             ol.proj.transform(coord, window.map.getView().getProjection(), 'EPSG:4326')
                         );
+                        const featureTags = feature.getProperties ? feature.getProperties() : tagsObj;
                         const textureRotation = window.modelRenderer ? 
-                            window.modelRenderer.calculateTextureRotation(polygonCoords, modelFilename) : 
+                            window.modelRenderer.calculateTextureRotation(polygonCoords, modelFilename, featureTags) : 
                             0; // No rotation if modelRenderer not available
 
                         if (debugConfig.enabled && debugConfig.logAreaProcessing) console.log(`🎨 Calculated texture rotation for value search: ${(textureRotation * 180 / Math.PI).toFixed(1)}°`);

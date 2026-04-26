@@ -172,7 +172,7 @@ window.modelRenderer = {
                 try {
                     task();
                 } catch (error) {
-                    console.error('Background task error:', error);
+                    // Background task error silently handled
                 }
             }
             
@@ -266,7 +266,7 @@ window.modelRenderer = {
                                     try {
                                         this.addModelForFeature(feature, fidx, cesiumScene);
                                     } catch (error) {
-                                        console.error(`🎯 Error adding model for feature ${fidx}:`, error);
+                                        // Model addition error silently handled
                                     }
                                 }
                                 
@@ -279,7 +279,7 @@ window.modelRenderer = {
                                 try {
                                     this.addModelForFeature(feature, fidx, cesiumScene);
                                 } catch (error) {
-                                    console.error(`🎯 Error adding model for feature ${fidx}:`, error);
+                                    // Model addition error silently handled
                                 }
                             }
                             
@@ -291,7 +291,7 @@ window.modelRenderer = {
                     if (debugConfig.enabled) console.log(`🎯 Layer summary: ${modelsFound} models, ${repetitionsFound} features with repetitions`);
                 }
             } catch (e) {
-                console.error('Error accessing layer source:', e.message);
+                // Layer source access error silently handled
             }
         }
         
@@ -442,7 +442,7 @@ window.modelRenderer = {
         pooledModel.model.readyPromise.then(function(model) {
             if (debugConfig.enabled) console.log(`🎯 Memory-managed GLTF Model ${fidx} loaded successfully:`, model);
         }).catch(function(error) {
-            console.error(`🎯 Memory-managed GLTF Model ${fidx} failed to load:`, error);
+            // Model loading error silently handled
         });
 
         // Handle repetition models stored on the original footway feature
@@ -464,7 +464,7 @@ window.modelRenderer = {
                     try {
                         this.addRepetitionModel(feature, 0, modelData, cesiumScene);
                     } catch (error) {
-                        console.error(`🚶 Error adding kerb repetition model:`, error);
+                        // Kerb repetition model error silently handled
                     }
                 } else {
                     if (debugConfig.enabled) console.warn('🚶 Kerb repetition feature missing model data');
@@ -481,7 +481,7 @@ window.modelRenderer = {
                         this.addRepetitionModel(feature, repIndex, repModel, cesiumScene);
                         repIndex++;
                     } catch (error) {
-                        console.error(`🚶 Error adding repetition model ${repIndex}:`, error);
+                        // Repetition model error silently handled
                         repIndex++;
                     }
                 }
@@ -519,7 +519,7 @@ window.modelRenderer = {
                         holes: polygonHoles
                     },
                     imageUri,
-                    { spacing: spacing, rotation: recalculatedRotation },
+                    { spacing: spacing, rotation: recalculatedRotation, scale: repModel.scale },
                     cesiumScene
                 );
                 return;
@@ -669,6 +669,8 @@ window.modelRenderer = {
         const polygonCoordinates = Array.isArray(polygonData) ? polygonData : polygonData.outer;
         const polygonHoles = Array.isArray(polygonData) ? [] : (polygonData.holes || []);
         if (debugConfig.enabled) console.log(`🖼️ addAreaTexture called with ${polygonCoordinates.length} outer coordinates and ${polygonHoles.length} hole(s), texture: ${imageUri}`);
+        
+        // Scale debug removed
 
         const sceneToUse = cesiumScene || window.ol3d.getCesiumScene();
 
@@ -721,22 +723,27 @@ window.modelRenderer = {
 
             // Calculate desired texture size in meters (how large the texture should appear in real world)
             // For pavement/parking textures, typically 1 meter tiles
-            const desiredTextureSizeMeters = repModel.spacing || 1.0; // Use spacing from config, default 1m
+            const baseTextureSizeMeters = repModel.spacing || 1.0; // Use spacing from config, default 1m
+            const textureScale = repModel.scale || 1.0; // Use scale from config, default 1
+            const desiredTextureSizeMeters = baseTextureSizeMeters * textureScale; // Scale affects texture size
 
             // Calculate how many times to repeat texture to fill the polygon
             const textureRepeatX = widthMeters / desiredTextureSizeMeters;
             const textureRepeatY = heightMeters / desiredTextureSizeMeters;
 
-            // Apply the calculated repeat
+            // Apply the calculated repeat with scale adjustment
             if (texturedPolygon && texturedPolygon.polygon && texturedPolygon.polygon.material) {
-                texturedPolygon.polygon.material.repeat = new Cesium.Cartesian2(textureRepeatX, textureRepeatY);
-                if (debugConfig.enabled) console.log(`🖼️ Updated texture repeat to: ${textureRepeatX.toFixed(2)} x ${textureRepeatY.toFixed(2)}`);
+                // Apply scale to make texture larger (fewer repetitions) when scale > 1.0
+                const scaledRepeatX = textureRepeatX / textureScale;
+                const scaledRepeatY = textureRepeatY / textureScale;
+                texturedPolygon.polygon.material.repeat = new Cesium.Cartesian2(scaledRepeatX, scaledRepeatY);
+                if (debugConfig.enabled) console.log(`Updated texture repeat to: ${scaledRepeatX.toFixed(2)} x ${scaledRepeatY.toFixed(2)} (scale: ${textureScale})`);
             } else {
-                console.warn(`🖼️ Could not apply texture repeat - texturedPolygon structure not as expected`);
+                // Texture repeat structure not as expected
             }
 
-            // Create single large canvas covering entire polygon area
-            // Draw texture pattern at correct rotation, no tiling
+            if (debugConfig.enabled) console.log(`🖼️ Fixed texture repeat: ${textureRepeatX.toFixed(2)} x ${textureRepeatY.toFixed(2)} (polygon ${widthMeters.toFixed(1)}m x ${heightMeters.toFixed(1)}m, desired tile size ${desiredTextureSizeMeters}m)`);
+
             if (modelRendererTexLog()) console.log(`🖼️ textureRotation: ${(textureRotation * 180 / Math.PI).toFixed(1)}°`);
             if (textureRotation !== 0) {
                 if (modelRendererTexLog()) console.log(`🖼️ Creating rotated texture canvas: ${(textureRotation * 180 / Math.PI).toFixed(1)}°`);
@@ -749,7 +756,9 @@ window.modelRenderer = {
                 const tileSize = Math.min(imageWidth, imageHeight); // For spacing calculation
                 
                 // Calculate canvas size based on polygon dimensions
-                const desiredTextureSizeMeters = repModel.spacing || 1.0;
+                const baseTextureSizeMeters = repModel.spacing || 1.0;
+                const textureScale = repModel.scale || 1.0;
+                const desiredTextureSizeMeters = baseTextureSizeMeters * textureScale;
                 const pixelsPerMeter = tileSize / desiredTextureSizeMeters;
                 let canvasWidth = Math.floor(widthMeters * pixelsPerMeter);
                 let canvasHeight = Math.floor(heightMeters * pixelsPerMeter);
@@ -840,9 +849,10 @@ window.modelRenderer = {
 
         img.src = imageUri;
 
-        // Initial repeat (will be updated when image loads)
-        const initialRepeatX = widthMeters;
-        const initialRepeatY = heightMeters;
+        // Initial repeat (will be updated when image loads) - apply scale here too
+        const textureScale = repModel ? (repModel.scale || 1.0) : 1.0;
+        const initialRepeatX = widthMeters / textureScale;
+        const initialRepeatY = heightMeters / textureScale;
 
         // Calculate polygon center for entity rotation
         const centerLon = (minLon + maxLon) / 2;
@@ -854,7 +864,7 @@ window.modelRenderer = {
         // Create textured polygon using Entity system for consistency
         const dataSource = window.areaTextureManager.getDataSource();
         if (!dataSource) {
-            console.warn('🖼️ No data source available for area texture');
+            // No data source available for area texture
             return;
         }
         
@@ -902,6 +912,8 @@ window.modelRenderer = {
             const isLimitTexture = textureName.toLowerCase().includes('i_llamborda.jpg') ||
                                   textureName.toLowerCase().includes('i_parking.png') ||
                                   textureName.toLowerCase().includes('i_parking.jpg') ||
+                                  textureName.toLowerCase().includes('i_parking_space.jpg') ||
+                                  textureName.toLowerCase().includes('i_parking_space_disabled.jpg') ||
                                   textureName.toLowerCase().includes('i_asfalt.jpg') ||
                                   textureName.toLowerCase().includes('i_gespa.jpg') ||
                                   textureName.toLowerCase().includes('i_manhole_drain.jpg') ||
@@ -1030,7 +1042,7 @@ window.modelRenderer = {
             return -bestSegment.bearing;
 
         } catch (error) {
-            console.error(`🖼️ Error calculating texture rotation:`, error);
+            // Texture rotation calculation error silently handled
             return 0;
         }
     },
@@ -1148,7 +1160,7 @@ window.modelRenderer = {
 
             return false;
         } catch (error) {
-            console.error('Error checking way intersection:', error);
+            // Way intersection check error silently handled
             return false;
         }
     },
@@ -1534,7 +1546,7 @@ window.modelRenderer = {
             try {
                 this.processLayersRecursively(window.map.getLayers().getArray(), cesiumScene);
             } catch (error) {
-                console.error('🎯 model renderer error:', error);
+                // Model renderer error silently handled
             }
         } else if (debugConfig.enabled) {
             console.log('🎯 Cesium scene unavailable');

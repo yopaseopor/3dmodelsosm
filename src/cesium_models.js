@@ -52,157 +52,177 @@ class AreaTextureManager {
         if (cesiumModelsVerbose()) console.log(`🎨 Applying area texture ${modelFilename}`);
 
         try {
-            let coordinates;
-            const geometry = feature.getGeometry();
+            if (cesiumModelsVerbose()) console.log(`🎨 Starting area texture creation for feature`, feature.getId ? feature.getId() : 'unknown', 'with model:', modelFilename);
 
-            if (geometry && geometry.getType && geometry.getType() === 'Polygon') {
-                coordinates = geometry.getCoordinates();
-                if (cesiumModelsVerbose()) console.log(`🎨 Polygon rings:`, coordinates.length);
-            } else if (geometry && geometry.getType && geometry.getType() === 'LineString') {
-                // For area-tagged ways, create a simple polygon from the linestring
-                const lineCoords = geometry.getCoordinates();
-                coordinates = [lineCoords]; // Single ring
-                if (cesiumModelsVerbose()) console.log(`🎨 LineString → polygon ring`);
-            } else if (geometry && geometry.coordinates) {
-                // Fallback for GeoJSON-style geometry
-                coordinates = geometry.coordinates;
-                if (cesiumModelsVerbose()) console.log(`🎨 GeoJSON coordinates`);
-            } else if (properties.geometry && properties.geometry.coordinates) {
-                // Last resort - use geometry from properties
-                coordinates = properties.geometry.coordinates;
-                if (cesiumModelsVerbose()) console.log(`🎨 geometry property coordinates`);
-            } else {
-                console.warn(`🎨 No coordinates found for area texture`);
-                coordinates = null;
+            const geometry = feature.getGeometry();
+            const projection = window.map && window.map.getView && window.map.getView().getProjection ?
+                window.map.getView().getProjection() : 'EPSG:4326';
+
+            // Normalize ring coordinates helper
+            const normalizeRing = ring => {
+                if (!Array.isArray(ring)) return [];
+                return ring.map(coord => Array.isArray(coord) && coord.length >= 2 ? [coord[0], coord[1]] : null)
+                    .filter(coord => coord && typeof coord[0] === 'number' && typeof coord[1] === 'number');
+            };
+
+            // Extract polygon coordinates from various geometry types
+            const extractPolygonCoordinates = geom => {
+                if (!geom || !geom.getType) return null;
+                const geomType = geom.getType();
+
+                try {
+                    if (geomType === 'Polygon') {
+                        return [geom.getCoordinates()];
+                    }
+                    if (geomType === 'MultiPolygon') {
+                        return geom.getCoordinates();
+                    }
+                    if (geomType === 'LineString') {
+                        return [geom.getCoordinates()];
+                    }
+                    if (geomType === 'GeometryCollection' && geom.getGeometries) {
+                        const geometries = geom.getGeometries();
+                        for (const subGeom of geometries) {
+                            const result = extractPolygonCoordinates(subGeom);
+                            if (result) return result;
+                        }
+                    }
+                } catch (e) {
+                    if (cesiumModelsVerbose()) console.warn(`🎨 Error extracting coordinates from ${geomType}:`, e.message);
+                }
+                return null;
+            };
+
+            let coordinates = null;
+
+            // Try to extract coordinates from the feature geometry
+            if (geometry) {
+                if (cesiumModelsVerbose()) console.log(`🎨 Feature has geometry type:`, geometry.getType ? geometry.getType() : 'unknown');
+                coordinates = extractPolygonCoordinates(geometry);
+                if (coordinates && cesiumModelsVerbose()) console.log(`🎨 Extracted ${coordinates.length} polygon(s) from ${geometry.getType()}`);
             }
 
-            if (coordinates && coordinates.length > 0) {
-                if (cesiumModelsVerbose()) console.log(`🎨 ${coordinates.length} ring(s)`);
-                
-                // Check if feature already has an area entity to prevent duplicates
-                if (feature.get('areaEntity')) {
-                    if (cesiumModelsVerbose()) console.log(`🎨 skip duplicate area entity`);
-                    return null;
+            // Fallback: try GeoJSON-style geometry object
+            if (!coordinates && geometry && geometry.coordinates) {
+                coordinates = geometry.coordinates;
+                if (cesiumModelsVerbose()) console.log(`🎨 Using GeoJSON-style coordinates`);
+            }
+
+            // Fallback: try geometry in properties
+            if (!coordinates && properties && properties.geometry && properties.geometry.coordinates) {
+                coordinates = properties.geometry.coordinates;
+                if (cesiumModelsVerbose()) console.log(`🎨 Using geometry from properties`);
+            }
+
+            if (!coordinates || coordinates.length === 0) {
+                console.warn(`🎨 No coordinates found for area texture`);
+                return null;
+            }
+
+            if (cesiumModelsVerbose()) console.log(`🎨 Processing ${coordinates.length} polygon(s), projection: ${projection}`);
+
+            // Check for duplicate
+            if (feature.get('areaEntity')) {
+                if (cesiumModelsVerbose()) console.log(`🎨 Feature already has area entity, skipping`);
+                return null;
+            }
+
+            // Resolve image URL
+            const imageUrl = typeof modelFilename === 'string' && modelFilename.startsWith('/') ? 
+                modelFilename : `/3dmodelsosm/src/models/${modelFilename}`;
+            if (cesiumModelsVerbose()) console.log(`🎨 Using image URL:`, imageUrl);
+
+            // Determine if we have MultiPolygon or Polygon
+            const polygonSets = Array.isArray(coordinates[0]) && Array.isArray(coordinates[0][0]) && 
+                               Array.isArray(coordinates[0][0][0]) ? coordinates : [coordinates];
+
+            if (cesiumModelsVerbose()) console.log(`🎨 Processing ${polygonSets.length} polygon set(s)`);
+
+            const entities = [];
+
+            for (let pIdx = 0; pIdx < polygonSets.length; pIdx++) {
+                const polygonRings = polygonSets[pIdx];
+                if (!Array.isArray(polygonRings) || polygonRings.length === 0) {
+                    if (cesiumModelsVerbose()) console.warn(`🎨 Polygon ${pIdx} has no rings`);
+                    continue;
                 }
 
-                // Convert coordinates to Cesium Cartesian3 array
-                const cesiumPositions = [];
-                for (const ring of coordinates) {
-                    if (cesiumModelsVerbose()) console.log(`🎨 ring ${ring.length} pts`);
-                    for (const coord of ring) {
-                        const lonLat = ol.proj.transform(coord, window.map.getView().getProjection(), 'EPSG:4326');
-                        const cartesian = Cesium.Cartesian3.fromDegrees(lonLat[0], lonLat[1], 0);
-                        cesiumPositions.push(cartesian);
+                let outerRing = normalizeRing(polygonRings[0]);
+                if (cesiumModelsVerbose()) console.log(`🎨 Polygon ${pIdx}: outer ring normalized to ${outerRing.length} points`);
+
+                if (outerRing.length < 3) {
+                    console.warn(`🎨 Polygon ${pIdx} outer ring has less than 3 points after normalization`);
+                    continue;
+                }
+
+                // Close the ring if needed
+                if (outerRing[0][0] !== outerRing[outerRing.length - 1][0] || outerRing[0][1] !== outerRing[outerRing.length - 1][1]) {
+                    outerRing = outerRing.concat([outerRing[0]]);
+                }
+
+                // Convert to Cesium Cartesian3
+                const cesiumOuter = outerRing.map(coord => {
+                    try {
+                        // Detect if coordinates are already in EPSG:4326 (WGS84 lat/lon)
+                        // If already in valid lat/lon range (-180..180, -90..90) no need to transform
+                        let lonLat;
+                        if (coord[0] >= -180 && coord[0] <= 180 && coord[1] >= -90 && coord[1] <= 90) {
+                            lonLat = coord; // Already WGS84
+                        } else {
+                            lonLat = ol.proj.transform(coord, projection, 'EPSG:4326');
+                        }
+                        return Cesium.Cartesian3.fromDegrees(lonLat[0], lonLat[1], 0);
+                    } catch (e) {
+                        console.error(`🎨 Error transforming coordinate`, coord, ':', e.message);
+                        return null;
                     }
+                }).filter(c => c !== null);
+
+                if (cesiumOuter.length < 3) {
+                    console.warn(`🎨 Polygon ${pIdx} has less than 3 Cartesian points after transformation`);
+                    continue;
                 }
 
-                if (cesiumModelsVerbose()) console.log(`🎨 ${cesiumPositions.length} positions`);
-
-                const hierarchy = new Cesium.PolygonHierarchy(cesiumPositions);
-
-                // Calculate texture rotation based on nearby ways
-                const polygonCoords = coordinates[0].map(coord => 
-                    ol.proj.transform(coord, window.map.getView().getProjection(), 'EPSG:4326')
-                );
-                const textureRotation = this.calculateTextureRotation(polygonCoords, modelFilename);
-                if (cesiumModelsVerbose()) console.log(`🎨 texture rotation °: ${(textureRotation * 180 / Math.PI).toFixed(1)}`);
-
-                // Calculate polygon center for entity rotation
-                let minLon = Infinity, maxLon = -Infinity, minLat = Infinity, maxLat = -Infinity;
-                polygonCoords.forEach(coord => {
-                    minLon = Math.min(minLon, coord[0]);
-                    maxLon = Math.max(maxLon, coord[0]);
-                    minLat = Math.min(minLat, coord[1]);
-                    maxLat = Math.max(maxLat, coord[1]);
-                });
-                const centerLon = (minLon + maxLon) / 2;
-                const centerLat = (minLat + maxLat) / 2;
-                const centerPosition = Cesium.Cartesian3.fromDegrees(centerLon, centerLat, 0.001);
-
-                // Create single large canvas covering entire polygon area
-                // Draw texture pattern at correct rotation, no tiling
-                if (cesiumModelsVerbose()) console.log(`🎨 textureRotation rad: ${textureRotation}`);
-                
-                const img = new Image();
-                img.src = `/3dmodelsosm/src/models/${modelFilename}`;
-                
-                img.onload = () => {
-                    if (textureRotation !== 0) {
-                        if (cesiumModelsVerbose()) console.log(`🎨 rotated canvas ${(textureRotation * 180 / Math.PI).toFixed(1)}°`);
-                        
-                        const imageWidth = img.width;
-                        const imageHeight = img.height;
-                        // Use actual image dimensions, not minimum
-                        const tileWidth = imageWidth;
-                        const tileHeight = imageHeight;
-                        const tileSize = Math.min(imageWidth, imageHeight); // For spacing calculation
-                        
-                        // Estimate polygon dimensions
-                        const widthMeters = (maxLon - minLon) * 111320 * Math.cos((minLat + maxLat) / 2 * Math.PI / 180);
-                        const heightMeters = (maxLat - minLat) * 110540;
-                        
-                        // Calculate canvas size based on polygon dimensions
-                        const desiredTextureSizeMeters = 1.0;
-                        const pixelsPerMeter = tileSize / desiredTextureSizeMeters;
-                        let canvasWidth = Math.floor(widthMeters * pixelsPerMeter);
-                        let canvasHeight = Math.floor(heightMeters * pixelsPerMeter);
-                        
-                        // Limit canvas size for WebGL compatibility, but keep tile size proportional
-                        const scale = Math.min(1, CESIUM_AREA_TEXTURE_MAX_CANVAS / Math.max(canvasWidth, canvasHeight));
-                        canvasWidth = Math.floor(canvasWidth * scale);
-                        canvasHeight = Math.floor(canvasHeight * scale);
-                        const scaledTileWidth = Math.floor(tileWidth * scale);
-                        const scaledTileHeight = Math.floor(tileHeight * scale);
-                        
-                        if (cesiumModelsVerbose()) console.log(`🎨 canvas ${canvasWidth}x${canvasHeight}`);
-                        
-                        // Create canvas
-                        const canvas = document.createElement('canvas');
-                        canvas.width = canvasWidth;
-                        canvas.height = canvasHeight;
-                        const ctx = canvas.getContext('2d');
-                        
-                        // Rotate context around center with +45° offset
-                        ctx.translate(canvasWidth / 2, canvasHeight / 2);
-                        ctx.rotate(textureRotation + (45 * Math.PI / 180)); // Add 45 degrees
-                        
-                        // Calculate how many tiles needed to cover area when rotated
-                        const diagonal = Math.sqrt(canvasWidth * canvasWidth + canvasHeight * canvasHeight);
-                        const tilesX = Math.ceil(diagonal / scaledTileWidth) + 2;
-                        const tilesY = Math.ceil(diagonal / scaledTileHeight) + 2;
-                        
-                        // Draw tiles covering entire area
-                        for (let x = 0; x < tilesX; x++) {
-                            for (let y = 0; y < tilesY; y++) {
-                                ctx.drawImage(img, 
-                                    -diagonal / 2 - scaledTileWidth + x * scaledTileWidth,
-                                    -diagonal / 2 - scaledTileHeight + y * scaledTileHeight,
-                                    scaledTileWidth,
-                                    scaledTileHeight);
+                // Process holes
+                const holeHierarchies = (polygonRings.length > 1 ? polygonRings.slice(1) : [])
+                    .map(normalizeRing)
+                    .filter(hole => hole.length >= 3)
+                    .map(holeRing => {
+                        let closedHole = holeRing;
+                        if (holeRing[0][0] !== holeRing[holeRing.length - 1][0] || holeRing[0][1] !== holeRing[holeRing.length - 1][1]) {
+                            closedHole = holeRing.concat([holeRing[0]]);
+                        }
+                        const holePositions = closedHole.map(coord => {
+                            try {
+                                const lonLat = ol.proj.transform(coord, projection, 'EPSG:4326');
+                                return Cesium.Cartesian3.fromDegrees(lonLat[0], lonLat[1], 0);
+                            } catch (e) {
+                                console.error(`🎨 Error transforming hole coordinate`, coord, ':', e.message);
+                                return null;
                             }
-                        }
-                        
-                        // Create data URL
-                        const rotatedImageDataUrl = canvas.toDataURL('image/jpeg', CESIUM_AREA_TEXTURE_JPEG_QUALITY);
-                        
-                        // Update material with single rotated image and set repeat to 1
-                        if (areaEntity && areaEntity.polygon && areaEntity.polygon.material) {
-                            areaEntity.polygon.material.image = rotatedImageDataUrl;
-                            areaEntity.polygon.material.repeat = new Cesium.Cartesian2(1, 1);
-                            if (cesiumModelsVerbose()) console.log(`🎨 applied rotated canvas`);
-                        }
-                    }
-                };
+                        }).filter(c => c !== null);
+                        return new Cesium.PolygonHierarchy(holePositions);
+                    });
 
-                // Create initial material without rotation (will be updated after image loads)
+                if (cesiumModelsVerbose()) console.log(`🎨 Polygon ${pIdx}: ${cesiumOuter.length} outer points, ${holeHierarchies.length} hole(s)`);
+
+                // Create polygon hierarchy
+                const hierarchy = new Cesium.PolygonHierarchy(cesiumOuter, holeHierarchies);
+
+                // Calculate texture rotation
+                const polygonCoords = outerRing.map(coord => 
+                    ol.proj.transform(coord, projection, 'EPSG:4326')
+                );
+                const textureRotation = this.calculateTextureRotation(polygonCoords, imageUrl, tagsObj);
+
+                // Create material
                 const material = new Cesium.ImageMaterialProperty({
-                    image: `/3dmodelsosm/src/models/${modelFilename}`,
+                    image: imageUrl,
                     transparent: true,
-                    color: new Cesium.Color(1.0, 1.0, 1.0, 0.8) // Slight transparency
+                    color: new Cesium.Color(1.0, 1.0, 1.0, 0.8)
                 });
-                
-                if (cesiumModelsVerbose()) console.log(`🎨 material: ${modelFilename}`);
 
+                // Create entity
                 const areaEntity = new Cesium.Entity({
                     polygon: {
                         hierarchy: hierarchy,
@@ -216,41 +236,43 @@ class AreaTextureManager {
                         areaId: properties.id || `area_${Date.now()}`,
                         areaTags: tagsObj,
                         isArea: true,
-                        textureUrl: `/3dmodelsosm/src/models/${modelFilename}`,
+                        textureUrl: imageUrl,
                         textureRotation: textureRotation
                     }
                 });
 
-                if (cesiumModelsVerbose()) console.log(`🎨 area entity created`);
+                entities.push(areaEntity);
+                if (cesiumModelsVerbose()) console.log(`🎨 Created entity for polygon ${pIdx}`);
+            }
 
-                // Store the entity on the feature for later management
-                feature.set('areaEntity', areaEntity);
-
-                // Add to data source if in 3D mode
-                const dataSource = window.areaTextureManager.getDataSource();
-                if (dataSource) {
-                    dataSource.entities.add(areaEntity);
-                    if (cesiumModelsVerbose()) console.log(`🎨 entities: ${dataSource.entities.values.length}`);
-
-                    if (window.ol3d.getCesiumScene) {
-                        const scene = window.ol3d.getCesiumScene();
-                        if (scene && scene.requestRender) {
-                            scene.requestRender();
-                        }
-                    }
-                } else {
-                    console.warn('🎨 No 3D mode available, area entity stored but not rendered');
-                }
-
-                if (cesiumModelsVerbose()) console.log(`🎨 area texture ok ${modelFilename} verts=${cesiumPositions.length}`);
-                return areaEntity;
-            } else {
-                console.warn(`🎨 No valid coordinates found for area texture`);
+            if (entities.length === 0) {
+                console.warn(`🎨 No valid polygon rings found for area texture`);
                 return null;
             }
+
+            // Add to data source
+            const dataSource = window.areaTextureManager.getDataSource();
+            if (!dataSource) {
+                console.warn('🎨 No data source available, storing but not rendering');
+                feature.set('areaEntity', entities.length === 1 ? entities[0] : entities);
+                return entities.length === 1 ? entities[0] : entities;
+            }
+
+            entities.forEach(entity => dataSource.entities.add(entity));
+            feature.set('areaEntity', entities.length === 1 ? entities[0] : entities);
+
+            if (window.ol3d && window.ol3d.getCesiumScene) {
+                const scene = window.ol3d.getCesiumScene();
+                if (scene && scene.requestRender) {
+                    scene.requestRender();
+                }
+            }
+
+            if (cesiumModelsVerbose()) console.log(`🎨 ✓ Created ${entities.length} area texture entity(ies)`);
+            return entities.length === 1 ? entities[0] : entities;
         } catch (error) {
             console.error('🎨 Error creating area texture entity:', error);
-            console.error('🎨 Error stack:', error.stack);
+            console.error('🎨 Stack:', error.stack);
             return null;
         }
     }
@@ -286,8 +308,14 @@ class AreaTextureManager {
      * @param {string} textureName - Name of the texture file
      * @returns {number} Rotation angle in radians (0 if no rotation needed)
      */
-    calculateTextureRotation(polygonCoordinates, textureName) {
+    calculateTextureRotation(polygonCoordinates, textureName, tagsObj = {}) {
         if (cesiumModelsVerbose()) console.log(`🎨 calculateTextureRotation: ${textureName}`);
+
+        // Special case: disabled parking spaces should not be rotated to maintain proper orientation
+        if (tagsObj && tagsObj['parking_space'] === 'disabled') {
+            if (cesiumModelsVerbose()) console.log(`🎨 disabled parking space: no rotation`);
+            return 0;
+        }
 
         const isCrossingTexture = textureName.toLowerCase().includes('i_crossing.png') ||
                                 textureName.toLowerCase().includes('crossing') ||

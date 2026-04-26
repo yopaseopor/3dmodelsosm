@@ -314,7 +314,7 @@ function assignModelToFeature(feature, allFeatures = null) {
                             ol.proj.transform(coord, window.map.getView().getProjection(), 'EPSG:4326')
                         );
                         const textureRotation = window.modelRenderer ? 
-                            window.modelRenderer.calculateTextureRotation(polygonCoords, modelFilename) : 
+                            window.modelRenderer.calculateTextureRotation(polygonCoords, modelFilename, tagsObj) : 
                             0; // No rotation if modelRenderer not available
                         
                         if (debugConfig.enabled && debugConfig.logAreaProcessing) {
@@ -376,7 +376,7 @@ function assignModelToFeature(feature, allFeatures = null) {
                             ol.proj.transform(coord, window.map.getView().getProjection(), 'EPSG:4326')
                         );
                         const textureRotation = window.modelRenderer ? 
-                            window.modelRenderer.calculateTextureRotation(lineCoords, modelFilename) : 
+                            window.modelRenderer.calculateTextureRotation(lineCoords, modelFilename, tagsObj) : 
                             0; // No rotation if modelRenderer not available
                         
                         if (debugConfig.enabled && debugConfig.logAreaProcessing) {

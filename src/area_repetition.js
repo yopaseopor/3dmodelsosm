@@ -63,7 +63,7 @@ const areaRepetitionConfigs = [
     {
         tags: ['area:highway=footway', 'footway=crossing'],
         model: 'i_crossing.png',
-        config: { scale: 10.0, heightOffset: 0.0, rotation: [0, 0, 0] },
+        config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] },
         spacing: 1.0, // 1 meter spacing for area-tagged footways
         maxModels: 5000,
         description: 'Area-tagged footway areas with crossing'
@@ -85,6 +85,34 @@ const areaRepetitionConfigs = [
         spacing: 1, // 3 meter spacing for parking
         maxModels: 3000,
         description: 'Motorcycle parking areas'
+     },
+
+    // Amenity areas
+    {
+        tags: ['amenity=parking', 'orientation=diagonal'],
+        model: 'i_parking_diagonal.jpg',
+        config: { scale: 2.0, heightOffset: 0.0, rotation: [0, 0, 0] },
+        spacing: 1, // 3 meter spacing for parking
+        maxModels: 3000,
+        description: 'Parking areas'
+     },
+
+    // Amenity areas - Parking spaces with smart rotation based on street orientation
+    {
+        tags: ['amenity=parking_space', 'parking_space=disabled'],
+        model: 'i_parking_space_disabled.jpg',
+        config: { scale: 2.0, heightOffset: 0.0, rotation: [0, 0, 0] },
+        spacing: 1, // 1 meter spacing for parking spaces
+        maxModels: 3000,
+        description: 'Disabled parking spaces with smart rotation'
+    },
+    {
+        tags: ['amenity=parking_space'],
+        model: 'i_parking_space.jpg',
+        config: { scale: 2.0, heightOffset: 0.0, rotation: [0, 0, 0] },
+        spacing: 1, // 1 meter spacing for parking spaces
+        maxModels: 3000,
+        description: 'Regular parking spaces with smart rotation'
     },
 
     // Amenity areas
@@ -164,8 +192,15 @@ function getAreaRepetitionConfig(tags) {
         // Check if all required tags match
         const allMatch = config.tags.every(tag => {
             const [key, value] = tag.split('=');
-            // Handle compound keys like 'area:highway' - these are single tags, not combinations
-            const tagValue = tags[key];
+            let tagValue = tags[key];
+            
+            // BUG FIX: Handle Overpass returned areas which have area=yes + original tags (without area: prefix)
+            // If config uses area: prefix tag, also check the original unprefixed tag when feature has area=yes
+            if (tagValue === undefined && key.startsWith('area:') && tags['area'] === 'yes') {
+                const originalKey = key.substring(5); // remove 'area:' prefix
+                tagValue = tags[originalKey];
+            }
+            
             const matches = tagValue === value;
             if (areaRepetitionDebugConfig.enabled && areaRepetitionDebugConfig.logConfigMatching) console.log(`🏞️ Checking area config tag ${key}=${value}, found: ${tagValue}, matches: ${matches}`);
             return matches;
@@ -217,9 +252,8 @@ function generateAreaRepetitions(coordinates, tags, holes = []) {
         if (areaRepetitionDebugConfig.enabled) console.log(`🏞️ Using single polygon texture approach for ${modelFilename}`);
         
         // Calculate texture rotation based on nearby ways
-        const polygonCoords = coordinates.map(coord => 
-            ol.proj.transform(coord, window.map.getView().getProjection(), 'EPSG:4326')
-        );
+        // Coordinates are already in EPSG:4326 (transformed in applyAreaRepetitions)
+        const polygonCoords = coordinates;
         const textureRotation = window.modelRenderer ? 
             window.modelRenderer.calculateTextureRotation(polygonCoords, modelFilename) : 
             0; // No rotation if modelRenderer not available
@@ -234,7 +268,8 @@ function generateAreaRepetitions(coordinates, tags, holes = []) {
             polygonHoles: holes,
             model: tags['manhole'] === 'drain' ? 'i_manhole_drain.jpg' : modelFilename,
             spacing: config.spacing,
-            rotation: textureRotation
+            rotation: textureRotation,
+            scale: config.config.scale
         }];
     }
 
@@ -387,7 +422,7 @@ function applyAreaRepetitions(feature, modelFilename, modelConfig, tags) {
                     // Store polygon texture data with rotation
                     const repModelOptions = {
                         uri: `/3dmodelsosm/src/models/${rep.model}`,
-                        scale: 1.0,
+                        scale: rep.scale || 1.0,
                         type: 'polygon_texture',
                         polygonCoordinates: rep.polygonCoordinates,
                         spacing: rep.spacing,
@@ -425,7 +460,6 @@ function applyAreaRepetitions(feature, modelFilename, modelConfig, tags) {
             if (areaRepetitionDebugConfig.enabled) console.log(`🏞️ No area repetitions to store`);
         }
     } catch (error) {
-        console.error(`🏞️ Error in applyAreaRepetitions:`, error);
         throw error; // Re-throw to let caller handle it
     }
 }

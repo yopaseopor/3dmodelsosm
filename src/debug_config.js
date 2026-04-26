@@ -18,7 +18,7 @@ const globalDebugConfig = {
 
     /** Verbose logs for cesium_models.js (area entities, texture steps) */
     cesiumModels: {
-        verbose: false
+        verbose: true
     },
     
     valueSearch: {
