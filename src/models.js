@@ -35,6 +35,7 @@ const availableModels = [
     'ES_CAT_BCN_torre_mapfre.glb',
     'i_asfalt.jpg',
     'i_aigua.jpg',
+    'i_area_highway_cycleway.jpg',
     'i_crossing.png',
     'i_gespa.jpg',
     'i_kerb.jpg',
@@ -87,7 +88,8 @@ const modelMappings = [
    { tags: ['amenity=parking_space'], model: '', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Parking area models  
     { tags: ['amenity=parking'], model: '', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Parking area models
   { tags: ['area:barrier=kerb'], model: 'noimage.jpg', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway area texture
-      { tags: ['area:highway=footway', 'footway=sidewalk'], model: 'noimage.jpg', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway area texture
+  { tags: ['area:highway=cycleway'], model: 'noimage.jpg', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway area texture    
+  { tags: ['area:highway=footway', 'footway=sidewalk'], model: 'noimage.jpg', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway area texture
   { tags: ['area:highway=footway', 'footway=crossing'], model: 'noimage.jpg', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway point models
 { tags: ['area:highway=residential'], model: 'i_asfalt.jpg', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Residential area-tagged ways
 { tags: ['amenity=motorcycle_parking'], model: '', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Motorcycle parking model for amenity=motorcycle_parking   

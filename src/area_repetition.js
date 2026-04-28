@@ -59,6 +59,14 @@ const areaRepetitionConfigs = [
         spacing: 1.0, // 1 meter spacing for area-tagged footways
         maxModels: 5000,
         description: 'Area-tagged kerb areas'
+     },
+    {
+        tags: ['area:highway=cycleway'],
+        model: 'i_area_highway_cycleway.jpg',
+        config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] },
+        spacing: 1.0, // 1 meter spacing for area-tagged footways
+        maxModels: 5000,
+        description: 'Area-tagged footway areas with crossing'
     },
     {
         tags: ['area:highway=footway', 'footway=crossing'],

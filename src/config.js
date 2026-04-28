@@ -688,6 +688,57 @@ geojson: './src/planetes_llefia.geojson',
 },
 /*   abrir */							{
     group: 'Test',
+    title: 'Pedrola',
+geojson: './src/pedrola.geojson',
+    iconSrc: imgSrc + 'icones/maxspeed_empty.svg',
+    iconStyle: 'background-color:rgba(255,255,255,0.4)',
+    style: function (feature) {
+        var key_regex = /^name$/;
+        var name_key = feature.getKeys().filter(function(t){return t.match(key_regex)}).pop() || "name";
+        var name = feature.get(name_key) || '';
+        var fill = new ol.style.Fill({
+            color: 'rgba(117,63,79,0.1)'
+        });
+        var stroke = new ol.style.Stroke({
+            color: 'rgba(117,63,79,1)',
+            width: 1
+        });
+        // Get the geometry type
+        var geom = feature.getGeometry();
+        var isPolygon = geom.getType() === 'Polygon' || geom.getType() === 'MultiPolygon';
+        
+        var style = new ol.style.Style({
+            image: new ol.style.Icon({
+                src: imgSrc + 'icones/maxspeed_empty.svg',
+                scale: 0.01
+            }),
+            text: new ol.style.Text({
+                text: name,
+             			
+                fill: new ol.style.Fill({
+                    color: 'rgba(0,0,0,0.1)'
+                }),
+                stroke: new ol.style.Stroke({
+                    color: 'rgba(255,255,255,0.3)',
+                    width: 2
+                }),
+                // For polygons, we'll use a different placement strategy
+                placement: isPolygon ? 'point' : 'point',
+				textAlign: 'center',
+                textBaseline: 'bottom',
+                offsetY: isPolygon ? -15 : 0, // Move text up for polygons
+                overflow: true // Allow text to be rendered outside the view
+            }),
+            fill: fill,
+            stroke: stroke
+        });
+        
+        return style;
+/*   cerrar */								}
+
+},
+/*   abrir */							{
+    group: 'Test',
     title: 'Sant Andreu de la Barca geojson',
 geojson: './src/catalunya_sab.geojson',
     iconSrc: imgSrc + 'icones/maxspeed_empty.svg',
