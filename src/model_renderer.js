@@ -241,7 +241,7 @@ window.modelRenderer = {
                     let repetitionsFound = 0;
                     
                     features.forEach((feature, fidx) => {
-                        const model = feature.model;
+                        const model = feature.get('model');
                         const hasRepetitions = feature.get('repetition_0');
                         
                         if (model) {
@@ -264,7 +264,7 @@ window.modelRenderer = {
                                 // Process individual models for non-texture polygons
                                 if (model && typeof model === 'object' && model.uri) {
                                     try {
-                                        this.addModelForFeature(feature, fidx, cesiumScene);
+                                        this.addModelForFeature(feature, fidx, cesiumScene, layer);
                                     } catch (error) {
                                         // Model addition error silently handled
                                     }
@@ -277,7 +277,7 @@ window.modelRenderer = {
                             // Process individual models for non-polygon features
                             if (model && typeof model === 'object' && model.uri) {
                                 try {
-                                    this.addModelForFeature(feature, fidx, cesiumScene);
+                                    this.addModelForFeature(feature, fidx, cesiumScene, layer);
                                 } catch (error) {
                                     // Model addition error silently handled
                                 }
@@ -305,7 +305,7 @@ window.modelRenderer = {
     },
 
     // Add individual model for a feature
-    addModelForFeature: function(feature, fidx, cesiumScene) {
+    addModelForFeature: function(feature, fidx, cesiumScene, layer) {
         const geometry = feature.getGeometry();
         if (!geometry) return;
 
@@ -350,15 +350,42 @@ window.modelRenderer = {
             return;
         }
 
-        const featureId = feature.getId() || `feature_${fidx}_${Date.now()}`;
+        // Create a stable feature ID that doesn't change between calls
+        let featureId = feature.getId();
+        if (!featureId) {
+            // Use layer name, feature index, and stable geometry hash for ID
+            const layerName = layer.get('title') || layer.get('name') || 'unknown';
+            const geometry = feature.getGeometry();
+            let geometryHash = 'no_geom';
+            if (geometry) {
+                // Round coordinates to avoid floating point precision issues
+                const extent = geometry.getExtent().map(coord => Math.round(coord * 1000000) / 1000000);
+                geometryHash = extent.join('_');
+            }
+            featureId = `feature_${layerName}_${fidx}_${geometryHash}`;
+        }
+
+        // Debug logging
+        if (debugConfig.enabled) {
+            console.log(`🎯 Processing feature ${fidx} with ID: ${featureId}`);
+            console.log(`🎯 Already loaded: ${this.loadedModels.has(featureId)}`);
+            console.log(`🎯 Total loaded models: ${this.loadedModels.size}`);
+        }
 
         // Skip if already loaded
         if (this.loadedModels.has(featureId)) {
+            if (debugConfig.enabled) console.log(`🎯 Skipping already loaded feature: ${featureId}`);
             return;
         }
 
         // Use model pooling instead of creating new instances
-        const modelUrl = feature.model.uri;
+        const model = feature.get('model');
+        if (!model || !model.uri) {
+            if (debugConfig.enabled) console.log(`🎯 Feature ${fidx} has no valid model URI, skipping`);
+            return;
+        }
+        
+        const modelUrl = model.uri;
         
         // Check if this is an image file - skip GLTF loading for images
         const isImageFile = modelUrl && (modelUrl.toLowerCase().endsWith('.png') || modelUrl.toLowerCase().endsWith('.jpg') || modelUrl.toLowerCase().endsWith('.jpeg'));
@@ -414,14 +441,14 @@ window.modelRenderer = {
         }
         
         // Apply LOD scaling - but be less aggressive
-        let scale = feature.model.scale || 1.0;
+        let scale = model.scale || 1.0;
         if (lodLevel === 'medium') scale *= 0.8; // Less reduction
         if (lodLevel === 'low') scale *= 0.6;     // Less reduction
         
         // Update pooled model with ALL properties at once to prevent flashing
         pooledModel.model.modelMatrix = modelMatrix;
         pooledModel.model.scale = scale;
-        pooledModel.model.heightReference = feature.model.heightReference;
+        pooledModel.model.heightReference = model.heightReference;
         pooledModel.model.show = true; // Ensure it's visible
 
         // Track loaded model with more persistent tracking
@@ -451,11 +478,24 @@ window.modelRenderer = {
 
     // Add repetition models for a feature
     addRepetitionModels: function(feature, cesiumScene) {
+        // Check if this is a fence feature
+        const hasFenceRepetitions = feature.get('fence_repetition_0');
+        
         const isRepetition = feature.get('isRepetition');
         const hasRepetitions = feature.get('repetition_0'); // Check if this feature has repetition models
         
-        if (isRepetition || hasRepetitions) {
-            if (debugConfig.enabled && debugConfig.logRepetitionModels) console.log(`🚶 Processing repetition models for ${isRepetition ? 'kerb' : 'highway/footway'} feature`);
+        if (isRepetition || hasRepetitions || hasFenceRepetitions) {
+            // Determine repetition type for logging
+            let repType = 'unknown';
+            if (isRepetition) {
+                repType = 'kerb';
+            } else if (feature.get('fence_repetition_0')) {
+                repType = 'fence';
+            } else {
+                repType = 'highway/footway';
+            }
+            
+            if (debugConfig.enabled && debugConfig.logRepetitionModels) console.log(`Processing repetition models for ${repType} feature`);
             
             if (isRepetition) {
                 // Kerb repetition: model data is stored directly on the feature
@@ -467,14 +507,16 @@ window.modelRenderer = {
                         // Kerb repetition model error silently handled
                     }
                 } else {
-                    if (debugConfig.enabled) console.warn('🚶 Kerb repetition feature missing model data');
+                    if (debugConfig.enabled) console.warn('Kerb repetition feature missing model data');
                 }
             } else {
-                // Highway/Footway repetition: find all repetition models on this feature
+                // Highway/Footway/Fence repetition: find all repetition models on this feature
                 let repIndex = 0;
                 let loggedCount = 0;
                 while (true) {
-                    const repModel = feature.get(`repetition_${repIndex}`);
+                    // Check for fence repetitions first, then regular repetitions
+                    const fenceRepModel = feature.get(`fence_repetition_${repIndex}`);
+                    const repModel = fenceRepModel || feature.get(`repetition_${repIndex}`);
                     if (!repModel) break;
                     
                     try {
@@ -528,9 +570,11 @@ window.modelRenderer = {
 
         // Original individual model logic continues below
         // Use the stored position from repetition generation
-        const repPosition = repModel.position || feature.get(`repetition_${repIndex}_position`);
+        const repPosition = repModel.position || 
+                           feature.get(`fence_repetition_${repIndex}_position`) || 
+                           feature.get(`repetition_${repIndex}_position`);
         if (!repPosition) {
-            if (debugConfig.enabled) console.warn(`🚶 No position found for repetition model ${repIndex}`);
+            if (debugConfig.enabled) console.warn(`No position found for repetition model ${repIndex}`);
             return;
         }
         
@@ -552,7 +596,8 @@ window.modelRenderer = {
         }
         
         // Create model matrix for repetition model - GROUND LEVEL (like footway)
-        const repHeightOffset = feature.get(`repetition_${repIndex}_heightOffset`) || 0; // Use stored height offset instead of hardcoded 10
+        const repHeightOffset = feature.get(`fence_repetition_${repIndex}_heightOffset`) || 
+                               feature.get(`repetition_${repIndex}_heightOffset`) || 0; // Use stored height offset instead of hardcoded 10
         
         // Get terrain elevation if available
         let repTerrainElevation = 0;
@@ -576,8 +621,9 @@ window.modelRenderer = {
         if (feature.get('isRepetition')) {
             repModelRotation = feature.get('modelRotation');
         } else {
-            // For highway/footway repetitions, rotation is stored as 'repetition_${repIndex}_rotation'
-            repModelRotation = feature.get(`repetition_${repIndex}_rotation`);
+            // Check for fence repetitions first, then highway/footway repetitions
+            repModelRotation = feature.get(`fence_repetition_${repIndex}_rotation`) || 
+                              feature.get(`repetition_${repIndex}_rotation`);
         }
         
         if (repModelRotation && Array.isArray(repModelRotation) && repModelRotation.length >= 3) {
@@ -641,19 +687,41 @@ window.modelRenderer = {
             }
         });
 
-        // Use the area texture manager to create the entity
-        const areaEntity = window.areaTextureManager.createAreaEntity(
-            feature,
-            model.uri, // This is the texture filename
-            model, // Pass the model config
-            tagsObj,
-            properties
-        );
+        // Check if model URI is valid
+        if (!model || !model.uri || model.uri.trim() === '') {
+            console.warn(`🎨 Feature ${fidx} has invalid model URI, skipping area texture`);
+            return;
+        }
 
-        if (areaEntity) {
-            if (debugConfig.enabled) console.log(`🎨 Successfully created area texture entity for feature ${fidx}`);
-        } else {
-            console.warn(`🎨 Failed to create area texture entity for feature ${fidx}`);
+        // Check if area texture manager is available
+        if (!window.areaTextureManager) {
+            console.error(`🎨 Area texture manager not available for feature ${fidx}`);
+            return;
+        }
+
+        if (debugConfig.enabled) {
+            console.log(`🎨 Creating area entity for feature ${fidx} with texture: ${model.uri}`);
+            console.log(`🎨 Feature tags:`, tagsObj);
+            console.log(`🎨 Model config:`, model);
+        }
+
+        // Use the area texture manager to create the entity
+        try {
+            const areaEntity = window.areaTextureManager.createAreaEntity(
+                feature,
+                model.uri, // This is the texture filename
+                model, // Pass the model config
+                tagsObj,
+                properties
+            );
+
+            if (areaEntity) {
+                if (debugConfig.enabled) console.log(`🎨 Successfully created area texture entity for feature ${fidx}`);
+            } else {
+                console.warn(`🎨 Failed to create area texture entity for feature ${fidx} - createAreaEntity returned null`);
+            }
+        } catch (error) {
+            console.error(`🎨 Error creating area texture entity for feature ${fidx}:`, error);
         }
     },
 
@@ -1544,9 +1612,11 @@ window.modelRenderer = {
         const cesiumScene = window.ol3d.getCesiumScene();
         if (cesiumScene && cesiumScene.primitives) {
             try {
+                if (debugConfig.enabled) console.log('🎯 Cesium scene available, processing layers...');
                 this.processLayersRecursively(window.map.getLayers().getArray(), cesiumScene);
+                if (debugConfig.enabled) console.log('🎯 Layer processing completed');
             } catch (error) {
-                // Model renderer error silently handled
+                if (debugConfig.enabled) console.error('🎯 Model renderer error:', error);
             }
         } else if (debugConfig.enabled) {
             console.log('🎯 Cesium scene unavailable');

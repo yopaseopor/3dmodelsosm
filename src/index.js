@@ -488,7 +488,7 @@ $(function () {
           // Set additional model configuration for positioning
           if (modelConfig) {
             // Add height offset so models appear above ground
-            feature.set('modelHeightOffset', modelConfig.heightOffset + 10); // Add 10 meters above ground
+            feature.set('modelHeightOffset', modelConfig.heightOffset); // Use configured height offset only
             feature.set('modelRotation', modelConfig.rotation);
           } else {
             // Default height offset if no config
@@ -676,6 +676,15 @@ $(function () {
 								// Determine geometry type based on geometry and tags
 								let geometryType = 'point';
 								const geomType = geometry ? geometry.getType() : null;
+								
+								// Debug fence features specifically
+								if (tagsObj.barrier === 'fence' || tagsObj.fence_type) {
+									console.log(`🚜 INDEX DEBUG: Fence feature geometry detection`);
+									console.log(`🚜 INDEX DEBUG: Raw geometry object:`, geometry);
+									console.log(`🚜 INDEX DEBUG: geometry.getType() result:`, geomType);
+									console.log(`🚜 INDEX DEBUG: geometry.getCoordinates():`, geometry ? geometry.getCoordinates() : 'NO getCoordinates');
+								}
+								
 								if (geomType === 'LineString') {
 									// Check if LineString is closed (first and last coordinates are the same)
 									const isClosed = window.models && window.models.isLineStringClosed ? 
@@ -686,10 +695,17 @@ $(function () {
 													   Object.keys(tagsObj).some(key => key.startsWith('area:'));
 									
 									// Treat as area if closed or has area tags
-									geometryType = (isClosed || hasAreaTag) ? 'area' : 'line';
+									// BUT NOT for fence features - fences should always be treated as lines, even when closed
+									const isFence = tagsObj['barrier'] === 'fence' || tagsObj['fence_type'];
+									geometryType = (isClosed && !isFence) || hasAreaTag ? 'area' : 'line';
 									
 									if (isClosed) {
 										console.log(`🔗 DEBUG OSM XML: Closed LineString detected, treating as area`);
+									}
+									
+									// Debug fence features specifically
+									if (tagsObj.barrier === 'fence' || tagsObj.fence_type) {
+										console.log(`🚜 INDEX DEBUG: Fence LineString detected, geometryType set to: ${geometryType}`);
 									}
 								} else if (geomType === 'Polygon' || geomType === 'MultiPolygon') {
 									geometryType = 'area';
@@ -718,7 +734,7 @@ $(function () {
 									// Set additional model configuration for positioning
 									if (modelConfig) {
 										// Add height offset so models appear above ground
-										feature.set('modelHeightOffset', modelConfig.heightOffset + 10); // Add 10 meters above ground
+										feature.set('modelHeightOffset', modelConfig.heightOffset); // Use configured height offset only
 										feature.set('modelRotation', modelConfig.rotation);
 										
 										// Log bearing and rotation information
@@ -740,6 +756,28 @@ $(function () {
 										// Special handling for highway=footway lines
 										if (modelMapping.geometryType === 'line' && modelMapping.tags.includes('highway=footway') && window.footwayRepetition) {
 											window.footwayRepetition.applyFootwayRepetitions(feature, modelFilename, modelConfig, me);
+										} else if (modelMapping.geometryType === 'line' && (modelMapping.tags.some(tag => tag.includes('barrier=fence') || tag.includes('fence_type='))) && window.fenceRepetition) {
+											// Handle fence features with the new fence repetition system
+											const tags = feature.getProperties();
+											const barrier = tags.barrier;
+											const fenceType = tags.fence_type;
+											
+											console.log(`🚜 DEBUG OSM XML: Checking fence feature - barrier: ${barrier}, fence_type: ${fenceType}, tags:`, tags);
+											
+											if (barrier === 'fence' || fenceType) {
+												const fenceTypeToUse = fenceType || 'default';
+												console.log(`🚜 Applying repetitions to fence ${fenceTypeToUse} overlay feature:`, tags);
+												try {
+													window.fenceRepetition.applyFenceRepetitions(feature, modelFilename, modelConfig, fenceTypeToUse);
+												} catch (error) {
+													console.error(`🚜 Error applying repetitions to fence ${fenceTypeToUse} overlay feature:`, error);
+													// Fallback to old system
+													window.modelRepetition.applyModelRepetitions(feature, modelFilename, modelConfig, modelMapping.geometryType);
+												}
+											} else {
+												// Fallback to old system for non-fence features
+												window.modelRepetition.applyModelRepetitions(feature, modelFilename, modelConfig, modelMapping.geometryType);
+											}
 										} else if (modelMapping.geometryType === 'line' && window.highwayRepetition) {
 											// Handle all other highway types with the new highway repetition system
 											const tags = feature.getProperties();

@@ -1,94 +1,76 @@
 /**
- * Highway Repetition Module
- * Handles repeating 3D models along all highway types
- * Provides configurable repetition options for different highway tags
+ * Natural Repetition Module
+ * Handles repeating 3D models along natural line features
+ * Provides configurable repetition options for different natural tags
  */
 
 // Debug configuration
-const highwayRepetitionDebugConfig = {
-    enabled: false,
-    logProcessing: false,
-    logStorage: false
+const naturalRepetitionDebugConfig = {
+    enabled: true,
+    logProcessing: true,
+    logStorage: true
 };
 
-// Configuration for highway repetition - can be customized per highway type
-const highwayRepetitionConfig = {
-    // Default configuration for all highway types
+// Configuration for natural repetition - can be customized per natural type
+const naturalRepetitionConfig = {
+    // Default configuration for all natural types
     default: {
-        interval: 0.30, // meters between models (very dense but not overlapping)
-        sideOffset: 0, // meters to side (tight alignment alongside highway)
-        maxModels: 100 // Reduced from 1500 to prevent excessive memory usage
+        interval: 0.50, // meters between models
+        sideOffset: 0, // meters to side (directly on the natural feature line)
+        maxModels: 100 // Prevent excessive memory usage
     },
     
-    // Specific configurations per highway type (can be customized)
-    residential: {
-        interval: 0.50, // meters between models for residential roads
-        sideOffset: 0, // directly on the road line
-        maxModels: 1500 // Reduced from 1500
+    // Specific configurations per natural type (can be customized)
+    beach: {
+        interval: 0.40, // meters between models for beach lines
+        sideOffset: 0, // directly on the beach line
+        maxModels: 1500 // More models for beach features
     },
     
-    footway: {
-        interval: 0.30, // meters between models for footways
-        sideOffset: 0, // directly on the footway line
-        maxModels: 1000// Reduced from 1500
+    water: {
+        interval: 0.30, // meters between models for water lines
+        sideOffset: 0, // directly on the water line
+        maxModels: 200 // More models for water features
     },
     
-    service: {
-        interval: 0.50, // meters between models for service roads
-        sideOffset: 0, // directly on the service road line
-        maxModels: 800 // Reduced from 1000
+    river: {
+        interval: 0.25, // meters between models for river lines
+        sideOffset: 0, // directly on the river line
+        maxModels: 300 // More models for longer river features
     },
     
-    primary: {
-        interval: 0.20, // meters between models for primary roads
-        sideOffset: 0, // directly on the primary road line
-        maxModels: 1500 // Reduced from 2000
+    stream: {
+        interval: 0.20, // meters between models for stream lines
+        sideOffset: 0, // directly on the stream line
+        maxModels: 150 // Moderate models for stream features
     },
     
-    secondary: {
-        interval: 0.25, // meters between models for secondary roads
-        sideOffset: 0, // directly on the secondary road line
-        maxModels: 1200 // Reduced from 1800
+    canal: {
+        interval: 0.35, // meters between models for canal lines
+        sideOffset: 0, // directly on the canal line
+        maxModels: 2000 // More models for canal features
     },
     
-    tertiary: {
-        interval: 0.25, // meters between models for tertiary roads
-        sideOffset: 0, // directly on the tertiary road line
-        maxModels: 1200// Reduced from 1800
+    coastline: {
+        interval: 0.45, // meters between models for coastline lines
+        sideOffset: 0, // directly on the coastline line
+        maxModels: 1250 // More models for coastline features
     },
     
-    track: {
-        interval: 0.25, // meters between models for tracks
-        sideOffset: 0, // directly on the track line
-        maxModels: 1500 // Reduced from 800
-    },
-    
-    path: {
-        interval: 0.35, // meters between models for paths
-        sideOffset: 0, // directly on the path line
-        maxModels: 1500 // Reduced from 1200
-    },
-    
-    cycleway: {
-        interval: 0.25, // meters between models for cycleways
-        sideOffset: 0, // directly on the cycleway line
-        maxModels: 1500 // Reduced from 1500
-    },
-    
-    pedestrian: {
-        interval: 0.20, // meters between models for pedestrian areas
-        sideOffset: 0, // directly on the pedestrian line
-        maxModels: 150 // Reduced from 2000
+    cliff: {
+        interval: 0.60, // meters between models for cliff lines
+        sideOffset: 0, // directly on the cliff line
+        maxModels: 100 // Fewer models for cliff features
     }
 };
 
 /**
- * Get configuration for a specific highway type
- * @param {string} highwayType - The highway tag value (e.g., 'residential', 'footway')
- * @returns {Object} Configuration object for that highway type
+ * Get configuration for a specific natural type
+ * @param {string} naturalType - The natural tag value (e.g., 'beach', 'water')
+ * @returns {Object} Configuration object for that natural type
  */
-function getHighwayConfig(highwayType) {
-    return highwayRepetitionConfig[highwayType] || highwayRepetitionConfig.default;
+function getNaturalConfig(naturalType) {
+    return naturalRepetitionConfig[naturalType] || naturalRepetitionConfig.default;
 }
 
 /**
@@ -147,13 +129,13 @@ function calculateSegmentBearing(start, end) {
 }
 
 /**
- * Generate repeated model positions along a line for highways
+ * Generate repeated model positions along a line for natural features
  * @param {Array<Array<number>>} coordinates - Array of [lon, lat] coordinates
- * @param {string} highwayType - Type of highway (e.g., 'residential', 'footway')
+ * @param {string} naturalType - Type of natural feature (e.g., 'beach', 'water')
  * @returns {Array<Object>} Array of {position: [lon, lat], bearing: number, config: Object}
  */
-function generateHighwayRepetitions(coordinates, highwayType) {
-    const config = getHighwayConfig(highwayType);
+function generateNaturalRepetitions(coordinates, naturalType) {
+    const config = getNaturalConfig(naturalType);
     const repetitions = [];
     
     let cumulativeDistance = 0;
@@ -208,31 +190,31 @@ function generateHighwayRepetitions(coordinates, highwayType) {
 }
 
 /**
- * Apply highway repetitions to a feature
- * @param {ol.Feature} feature - Original highway feature
+ * Apply natural repetitions to a feature
+ * @param {ol.Feature} feature - Original natural feature
  * @param {string} modelFilename - Model filename to use
  * @param {Object} modelConfig - Model configuration
- * @param {string} highwayType - Type of highway (e.g., 'residential', 'footway')
+ * @param {string} naturalType - Type of natural feature (e.g., 'beach', 'water')
  */
-function applyHighwayRepetitions(feature, modelFilename, modelConfig, highwayType) {
-    if (highwayRepetitionDebugConfig.enabled && highwayRepetitionDebugConfig.logProcessing) console.log(`🛣️ applyHighwayRepetitions called for highwayType: ${highwayType}, model: ${modelFilename}`);
+function applyNaturalRepetitions(feature, modelFilename, modelConfig, naturalType) {
+    if (naturalRepetitionDebugConfig.enabled && naturalRepetitionDebugConfig.logProcessing) console.log(`🌿 applyNaturalRepetitions called for naturalType: ${naturalType}, model: ${modelFilename}`);
     
     const geometry = feature.getGeometry();
     if (!geometry || geometry.getType() !== 'LineString') {
-        if (highwayRepetitionDebugConfig.enabled) console.log('🛣️ Geometry not a LineString, skipping');
+        if (naturalRepetitionDebugConfig.enabled) console.log('🌿 Geometry not a LineString, skipping');
         return;
     }
 
     const coordinates = geometry.getCoordinates().map(coord =>
         ol.proj.transform(coord, window.map.getView().getProjection(), 'EPSG:4326')
     );
-    if (highwayRepetitionDebugConfig.enabled && highwayRepetitionDebugConfig.logProcessing) console.log(`🛣️ Processing highway ${highwayType} with ${coordinates.length} coordinates`);
+    if (naturalRepetitionDebugConfig.enabled && naturalRepetitionDebugConfig.logProcessing) console.log(`🌿 Processing natural ${naturalType} with ${coordinates.length} coordinates`);
 
-    const repetitions = generateHighwayRepetitions(coordinates, highwayType);
+    const repetitions = generateNaturalRepetitions(coordinates, naturalType);
 
-    // Store repetition data on original feature (like footway repetitions do)
+    // Store repetition data on original feature
     if (repetitions.length > 0) {
-        if (highwayRepetitionDebugConfig.enabled && highwayRepetitionDebugConfig.logStorage) console.log(`🛣️ Storing ${repetitions.length} highway repetition configurations on original feature`);
+        if (naturalRepetitionDebugConfig.enabled && naturalRepetitionDebugConfig.logStorage) console.log(`🌿 Storing ${repetitions.length} natural repetition configurations on original feature`);
 
         repetitions.forEach((rep, index) => {
             const repetitionKey = `repetition_${index}`;
@@ -254,30 +236,30 @@ function applyHighwayRepetitions(feature, modelFilename, modelConfig, highwayTyp
             // Apply bearing to Y-axis (heading) while preserving other rotations
             const adjustedRotation = [
                 baseRotation[0], // X-axis rotation (pitch)
-                bearingRotation,  // Y-axis rotation (heading) - aligned with road direction
+                bearingRotation,  // Y-axis rotation (heading) - aligned with feature direction
                 baseRotation[2]  // Z-axis rotation (roll)
             ];
             
             feature.set(`${repetitionKey}_rotation`, adjustedRotation);
 
-            if (highwayRepetitionDebugConfig.enabled && highwayRepetitionDebugConfig.logStorage && index < 5) {
-                console.log(`🛣️ Stored highway repetition ${index + 1} with bearing: ${(rep.bearing * 180 / Math.PI).toFixed(1)}°, rotation: [${adjustedRotation.map(r => (r * 180 / Math.PI).toFixed(1) + '°').join(', ')}]`);
+            if (naturalRepetitionDebugConfig.enabled && naturalRepetitionDebugConfig.logStorage && index < 5) {
+                console.log(`🌿 Stored natural repetition ${index + 1} with bearing: ${(rep.bearing * 180 / Math.PI).toFixed(1)}°, rotation: [${adjustedRotation.map(r => (r * 180 / Math.PI).toFixed(1) + '°').join(', ')}]`);
             }
         });
 
-        if (highwayRepetitionDebugConfig.enabled) console.log(`🛣️ Successfully stored ${repetitions.length} highway repetition configurations`);
+        if (naturalRepetitionDebugConfig.enabled) console.log(`🌿 Successfully stored ${repetitions.length} natural repetition configurations`);
     } else {
-        if (highwayRepetitionDebugConfig.enabled) console.log(`🛣️ No highway repetitions to store`);
+        if (naturalRepetitionDebugConfig.enabled) console.log(`🌿 No natural repetitions to store`);
     }
 }
 
 // Export functions for use in other modules
-window.highwayRepetition = {
-    applyHighwayRepetitions,
-    generateHighwayRepetitions,
-    getHighwayConfig,
-    highwayRepetitionConfig
+window.naturalRepetition = {
+    applyNaturalRepetitions,
+    generateNaturalRepetitions,
+    getNaturalConfig,
+    naturalRepetitionConfig
 };
 
-// Debug: Confirm highway_repetition.js is loaded
-console.log('🛣️ highway_repetition.js loaded successfully');
+// Debug: Confirm natural_repetition.js is loaded
+console.log('🌿 natural_repetition.js loaded successfully');

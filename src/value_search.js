@@ -239,6 +239,13 @@ function processQueryResults(allFeatures, key, value) {
         osmTags.forEach(tag => {
             tagsObj[tag] = properties[tag];
         });
+        
+        // Debug: Check if orientation tag exists for bench features
+        if (tagsObj.amenity === 'bench') {
+            console.log(`🪑 BENCH DEBUG: Feature ${index + 1} tagsObj:`, tagsObj);
+            console.log(`🪑 BENCH DEBUG: Orientation tag:`, tagsObj.orientation);
+            console.log(`🪑 BENCH DEBUG: All properties:`, properties);
+        }
 
         // Detect geometry type
         let geometry = feature.getGeometry ? feature.getGeometry() : properties.geometry;
@@ -270,6 +277,17 @@ function processQueryResults(allFeatures, key, value) {
                 } else {
                     geomType = 'Point'; // fallback
                 }
+            }
+
+            // Special debugging for fence features
+            if (tagsObj.barrier === 'fence' || tagsObj.fence_type) {
+                console.log(`🚜 FENCE GEOMETRY DEBUG: Raw geometry object:`, geometry);
+                console.log(`🚜 FENCE GEOMETRY DEBUG: Geometry has getType method:`, typeof geometry.getType);
+                console.log(`🚜 FENCE GEOMETRY DEBUG: geometry.getType() result:`, geometry.getType ? geometry.getType() : 'NO getType');
+                console.log(`🚜 FENCE GEOMETRY DEBUG: Detected geomType: ${geomType}`);
+                console.log(`🚜 FENCE GEOMETRY DEBUG: geometry.getCoordinates():`, geometry.getCoordinates ? geometry.getCoordinates() : 'NO getCoordinates');
+                console.log(`🚜 FENCE GEOMETRY DEBUG: Feature properties:`, feature.getProperties());
+                console.log(`🚜 FENCE GEOMETRY DEBUG: Feature originalType:`, feature.get('originalType'));
             }
 
             if (debugConfig.enabled && debugConfig.logGeometryDetection) console.log(`🎯 Detected geometry type: ${geomType}`);
@@ -337,6 +355,25 @@ function processQueryResults(allFeatures, key, value) {
                         window.highwayRepetition.applyHighwayRepetitions(feature, modelFilename, modelConfig, highway);
                     } catch (error) {
                         console.error(`🛣️ Error applying repetitions to highway ${highway} query result:`, error);
+                    }
+                }
+            }
+
+            // Apply fence repetitions if this is a fence feature
+            if (window.fenceRepetition && typeof window.fenceRepetition.applyFenceRepetitions === 'function') {
+                const tags = feature.getProperties();
+                const barrier = tags.barrier;
+                const fenceType = tags.fence_type;
+                
+                console.log(`🚜 SEARCH DEBUG: Checking fence feature - barrier: ${barrier}, fence_type: ${fenceType}`);
+                
+                if (barrier === 'fence' || fenceType) {
+                    const fenceTypeToUse = fenceType || 'default';
+                    console.log(`🚜 SEARCH DEBUG: Applying repetitions to fence ${fenceTypeToUse} feature from query:`, tags);
+                    try {
+                        window.fenceRepetition.applyFenceRepetitions(feature, modelFilename, modelConfig, fenceTypeToUse);
+                    } catch (error) {
+                        console.error(`🚜 Error applying repetitions to fence ${fenceTypeToUse} query result:`, error);
                     }
                 }
             }

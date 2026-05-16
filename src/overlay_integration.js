@@ -495,7 +495,7 @@ function assignModelToFeature(feature, allFeatures = null) {
                     feature.set('modelRotation', modelConfig.rotation);
                     
                     // Log bearing and rotation information
-                    console.log(`🎯 Model ${modelFilename} orientation info for point feature:`);
+                    console.log(`� Model ${modelFilename} orientation info for point feature:`);
                     console.log(`  📍 Position: [${lonLat[0].toFixed(6)}, ${lonLat[1].toFixed(6)}]`);
                     console.log(`  🔄 Final rotation: [${modelConfig.rotation.join(', ')}]`);
                     console.log(`  📍 Feature ID: ${properties.id || 'unknown'}, Tags:`, tagsObj);

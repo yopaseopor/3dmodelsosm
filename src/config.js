@@ -1,5 +1,3 @@
-
-
 /**
  * OSM Cat config
  */
@@ -63,37 +61,35 @@ var config = {
 		noNodesFound: 'No se ha encontrado información.',
 		wayLabel: 'Vía:'
 	},
+	// Shared list of Overpass API servers (must match the selector in value_search.js)
+	_overpassServers: [
+		'https://overpass-api.de/api/interpreter',
+		'https://overpass.kumi.systems/api/interpreter',
+		'https://overpass.saltant.org/api/interpreter',
+		'https://overpass.private.coffee/api/interpreter',
+		'https://overpass.openstreetmap.fr/api/interpreter',
+		'https://overpass.osm.ch/api/interpreter',
+		'https://z.overpass-api.de/api/interpreter'
+	],
 	overpassApi: function(){
-		// Multiple Overpass API servers for fallback
-		var overpassServers = [
-			'https://overpass-api.de/api/interpreter',
-			'https://overpass.kumi.systems/api/interpreter',
-			'https://overpass.nchc.org.tw/api/interpreter',
-			'https://z.overpass-api.de/api/interpreter'
-		];
-		
-		// Try to get a working server from localStorage or use the first one
+		// Try to get the server selected by the user from localStorage, or use the first one
+		var servers = this._overpassServers;
 		var currentServerIndex = parseInt(localStorage.getItem('overpassServerIndex') || '0');
-		return overpassServers[currentServerIndex];
+		// Clamp to valid range
+		if (currentServerIndex < 0 || currentServerIndex >= servers.length) {
+			currentServerIndex = 0;
+		}
+		return servers[currentServerIndex];
 	},
 	overpassApiFallback: function() {
-		// Get next available server
-		var overpassServers = [
-			'https://overpass-api.de/api/interpreter',
-			'https://overpass.kumi.systems/api/interpreter',
-			'https://overpass.saltant.org/api/interpreter',
-			'https://overpass.private.coffee/api/interpreter',
-			'https://overpass.openstreetmap.fr/api/interpreter',
-			'https://overpass.osm.ch/api/interpreter',
-			'https://z.overpass-api.de/api/interpreter'
-		];
-		
+		// Get next available server for fallback when the current one fails
+		var servers = this._overpassServers;
 		var currentIndex = parseInt(localStorage.getItem('overpassServerIndex') || '0');
-		var nextIndex = (currentIndex + 1) % overpassServers.length;
+		var nextIndex = (currentIndex + 1) % servers.length;
 		localStorage.setItem('overpassServerIndex', nextIndex.toString());
-		
-		console.log('Switching to Overpass server:', overpassServers[nextIndex]);
-		return overpassServers[nextIndex];
+
+		console.log('Switching to Overpass server:', servers[nextIndex]);
+		return servers[nextIndex];
 	},
 	//@@ Mapas de fondo
 	layers: [
@@ -242,7 +238,7 @@ var config = {
 				
 		
 {
-			group: 'Alimentación',
+			group: 'Test',
 			title: 'Supermercados',
 			query: '(nwr["shop"="supermarket"]({{bbox}});node(w););out meta;',
 			iconSrc: imgSrc + 'icones/maxspeed_empty.svg',
@@ -279,7 +275,7 @@ style: function (feature) {
 
 /*@@ inicio-fin de copia */			},
 /*   abrir */							{
-    group: 'Alimentación',
+    group: 'Test',
     title: 'Supermercados',
     query: '(nwr["shop"="supermarket"]({{bbox}});node(w););out meta;',
     iconSrc: imgSrc + 'icones/maxspeed_empty.svg',
@@ -306,7 +302,7 @@ style: function (feature) {
             }),
             text: new ol.style.Text({
                 text: name,
-             			
+              			
                 fill: new ol.style.Fill({
                     color: 'rgba(0,0,0,1)'
                 }),
@@ -330,8 +326,8 @@ style: function (feature) {
 
 /*@@ fin-inicio de copia */			},
 /*   abrir */							{
-    group: 'Test',
-    title: 'All (z20)',
+    group: 'Overpass',
+    title: 'All in a zone (z20)',
 query: '(nwr({{bbox}});<;);out meta;',
     iconSrc: imgSrc + 'icones/maxspeed_empty.svg',
     iconStyle: 'background-color:rgba(255,255,255,0.4)',
@@ -357,7 +353,7 @@ query: '(nwr({{bbox}});<;);out meta;',
             }),
             text: new ol.style.Text({
                 text: name,
-             			
+              			
                 fill: new ol.style.Fill({
                     color: 'rgba(0,0,0,1)'
                 }),
@@ -381,8 +377,8 @@ query: '(nwr({{bbox}});<;);out meta;',
 
 /*@@ fin-inicio de copia */			},
 /*   abrir */							{
-    group: 'Test',
-    title: 'geojson (z20)',
+    group: 'Geojson',
+    title: 'Test geojson (z20)',
 geojson: '/3dmodelsosm/src/test.geojson',
     iconSrc: imgSrc + 'icones/maxspeed_empty.svg',
     iconStyle: 'background-color:rgba(255,255,255,0.4)',
@@ -408,7 +404,7 @@ geojson: '/3dmodelsosm/src/test.geojson',
             }),
             text: new ol.style.Text({
                 text: name,
-             			
+              			
                 fill: new ol.style.Fill({
                     color: 'rgba(0,0,0,1)'
                 }),
@@ -432,8 +428,12 @@ geojson: '/3dmodelsosm/src/test.geojson',
 
 /*@@ fin-inicio de copia */			},
 /*   abrir */							{
-    group: 'Test',
-    title: 'BCN geojson',
+    group: 'Geojson',
+    title: 'ES_CAT_BCN geojson',
+geojson: './src/bcn1.geojson',
+    iconSrc: imgSrc + 'icones/maxspeed_empty.svg',
+    iconStyle: 'background-color:rgba(255,255,255,0.4)',
+    title: 'ES_CAT_BCN geojson',
 geojson: './src/bcn1.geojson',
     iconSrc: imgSrc + 'icones/maxspeed_empty.svg',
     iconStyle: 'background-color:rgba(255,255,255,0.4)',
@@ -483,8 +483,8 @@ geojson: './src/bcn1.geojson',
 
 /*@@ fin-inicio de copia */			},
 /*   abrir */							{
-    group: 'Test',
-    title: 'VNG semàfor',
+    group: 'Geojson',
+    title: 'ES_CAT_VNG traffic_signals semáforos semàfors',
 geojson: './src/vng_highway_traffic_signals.geojson',
     iconSrc: imgSrc + 'icones/maxspeed_empty.svg',
     iconStyle: 'background-color:rgba(255,255,255,0.4)',
@@ -534,8 +534,8 @@ geojson: './src/vng_highway_traffic_signals.geojson',
 
 /*@@ fin-inicio de copia */			},
 /*   abrir */							{
-    group: 'Test',
-    title: 'VNG arbre',
+    group: 'Geojson',
+    title: 'ES_CAT_VNG trees árboles arbres',
 geojson: './src/vng_natural_tree.geojson',
     iconSrc: imgSrc + 'icones/maxspeed_empty.svg',
     iconStyle: 'background-color:rgba(255,255,255,0.4)',
@@ -585,8 +585,8 @@ geojson: './src/vng_natural_tree.geojson',
 
 },
 /*   abrir */							{
-    group: 'Test',
-    title: 'VNG5 area geojson',
+    group: 'Geojson',
+    title: 'ES_CAT_VNG5 Sant Joan area',
 geojson: './src/vng5_area.geojson',
     iconSrc: imgSrc + 'icones/maxspeed_empty.svg',
     iconStyle: 'background-color:rgba(255,255,255,0.4)',
@@ -636,8 +636,8 @@ geojson: './src/vng5_area.geojson',
 
 },
 /*   abrir */							{
-    group: 'Test',
-    title: 'Planetes Llefià geojson',
+    group: 'Geojson',
+    title: 'ES_CAT_BDN Planetes Llefià',
 geojson: './src/planetes_llefia.geojson',
     iconSrc: imgSrc + 'icones/maxspeed_empty.svg',
     iconStyle: 'background-color:rgba(255,255,255,0.4)',
@@ -687,8 +687,8 @@ geojson: './src/planetes_llefia.geojson',
 
 },
 /*   abrir */							{
-    group: 'Test',
-    title: 'Pedrola',
+    group: 'Geojson',
+    title: 'ES_ARA_ZGZ Pedrola',
 geojson: './src/pedrola.geojson',
     iconSrc: imgSrc + 'icones/maxspeed_empty.svg',
     iconStyle: 'background-color:rgba(255,255,255,0.4)',
@@ -738,8 +738,8 @@ geojson: './src/pedrola.geojson',
 
 },
 /*   abrir */							{
-    group: 'Test',
-    title: 'Sant Andreu de la Barca geojson',
+    group: 'Geojson',
+    title: 'ES_CAT_StAnBa Sant Andreu de la Barca',
 geojson: './src/catalunya_sab.geojson',
     iconSrc: imgSrc + 'icones/maxspeed_empty.svg',
     iconStyle: 'background-color:rgba(255,255,255,0.4)',
@@ -789,8 +789,8 @@ geojson: './src/catalunya_sab.geojson',
 
 },
 /*   abrir */							{
-    group: 'Test',
-    title: 'Talaia geojson',
+    group: 'Geojson',
+    title: 'ES_CAT_VNG Talaia',
 geojson: './src/talaia.geojson',
     iconSrc: imgSrc + 'icones/maxspeed_empty.svg',
     iconStyle: 'background-color:rgba(255,255,255,0.4)',
@@ -840,8 +840,8 @@ geojson: './src/talaia.geojson',
 
 },
 /*   abrir */							{
-    group: 'Test',
-    title: 'VNG test geojson',
+    group: 'Geojson',
+    title: 'ES_CAT_VNG1 Molí de Vent',
 geojson: './src/vng1.geojson',
     iconSrc: imgSrc + 'icones/maxspeed_empty.svg',
     iconStyle: 'background-color:rgba(255,255,255,0.4)',
@@ -891,8 +891,8 @@ geojson: './src/vng1.geojson',
 
 /*@@ fin-inicio de copia */			},
 /*   abrir */							{
-    group: 'Test',
-    title: 'VNG2 zone geojson',
+    group: 'Geojson',
+    title: 'ES_CAT_VNG2 Torrent Sant Joan',
 geojson: './src/vng2.geojson',
     iconSrc: imgSrc + 'icones/maxspeed_empty.svg',
     iconStyle: 'background-color:rgba(255,255,255,0.4)',
@@ -942,8 +942,8 @@ geojson: './src/vng2.geojson',
 
 /*@@ fin-inicio de copia */			},
 /*   abrir */							{
-    group: 'Test',
-    title: 'VNG3 traffic signals crossing geojson',
+    group: 'Geojson',
+    title: 'ES_CAT_VNG3 encreuament',
 geojson: './src/vng3.geojson',
     iconSrc: imgSrc + 'icones/maxspeed_empty.svg',
     iconStyle: 'background-color:rgba(255,255,255,0.4)',
@@ -993,8 +993,8 @@ geojson: './src/vng3.geojson',
 
 /*@@ fin-inicio de copia */			},
 /*   abrir */							{
-    group: 'Test',
-    title: 'VNG4 area geojson',
+    group: 'Geojson',
+    title: 'ES_CAT_VNG4 Olèrdola',
 geojson: './src/vng4_area.geojson',
     iconSrc: imgSrc + 'icones/maxspeed_empty.svg',
     iconStyle: 'background-color:rgba(255,255,255,0.4)',
@@ -1045,8 +1045,8 @@ geojson: './src/vng4_area.geojson',
 },
  {
 
-   group: 'Test',
-   title: 'all trees geojson',
+   group: 'Geojson',
+   title: 'ES_CAT_BCN Moll Marina',
    geojson: '/3dmodelsosm/src/test.geojson',
    iconSrc:'https://raw.githubusercontent.com/yopaseopor/beta_preset_josm/master/ES/traffic_signs/ES/ES_B1a.png',
    iconStyle: 'background-color:rgba(255,255,255,0.4)',

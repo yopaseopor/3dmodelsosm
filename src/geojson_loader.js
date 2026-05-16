@@ -146,7 +146,9 @@ class GeoJSONLoader {
                                                        Object.keys(tags).some(key => key.startsWith('area:'));
                                     
                                     // Treat as area if closed or has area tags (EXACT same as overlays)
-                                    geometryType = (isClosed || hasAreaTag) ? 'area' : 'line';
+                                    // BUT NOT for fence features - fences should always be treated as lines, even when closed
+                                    const isFence = tags['barrier'] === 'fence' || tags['fence_type'];
+                                    geometryType = (isClosed && !isFence) || hasAreaTag ? 'area' : 'line';
                                     
                                     if (isClosed) {
                                         console.log(`Feature ${index}: Closed LineString detected, treating as area`);
@@ -167,9 +169,15 @@ class GeoJSONLoader {
                             // Check if the tags match any model mapping (EXACT same approach as existing system)
                             const modelMapping = window.models ? window.models.getModelForTags(tags, wayCoordinates, nodeIndex, geometryType) : null;
                             if (modelMapping) {
-                                console.log(`Feature ${index}: SUCCESS: Found model mapping for ${geometryType} feature:`, modelMapping);
+                                console.log(`📍 Feature ${index}: SUCCESS: Found model mapping for ${geometryType} feature:`, modelMapping);
                                 const modelFilename = modelMapping.model;
                                 const modelConfig = modelMapping.config;
+
+                                // Skip if model filename is empty
+                                if (!modelFilename || modelFilename.trim() === '') {
+                                    console.log(`📍 Feature ${index}: Skipping empty model filename for tags:`, tags);
+                                    return; // Skip to next feature
+                                }
 
                                 // Set the model property for ol-cesium to use - EXACT same as existing system
                                 const modelUrl = `/3dmodelsosm/src/models/${modelFilename}`;
@@ -183,24 +191,38 @@ class GeoJSONLoader {
 
                                 // Set additional model configuration for positioning (EXACT same as existing system)
                                 if (modelConfig) {
-                                    feature.set('modelHeightOffset', modelConfig.heightOffset + 10);
+                                    feature.set('modelHeightOffset', modelConfig.heightOffset);
                                     feature.set('modelRotation', modelConfig.rotation);
                                 } else {
-                                    feature.set('modelHeightOffset', 10);
+                                    feature.set('modelHeightOffset', 0);
                                 }
 
-                                console.log(`Feature ${index}: SUCCESS: Assigned 3D model ${modelFilename} to GeoJSON feature`);
+                                console.log(`📍 Feature ${index}: SUCCESS: Assigned 3D model ${modelFilename} to GeoJSON feature with URL: ${modelUrl}`);
 
                                 // Apply model repetitions for lines and areas (EXACT same logic as existing system)
                                 if (modelMapping.geometryType !== 'point' && window.modelRepetition) {
                                     console.log(`Feature ${index}: Applying model repetitions for ${modelMapping.geometryType} feature`);
                                     
-                                    if (modelMapping.geometryType === 'line' && window.highwayRepetition) {
-                                        // Handle highway lines (EXACT same as existing system)
+                                    if (modelMapping.geometryType === 'line' && (window.highwayRepetition || window.fenceRepetition)) {
+                                        // Handle fence lines first
+                                        const barrier = tags.barrier;
+                                        const fenceType = tags.fence_type;
                                         const highway = tags.highway;
                                         const waterway = tags.waterway;
                                         
-                                        if (highway && highway !== 'footway' && highway !== 'path' && highway !== 'pedestrian') {
+                                        if (barrier === 'fence' || fenceType) {
+                                            // Handle fence lines
+                                            if (window.fenceRepetition) {
+                                                const fenceTypeToUse = fenceType || 'default';
+                                                console.log(`Feature ${index}: Applying repetitions to fence ${fenceTypeToUse} feature`);
+                                                try {
+                                                    window.fenceRepetition.applyFenceRepetitions(feature, modelFilename, modelConfig, fenceTypeToUse);
+                                                } catch (error) {
+                                                    console.error(`Feature ${index}: Error applying repetitions to fence ${fenceTypeToUse} feature:`, error);
+                                                    window.modelRepetition.applyModelRepetitions(feature, modelFilename, modelConfig, modelMapping.geometryType);
+                                                }
+                                            }
+                                        } else if (highway && highway !== 'footway' && highway !== 'path' && highway !== 'pedestrian') {
                                             console.log(`Feature ${index}: Applying repetitions to highway ${highway} feature`);
                                             try {
                                                 window.highwayRepetition.applyHighwayRepetitions(feature, modelFilename, modelConfig, highway);
@@ -254,7 +276,7 @@ class GeoJSONLoader {
                         if (window.ol3d && window.ol3d.getCesiumScene) {
                             console.log(`📍 3D mode active, triggering model renderer update`);
                             
-                            // Trigger model renderer to process all repetitions (buildings and area textures)
+                            // Trigger model renderer once to process all models (buildings, area textures, repetitions)
                             if (window.modelRenderer) {
                                 window.modelRenderer.addAllModels();
                             }
@@ -262,14 +284,6 @@ class GeoJSONLoader {
                             // Also trigger buildings processing to catch any building entities
                             if (window.buildings) {
                                 window.buildings.addBuildingsToScene(window.ol3d);
-                            }
-                            
-                            // Trigger area repetition processing for any pending area features
-                            if (window.areaRepetition) {
-                                console.log(`📍 Triggering area repetition processing`);
-                                // The area repetition data is already stored on features from the loading process
-                                // So we just need to trigger the model renderer to process them
-                                window.modelRenderer.addAllModels();
                             }
                         }
                     }, 100);
@@ -448,6 +462,31 @@ class GeoJSONLoader {
             window.map.removeLayer(layerInfo.layer);
         }
         
+        // Clean up 3D models associated with this layer
+        if (window.modelRenderer && layerInfo.layer) {
+            const features = layerInfo.layer.getSource().getFeatures();
+            features.forEach((feature, fidx) => {
+                // Create the same feature ID pattern used in model_renderer.js
+                let featureId = feature.getId();
+                if (!featureId) {
+                    const layerName = layerInfo.name || 'unknown';
+                    const geometry = feature.getGeometry();
+                    const geometryHash = geometry ? geometry.getExtent().join('_') : 'no_geom';
+                    featureId = `feature_${layerName}_${fidx}_${geometryHash}`;
+                }
+                
+                // Remove from loaded models tracking
+                if (window.modelRenderer.loadedModels.has(featureId)) {
+                    const loadedModel = window.modelRenderer.loadedModels.get(featureId);
+                    if (loadedModel.model && loadedModel.model.destroy) {
+                        loadedModel.model.destroy();
+                    }
+                    window.modelRenderer.loadedModels.delete(featureId);
+                    console.log(`📍 Cleaned up model for feature ${featureId}`);
+                }
+            });
+        }
+        
         this.loadedLayers.delete(layerId);
         console.log(`📍 GeoJSON layer "${layerInfo.name}" removed`);
         return true;
@@ -569,9 +608,37 @@ class GeoJSONLoader {
             });
         }
         
+        // Clean up all 3D models from GeoJSON layers
+        if (window.modelRenderer) {
+            this.loadedLayers.forEach((layerInfo, layerId) => {
+                if (layerInfo.layer) {
+                    const features = layerInfo.layer.getSource().getFeatures();
+                    features.forEach((feature, fidx) => {
+                        // Create the same feature ID pattern used in model_renderer.js
+                        let featureId = feature.getId();
+                        if (!featureId) {
+                            const layerName = layerInfo.name || 'unknown';
+                            const geometry = feature.getGeometry();
+                            const geometryHash = geometry ? geometry.getExtent().join('_') : 'no_geom';
+                            featureId = `feature_${layerName}_${fidx}_${geometryHash}`;
+                        }
+                        
+                        // Remove from loaded models tracking
+                        if (window.modelRenderer.loadedModels.has(featureId)) {
+                            const loadedModel = window.modelRenderer.loadedModels.get(featureId);
+                            if (loadedModel.model && loadedModel.model.destroy) {
+                                loadedModel.model.destroy();
+                            }
+                            window.modelRenderer.loadedModels.delete(featureId);
+                        }
+                    });
+                }
+            });
+        }
+        
         const count = this.loadedLayers.size;
         this.loadedLayers.clear();
-        console.log(`📍 Cleared ${count} GeoJSON layers`);
+        console.log(`📍 Cleared ${count} GeoJSON layers with model cleanup`);
     }
 
     /**

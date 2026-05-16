@@ -1,0 +1,301 @@
+{
+    "type": "FeatureCollection",
+    "generator": "JOSM",
+    "bbox": [
+        1.71614710000,
+        41.21970940000,
+        1.71651450000,
+        41.21989100000
+    ],
+    "features": [
+        {
+            "type": "Feature",
+            "properties": {
+                "playground": "springy"
+            },
+            "geometry": {
+                "type": "Point",
+                "coordinates": [
+                    1.71631950000,
+                    41.21980490000
+                ]
+            }
+        },
+        {
+            "type": "Feature",
+            "properties": {
+                "amenity": "waste_basket",
+                "material": "metal"
+            },
+            "geometry": {
+                "type": "Point",
+                "coordinates": [
+                    1.71633510000,
+                    41.21975000000
+                ]
+            }
+        },
+        {
+            "type": "Feature",
+            "properties": {
+                "playground": "springy"
+            },
+            "geometry": {
+                "type": "Point",
+                "coordinates": [
+                    1.71632680000,
+                    41.21977650000
+                ]
+            }
+        },
+        {
+            "type": "Feature",
+            "properties": {
+                "playground": "swing"
+            },
+            "geometry": {
+                "type": "Point",
+                "coordinates": [
+                    1.71641420000,
+                    41.21979630000
+                ]
+            }
+        },
+        {
+            "type": "Feature",
+            "properties": {
+                "amenity": "bench",
+                "armrest": "yes",
+                "backrest": "yes",
+                "material": "wood",
+                "direction": "116"
+            },
+            "geometry": {
+                "type": "Point",
+                "coordinates": [
+                    1.71636810000,
+                    41.21986520000
+                ]
+            }
+        },
+        {
+            "type": "Feature",
+            "properties": {
+                "barrier": "gate",
+                "material": "wood"
+            },
+            "geometry": {
+                "type": "Point",
+                "coordinates": [
+                    1.71623090000,
+                    41.21984310000
+                ]
+            }
+        },
+        {
+            "type": "Feature",
+            "properties": {
+                "amenity": "drinking_water"
+            },
+            "geometry": {
+                "type": "Point",
+                "coordinates": [
+                    1.71636049770,
+                    41.21976519190
+                ]
+            }
+        },
+        {
+            "type": "Feature",
+            "properties": {
+                "barrier": "fence",
+                "fence_type": "pole",
+                "height": "0.5",
+                "material": "wood"
+            },
+            "geometry": {
+                "type": "LineString",
+                "coordinates": [
+                    [
+                        1.71645250000,
+                        41.21984110000
+                    ],
+                    [
+                        1.71647530000,
+                        41.21979490000
+                    ],
+                    [
+                        1.71623660000,
+                        41.21972630000
+                    ],
+                    [
+                        1.71622580000,
+                        41.21974850000
+                    ],
+                    [
+                        1.71618230000,
+                        41.21982800000
+                    ],
+                    [
+                        1.71623090000,
+                        41.21984310000
+                    ],
+                    [
+                        1.71634470000,
+                        41.21987820000
+                    ],
+                    [
+                        1.71645250000,
+                        41.21984110000
+                    ]
+                ]
+            }
+        },
+        {
+            "type": "Feature",
+            "properties": {
+                "amenity": "bench",
+                "armrest": "yes",
+                "backrest": "yes",
+                "material": "wood",
+                "direction": "250"
+            },
+            "geometry": {
+                "type": "Point",
+                "coordinates": [
+                    1.71633821279,
+                    41.21976009210
+                ]
+            }
+        },
+        {
+            "type": "Feature",
+            "properties": {
+                "amenity": "bench",
+                "armrest": "yes",
+                "backrest": "yes",
+                "material": "wood",
+                "direction": "250"
+            },
+            "geometry": {
+                "type": "Point",
+                "coordinates": [
+                    1.71631772939,
+                    41.21975549474
+                ]
+            }
+        },
+        {
+            "type": "Feature",
+            "properties": {
+                "check_date": "2026-05-02",
+                "playground": "basketswing"
+            },
+            "geometry": {
+                "type": "Point",
+                "coordinates": [
+                    1.71643350000,
+                    41.21980180000
+                ]
+            }
+        },
+        {
+            "type": "Feature",
+            "properties": {
+                "playground": "springy"
+            },
+            "geometry": {
+                "type": "Point",
+                "coordinates": [
+                    1.71628870000,
+                    41.21980950000
+                ]
+            }
+        },
+        {
+            "type": "Feature",
+            "properties": {
+                "leisure": "playground",
+                "name": "Plaça d'Armand Cardona i Torrandell",
+                "operator": "Ajuntament de Vilanova i la Geltrú",
+                "ref": "38"
+            },
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [
+                    [
+                        [
+                            1.71618040000,
+                            41.21982930000
+                        ],
+                        [
+                            1.71623550000,
+                            41.21972310000
+                        ],
+                        [
+                            1.71647820000,
+                            41.21979400000
+                        ],
+                        [
+                            1.71645380000,
+                            41.21984260000
+                        ],
+                        [
+                            1.71634420000,
+                            41.21988110000
+                        ],
+                        [
+                            1.71618040000,
+                            41.21982930000
+                        ]
+                    ]
+                ]
+            }
+        },
+        {
+            "type": "Feature",
+            "properties": {
+                "barrier": "gate",
+                "material": "wood"
+            },
+            "geometry": {
+                "type": "Point",
+                "coordinates": [
+                    1.71622580000,
+                    41.21974850000
+                ]
+            }
+        },
+        {
+            "type": "Feature",
+            "properties": {
+                "playground": "slide",
+				"direction": "68"
+            },
+            "geometry": {
+                "type": "Point",
+                "coordinates": [
+                    1.71626143365,
+                    41.21976628989
+                ]
+            }
+        },
+        {
+            "type": "Feature",
+            "properties": {
+                "amenity": "bench",
+                "armrest": "yes",
+                "backrest": "yes",
+                "material": "wood",
+                "direction": "116"
+            },
+            "geometry": {
+                "type": "Point",
+                "coordinates": [
+                    1.71641397650,
+                    41.21984772713
+                ]
+            }
+        }
+    ]
+}
