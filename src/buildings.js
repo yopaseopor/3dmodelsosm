@@ -44,6 +44,7 @@ function getBuildingColor(tags) {
         case 'university':
         case 'hospital':
             return Cesium.Color.YELLOW;
+			case 'triumphal_arch':
         case 'church':
         case 'cathedral':
         case 'chapel':
