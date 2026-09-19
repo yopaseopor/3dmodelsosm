@@ -4,6 +4,35 @@ This document explains how to use the GeoTIFF terrain integration feature in the
 
 ## Overview
 
+> **DEM ground**: The 3D view uses the **Mapterhorn global DEM**
+> (https://tiles.mapterhorn.com/tilejson.json, terrarium-encoded WebP tiles) as
+> the visible ground. Models, area textures and buildings are clamped to that
+> terrain automatically. A locally loaded GeoTIFF overrides the DEM inside its
+> bounds; unloading it ("Reset to Default") restores the Mapterhorn ground.
+> Run `mapterhornDiag()` in the browser console to diagnose the terrain chain.
+>
+> **Ground clamping strategy**:
+> - `mapterhornTerrain.getElevation` answers from the DEM **sampling grid** —
+>   the same source the terrain provider renders from — so heights always match
+>   the visible surface (querying the rendered globe returned coarse in-progress
+>   mesh heights while tiles streamed and mis-placed geometry).
+> - A **local GeoTIFF only overrides elevation when it IS the rendered ground**.
+>   In elevation-only mode the visual ground stays Mapterhorn; mixing sources
+>   (different vertical datums) shifted geometry off the visible surface.
+> - **Area/way textures** are ground-clamped entities
+>   (`HeightReference.CLAMP_TO_GROUND`): Cesium drapes them over terrain and
+>   imagery exactly — no step edges, no z-fighting, always aligned with ways.
+> - **Buildings** sample the DEM grid exactly per footprint corner
+>   (`getGroundSamples` with `smoothMeters: 0`), keep a flat roof above the
+>   highest corner, and bury walls 0.5m below the sampled base so no gap can
+>   open on convex ground; tracked entities are rebuilt when terrain refines
+>   after placement (never from no-data samples, never for sub-1m shifts).
+> - **GLTF models** (including kerb/fence/lamp repetitions) get a smoothed
+>   neighborhood DEM height + slope tilt, and re-seat (0.5m deadband) when new
+>   terrain tiles arrive. The model matrix is the single height source
+>   (`HeightReference.NONE` on primitives); legacy baked +10m offsets were
+>   removed — models must sit ON the DEM ground, not float above it.
+
 The GeoTIFF terrain integration allows you to:
 - Load GeoTIFF files containing elevation data
 - Apply the elevation data as terrain in the 3D scene

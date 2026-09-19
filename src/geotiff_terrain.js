@@ -709,6 +709,7 @@ window.terrainManager = {
             // ✅ Apply terrain ONLY for elevation queries, NEVER change visual rendering
             // This prevents Cesium from painting black areas, keeps all existing imagery perfectly intact
             // All elevation values are 100% active and used by all 3D models
+            // (The visible ground itself comes from the Mapterhorn DEM terrain provider)
             
             this.currentProvider = terrainProvider;
             // Do NOT change cesiumScene.terrainProvider at all - leave existing imagery and terrain completely untouched
@@ -744,7 +745,13 @@ window.terrainManager = {
      * @param {Object} cesiumScene - Cesium scene object
      */
     resetTerrain(cesiumScene) {
-        cesiumScene.terrainProvider = new Cesium.EllipsoidTerrainProvider();
+        // Keep the Mapterhorn DEM as the ground when the user unloads a GeoTIFF;
+        // only fall back to a flat ellipsoid if the DEM module is unavailable.
+        if (window.mapterhornTerrain && window.mapterhornTerrain.applyToScene) {
+            window.mapterhornTerrain.applyToScene(cesiumScene);
+        } else {
+            cesiumScene.terrainProvider = new Cesium.EllipsoidTerrainProvider();
+        }
         this.currentProvider = null;
         
         // Clear GeoTIFF provider data
@@ -777,6 +784,25 @@ window.terrainManager = {
      * @returns {number} Elevation in meters
      */
     getElevation(longitude, latitude) {
+        // 1) A local GeoTIFF may only override the DEM when it IS the rendered
+        //    ground. In elevation-only mode the visual ground stays Mapterhorn,
+        //    and the two sources use different vertical datums/resolutions —
+        //    mixing them shifts buildings/textures/models off the visible
+        //    surface (sunk or floating).
+        const scene = window.mapterhornTerrain && window.mapterhornTerrain._scene;
+        const demIsRendered = !!(scene && scene.terrainProvider && scene.terrainProvider.isMapterhornProvider);
+        if (!demIsRendered && this.geoTIFFProvider.ready && this.geoTIFFProvider.isWithinBounds(longitude, latitude)) {
+            return this.geoTIFFProvider.getElevation(longitude, latitude);
+        }
+        // 2) The rendered ground (Mapterhorn DEM) — always matches the screen.
+        if (window.mapterhornTerrain && window.mapterhornTerrain.getElevation) {
+            const demHeight = window.mapterhornTerrain.getElevation(longitude, latitude);
+            if (demHeight !== null && demHeight !== undefined && isFinite(demHeight)) {
+                return demHeight;
+            }
+            return 0;
+        }
+        // 3) No DEM module available: fall back to GeoTIFF elevation.
         if (this.geoTIFFProvider.ready && this.geoTIFFProvider.isWithinBounds(longitude, latitude)) {
             return this.geoTIFFProvider.getElevation(longitude, latitude);
         }

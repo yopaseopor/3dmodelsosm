@@ -193,7 +193,10 @@ window.modelRenderer = {
         if (!cesiumScene || !cesiumScene.camera) return false;
 
         const camera = cesiumScene.camera;
-        const position = Cesium.Cartesian3.fromDegrees(lon, lat, 0);
+        const position = Cesium.Cartesian3.fromDegrees(lon, lat,
+            (window.terrainManager && window.terrainManager.getElevation)
+                ? (window.terrainManager.getElevation(lon, lat) || 0)
+                : 0);
         const frustum = camera.frustum;
 
         // Check if position is in camera frustum
@@ -208,7 +211,10 @@ window.modelRenderer = {
 
         const camera = cesiumScene.camera;
         const cameraPosition = camera.positionCartographic;
-        const position = Cesium.Cartographic.fromDegrees(lon, lat, 0);
+        const position = Cesium.Cartographic.fromDegrees(lon, lat,
+            (window.terrainManager && window.terrainManager.getElevation)
+                ? (window.terrainManager.getElevation(lon, lat) || 0)
+                : 0);
 
         return Cesium.Cartesian3.distance(
             Cesium.Cartographic.toCartesian(cameraPosition),
@@ -372,8 +378,11 @@ window.modelRenderer = {
             console.log(`🎯 Total loaded models: ${this.loadedModels.size}`);
         }
 
-        // Skip if already loaded
-        if (this.loadedModels.has(featureId)) {
+        // Skip if already loaded in THIS 3D session. The map is cleared when 3D
+        // mode ends (primitives are destroyed with the scene) so re-entering 3D
+        // rebuilds everything — persistent entries pointed at dead primitives.
+        const tracked = this.loadedModels.get(featureId);
+        if (tracked && tracked.sessionId === this._session3dId) {
             if (debugConfig.enabled) console.log(`🎯 Skipping already loaded feature: ${featureId}`);
             return;
         }
@@ -404,16 +413,27 @@ window.modelRenderer = {
         // Create model matrix for positioning BEFORE setting on model
         const heightOffset = feature.get('modelHeightOffset') || 0.0;
         
-        // Get terrain elevation if available
+        // Get terrain elevation if available. Exact bilinear DEM sample —
+        // the same interpolated surface buildings use and the terrain renders
+        // from. (Neighborhood averaging was tried and ELEVATED models on
+        // convex ground: the probe average rides above the true surface.)
         let terrainElevation = 0;
         if (window.terrainManager && window.terrainManager.getElevation) {
-            terrainElevation = window.terrainManager.getElevation(lonLat[0], lonLat[1]);
+            terrainElevation = window.terrainManager.getElevation(lonLat[0], lonLat[1]) || 0;
         }
         
         const totalHeight = heightOffset + terrainElevation;
         let modelMatrix = Cesium.Transforms.eastNorthUpToFixedFrame(
             Cesium.Cartesian3.fromDegrees(lonLat[0], lonLat[1], totalHeight)
         );
+        
+        // Tilt the model to follow the terrain slope so it stands correctly
+        // inclined on mountains (MapTerhorn DEM surface normal)
+        if (window.mapterhornTerrain && window.mapterhornTerrain.applySlopeTilt) {
+            try {
+                modelMatrix = window.mapterhornTerrain.applySlopeTilt(modelMatrix, lonLat[0], lonLat[1]);
+            } catch (e) { /* no DEM data yet */ }
+        }
         
         if (debugConfig.enabled && terrainElevation > 0) {
             console.log(`🎯 Model positioned at terrain elevation: ${terrainElevation.toFixed(1)}m + offset: ${heightOffset.toFixed(1)}m = ${totalHeight.toFixed(1)}m`);
@@ -440,21 +460,28 @@ window.modelRenderer = {
             if (debugConfig.enabled) console.log(`🎯 Applied rotation to model: [${modelRotation.map(r => (r * 180 / Math.PI).toFixed(2) + '°').join(', ')}]`);
         }
         
-        // Apply LOD scaling - but be less aggressive
-        let scale = model.scale || 1.0;
-        if (lodLevel === 'medium') scale *= 0.8; // Less reduction
-        if (lodLevel === 'low') scale *= 0.6;     // Less reduction
+        // IMPORTANT: no distance-based scaling. Shrinking far models made them
+        // inconsistent with identical models placed near the camera and with
+        // real-world sizes on terrain; real size must stay constant.
         
         // Update pooled model with ALL properties at once to prevent flashing
         pooledModel.model.modelMatrix = modelMatrix;
-        pooledModel.model.scale = scale;
-        pooledModel.model.heightReference = model.heightReference;
+        pooledModel.model.scale = model.scale || 1.0;
+        // ONE LAYER for everything: clamp the primitive to the RENDERED ground.
+        // Cesium re-clamps the matrix translation to the visible terrain every
+        // frame (rotation/tilt preserved), so models share the exact same
+        // surface as draped textures and re-seat themselves as tiles refine.
+        // IMPORTANT: Cesium primitives do NOT move with ol3d camera sync —
+        // they must be re-added every time 3D is (re)initialized, so never
+        // persist them across 3D sessions in loadedModels.
+        pooledModel.model.heightReference = Cesium.HeightReference.CLAMP_TO_GROUND;
         pooledModel.model.show = true; // Ensure it's visible
 
-        // Track loaded model with more persistent tracking
+        // Track loaded model for the current 3D session only
         this.loadedModels.set(featureId, {
             model: pooledModel.model,
             feature: feature,
+            sessionId: this._session3dId,
             lon: lonLat[0],
             lat: lonLat[1],
             distance: distance,
@@ -599,16 +626,23 @@ window.modelRenderer = {
         const repHeightOffset = feature.get(`fence_repetition_${repIndex}_heightOffset`) || 
                                feature.get(`repetition_${repIndex}_heightOffset`) || 0; // Use stored height offset instead of hardcoded 10
         
-        // Get terrain elevation if available
+        // Get terrain elevation if available (exact bilinear DEM sample, as above)
         let repTerrainElevation = 0;
         if (window.terrainManager && window.terrainManager.getElevation) {
-            repTerrainElevation = window.terrainManager.getElevation(repLonLat[0], repLonLat[1]);
+            repTerrainElevation = window.terrainManager.getElevation(repLonLat[0], repLonLat[1]) || 0;
         }
         
         const repTotalHeight = repHeightOffset + repTerrainElevation;
         let repModelMatrix = Cesium.Transforms.eastNorthUpToFixedFrame(
             Cesium.Cartesian3.fromDegrees(repLonLat[0], repLonLat[1], repTotalHeight)
         );
+        
+        // Follow terrain slope so poles/fences stand perpendicular to the ground
+        if (window.mapterhornTerrain && window.mapterhornTerrain.applySlopeTilt) {
+            try {
+                repModelMatrix = window.mapterhornTerrain.applySlopeTilt(repModelMatrix, repLonLat[0], repLonLat[1]);
+            } catch (e) { /* no DEM data yet */ }
+        }
         
         if (debugConfig.enabled && repTerrainElevation > 0) {
             console.log(`🚶 Repetition model ${repIndex} positioned at terrain elevation: ${repTerrainElevation.toFixed(1)}m + offset: ${repHeightOffset.toFixed(1)}m = ${repTotalHeight.toFixed(1)}m`);
@@ -660,8 +694,26 @@ window.modelRenderer = {
             show: true
         }));
         
-        // Clamp to ground for area repetitions
+        // Same layer as everything else: clamp to the rendered terrain; Cesium
+        // maintains ground contact every frame (matrix tilt is preserved).
         repCesiumModel.heightReference = Cesium.HeightReference.CLAMP_TO_GROUND;
+
+        // Track repetition models so the DEM re-seat hook can re-ground them
+        // when terrain tiles refine AFTER placement (without this, kerbs,
+        // fences and lamps placed before fine tiles arrived stayed floating).
+        this._repSeq = (this._repSeq || 0) + 1;
+        this.loadedModels.set('rep_' + repIndex + '_' + this._repSeq, {
+            model: repCesiumModel,
+            feature: feature,
+            sessionId: this._session3dId,
+            heightOffset: repHeightOffset,
+            lon: repLonLat[0],
+            lat: repLonLat[1],
+            distance: 0,
+            lodLevel: 'rep',
+            modelUrl: repModel.uri,
+            lastUpdate: Date.now()
+        });
         
         if (debugConfig.enabled && debugConfig.logRepetitionModels) console.log(`🚶 Added repetition GLTF model ${repIndex} at ground position:`, repLonLat);
     },
@@ -742,16 +794,18 @@ window.modelRenderer = {
 
         const sceneToUse = cesiumScene || window.ol3d.getCesiumScene();
 
-        // Convert polygon coordinates to Cartesian3
+        // Convert polygon coordinates to Cartesian3 WITHOUT explicit heights:
+        // the polygon is ground-clamped (see entity below), so Cesium drapes it
+        // over the rendered terrain (MapTerhorn DEM) and the base imagery
+        // exactly — no step edges, no z-fighting, always aligned with ways on
+        // slopes. (Per-vertex heights were tried here and broke rendering:
+        // sparse OSM vertices made the triangulation cut into convex terrain.)
         const cartesianPositions = polygonCoordinates.map(coord =>
-            Cesium.Cartesian3.fromDegrees(coord[0], coord[1], 0)
+            Cesium.Cartesian3.fromDegrees(coord[0], coord[1])
         );
-        const cartesianHoleHierarchies = polygonHoles.map(holeRing => {
-            const holePositions = holeRing.map(coord =>
-                Cesium.Cartesian3.fromDegrees(coord[0], coord[1], 0)
-            );
-            return new Cesium.PolygonHierarchy(holePositions);
-        });
+        const cartesianHoleHierarchies = polygonHoles.map(holeRing =>
+            new Cesium.PolygonHierarchy(holeRing.map(coord =>
+                Cesium.Cartesian3.fromDegrees(coord[0], coord[1]))));
 
         // Calculate bounding box in degrees
         let minLon = Infinity, maxLon = -Infinity, minLat = Infinity, maxLat = -Infinity;
@@ -799,16 +853,7 @@ window.modelRenderer = {
             const textureRepeatX = widthMeters / desiredTextureSizeMeters;
             const textureRepeatY = heightMeters / desiredTextureSizeMeters;
 
-            // Apply the calculated repeat with scale adjustment
-            if (texturedPolygon && texturedPolygon.polygon && texturedPolygon.polygon.material) {
-                // Apply scale to make texture larger (fewer repetitions) when scale > 1.0
-                const scaledRepeatX = textureRepeatX / textureScale;
-                const scaledRepeatY = textureRepeatY / textureScale;
-                texturedPolygon.polygon.material.repeat = new Cesium.Cartesian2(scaledRepeatX, scaledRepeatY);
-                if (debugConfig.enabled) console.log(`Updated texture repeat to: ${scaledRepeatX.toFixed(2)} x ${scaledRepeatY.toFixed(2)} (scale: ${textureScale})`);
-            } else {
-                // Texture repeat structure not as expected
-            }
+            // Texture repeat is baked into the canvas tiling (GroundPrimitive approach)
 
             if (debugConfig.enabled) console.log(`🖼️ Fixed texture repeat: ${textureRepeatX.toFixed(2)} x ${textureRepeatY.toFixed(2)} (polygon ${widthMeters.toFixed(1)}m x ${heightMeters.toFixed(1)}m, desired tile size ${desiredTextureSizeMeters}m)`);
 
@@ -903,14 +948,53 @@ window.modelRenderer = {
                 // Create data URL
                 const rotatedImageDataUrl = canvas.toDataURL('image/jpeg', AREA_TEXTURE_JPEG_QUALITY);
                 
-                // Update material with single rotated image and set repeat to 1
-                if (texturedPolygon && texturedPolygon.polygon && texturedPolygon.polygon.material) {
-                    texturedPolygon.polygon.material.image = rotatedImageDataUrl;
-                    texturedPolygon.polygon.material.repeat = new Cesium.Cartesian2(1, 1);
-                    if (modelRendererTexLog()) console.log(`🖼️ Applied rotated texture canvas`);
+                // Create GroundPrimitive with rotated canvas — same layer as GLTF models
+                const _sceneRT = cesiumScene || (window.ol3d && window.ol3d.getCesiumScene ? window.ol3d.getCesiumScene() : null);
+                if (_sceneRT && polygonHierarchy) {
+                    try {
+                        const gpRot = new Cesium.GroundPrimitive({
+                            geometryInstances: new Cesium.GeometryInstance({
+                                geometry: new Cesium.PolygonGeometry({
+                                    polygonHierarchy: polygonHierarchy,
+                                    vertexFormat: Cesium.MaterialAppearance.MaterialSupport.TEXTURED.vertexFormat
+                                })
+                            }),
+                            appearance: new Cesium.MaterialAppearance({
+                                material: new Cesium.Material({ fabric: { type: 'Image', uniforms: { image: rotatedImageDataUrl } } }),
+                                translucent: true
+                            }),
+                            asynchronous: false
+                        });
+                        _sceneRT.primitives.add(gpRot);
+                        if (modelRendererTexLog()) console.log(`🖼️ Created GroundPrimitive with rotated texture`);
+                    } catch (e) { if (debugConfig.enabled) console.warn('GroundPrimitive creation error:', e); }
                 }
             }
 
+
+            // No-rotation case: create GroundPrimitive with original image
+            if (textureRotation === 0) {
+                const _sceneNR = cesiumScene || (window.ol3d && window.ol3d.getCesiumScene ? window.ol3d.getCesiumScene() : null);
+                if (_sceneNR && polygonHierarchy) {
+                    try {
+                        const gpNr = new Cesium.GroundPrimitive({
+                            geometryInstances: new Cesium.GeometryInstance({
+                                geometry: new Cesium.PolygonGeometry({
+                                    polygonHierarchy: polygonHierarchy,
+                                    vertexFormat: Cesium.MaterialAppearance.MaterialSupport.TEXTURED.vertexFormat
+                                })
+                            }),
+                            appearance: new Cesium.MaterialAppearance({
+                                material: new Cesium.Material({ fabric: { type: 'Image', uniforms: { image: imageUri } } }),
+                                translucent: true
+                            }),
+                            asynchronous: false
+                        });
+                        _sceneNR.primitives.add(gpNr);
+                        if (modelRendererTexLog()) console.log(`🖼️ Created GroundPrimitive with original texture`);
+                    } catch (e) { if (debugConfig.enabled) console.warn('GroundPrimitive creation error:', e); }
+                }
+            }
 
             if (debugConfig.enabled) console.log(`🖼️ Fixed texture repeat: ${textureRepeatX.toFixed(2)} x ${textureRepeatY.toFixed(2)} (polygon ${widthMeters.toFixed(1)}m x ${heightMeters.toFixed(1)}m, desired tile size ${desiredTextureSizeMeters}m)`);
         };
@@ -924,34 +1008,15 @@ window.modelRenderer = {
 
         // Calculate polygon center for entity rotation
         const centerLon = (minLon + maxLon) / 2;
-        const centerPosition = Cesium.Cartesian3.fromDegrees(centerLon, centerLat, 0.001);
+        const centerPosition = Cesium.Cartesian3.fromDegrees(centerLon, centerLat);
 
         // Create polygon hierarchy
         const polygonHierarchy = new Cesium.PolygonHierarchy(cartesianPositions, cartesianHoleHierarchies);
 
-        // Create textured polygon using Entity system for consistency
-        const dataSource = window.areaTextureManager.getDataSource();
-        if (!dataSource) {
-            // No data source available for area texture
-            return;
-        }
-        
-        texturedPolygon = dataSource.entities.add(new Cesium.Entity({
-            polygon: {
-                hierarchy: polygonHierarchy,
-                height: 0.001, // Consistent height with Entity system
-                extrudedHeight: 0.001,
-                material: new Cesium.ImageMaterialProperty({
-                    image: imageUri,
-                    repeat: new Cesium.Cartesian2(initialRepeatX, initialRepeatY),
-                    transparent: true
-                })
-            }
-        }));
-
-        if (debugConfig.enabled) console.log(`🖼️ Created area texture polygon, rotation will be applied in onload callback`);
-
-        if (debugConfig.enabled) console.log(`🖼️ Created area texture polygon with ${polygonCoordinates.length} vertices, size: ${widthMeters.toFixed(1)}m x ${heightMeters.toFixed(1)}m, image: ${imageUri}`);
+        // Area textures are now rendered as GroundPrimitive on scene.primitives
+        // (same layer as GLTF models) — avoids flying textures and keeps everything
+        // on a single rendering layer. The primitive is created inside img.onload
+        // below, once the texture image has loaded.
     },
 
     /**
@@ -1609,6 +1674,17 @@ window.modelRenderer = {
             return;
         }
 
+        // Bump the 3D session id and drop stale tracking so every entry in
+        // loadedModels refers to a primitive alive in the CURRENT scene.
+        this._session3dId = (this._session3dId || 0) + 1;
+
+        // Hook DEM tile loads once: models placed before MapTerhorn tiles were
+        // decoded (elevation 0) must be re-seated on the ground when they arrive
+        if (window.mapterhornTerrain && window.mapterhornTerrain.onTilesLoaded && !this._demRepositionHooked) {
+            this._demRepositionHooked = true;
+            window.mapterhornTerrain.onTilesLoaded(() => this.repositionModelsOnDem());
+        }
+
         const cesiumScene = window.ol3d.getCesiumScene();
         if (cesiumScene && cesiumScene.primitives) {
             try {
@@ -1635,8 +1711,73 @@ window.modelRenderer = {
             }
         });
     },
+
+    // Re-seat tracked models on the DEM ground when new terrain tiles arrive.
+    // Keeps the original rotation/tilt baked in the matrix and only updates the
+    // translation height, so nothing flips when the elevation refines.
+    repositionModelsOnDem: function() {
+        if (!window.mapterhornTerrain || !window.mapterhornTerrain.getElevation) return;
+        if (!this.loadedModels || this.loadedModels.size === 0) return;
+        if (!window.ol3d || !window.ol3d.getCesiumScene) return;
+
+        let updated = 0;
+        this.loadedModels.forEach((entry) => {
+            try {
+                if (!entry.model || !entry.feature) return;
+                // Skip entries from older 3D sessions — their primitives were
+                // destroyed with the previous scene and must not be touched.
+                if (entry.sessionId !== undefined && entry.sessionId !== this._session3dId) return;
+                // Ground-clamped primitives maintain themselves — Cesium already
+                // keeps them on the rendered surface every frame.
+                if (entry.model.heightReference === Cesium.HeightReference.CLAMP_TO_GROUND) return;
+                const lon = entry.lon, lat = entry.lat;
+                const heightOffset = (entry.heightOffset !== undefined && entry.heightOffset !== null)
+                    ? entry.heightOffset
+                    : (entry.feature.get('modelHeightOffset') || 0.0);
+                const demHeight = window.mapterhornTerrain.getElevation(lon, lat);
+                if (demHeight === null || demHeight === undefined || !isFinite(demHeight)) return;
+                const totalHeight = heightOffset + demHeight;
+
+                const matrix = entry.model.modelMatrix;
+                const translation = Cesium.Matrix4.getColumn(matrix, 3, new Cesium.Cartesian4());
+                const currentHeight = Cesium.Cartographic.fromCartesian(
+                    new Cesium.Cartesian3(translation.x, translation.y, translation.z)).height;
+                if (!isFinite(currentHeight)) return;
+
+                // Soft re-seat: only move when the correction is clearly beyond
+                // sampling noise (0.5m). Corrections are safe in both directions
+                // now that getElevation returns the RENDERED surface.
+                const delta = totalHeight - currentHeight;
+                if (Math.abs(delta) < 0.5) return;
+
+                Cesium.Matrix4.setTranslation(
+                    matrix,
+                    Cesium.Cartesian3.fromDegrees(lon, lat, totalHeight),
+                    matrix
+                );
+                updated++;
+            } catch (e) { /* skip this model */ }
+        });
+
+        if (updated > 0 && debugConfig.enabled) {
+            console.log(`🎯 Re-seated ${updated} model(s) on MapTerhorn DEM ground`);
+        }
+    },
 };
 
 if (typeof debugConfig !== 'undefined' && debugConfig.enabled) {
     console.log('🎯 model_renderer.js loaded');
 }
+
+// When 3D mode ends the Cesium scene is replaced on the next 3D session.
+// All tracked primitives and pooled models from the old scene are dead:
+// forget them so re-entering 3D rebuilds everything in the new scene
+// instead of reusing primitives that belong to a destroyed scene.
+window.addEventListener('ol3dDestroyed', function () {
+    if (window.modelRenderer) {
+        window.modelRenderer.loadedModels.clear();
+        window.modelRenderer.modelPool.clear();
+        window.modelRenderer.totalModelsAdded = 0;
+        if (debugConfig.enabled) console.log('🎯 Cleared model tracking after 3D mode ended');
+    }
+});

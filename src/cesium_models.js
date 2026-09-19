@@ -160,18 +160,21 @@ class AreaTextureManager {
                     outerRing = outerRing.concat([outerRing[0]]);
                 }
 
-                // Convert to Cesium Cartesian3
-                const cesiumOuter = outerRing.map(coord => {
+                const toWgs84 = (coord) => {
+                    if (coord[0] >= -180 && coord[0] <= 180 && coord[1] >= -90 && coord[1] <= 90) {
+                        return coord; // Already WGS84
+                    }
+                    return ol.proj.transform(coord, projection, 'EPSG:4326');
+                };
+
+                // Convert to Cesium Cartesian3 WITHOUT explicit heights: the
+                // polygon is ground-clamped (see entity below), so Cesium drapes
+                // it over the rendered terrain + imagery exactly — no step edges,
+                // no z-fighting, stays aligned with ways on slopes.
+                const cesiumOuter = outerRing.map((coord, idx) => {
                     try {
-                        // Detect if coordinates are already in EPSG:4326 (WGS84 lat/lon)
-                        // If already in valid lat/lon range (-180..180, -90..90) no need to transform
-                        let lonLat;
-                        if (coord[0] >= -180 && coord[0] <= 180 && coord[1] >= -90 && coord[1] <= 90) {
-                            lonLat = coord; // Already WGS84
-                        } else {
-                            lonLat = ol.proj.transform(coord, projection, 'EPSG:4326');
-                        }
-                        return Cesium.Cartesian3.fromDegrees(lonLat[0], lonLat[1], 0);
+                        const lonLat = toWgs84(coord);
+                        return Cesium.Cartesian3.fromDegrees(lonLat[0], lonLat[1]);
                     } catch (e) {
                         console.error(`🎨 Error transforming coordinate`, coord, ':', e.message);
                         return null;
@@ -192,10 +195,10 @@ class AreaTextureManager {
                         if (holeRing[0][0] !== holeRing[holeRing.length - 1][0] || holeRing[0][1] !== holeRing[holeRing.length - 1][1]) {
                             closedHole = holeRing.concat([holeRing[0]]);
                         }
-                        const holePositions = closedHole.map(coord => {
+                        const holePositions = closedHole.map((coord, hi) => {
                             try {
-                                const lonLat = ol.proj.transform(coord, projection, 'EPSG:4326');
-                                return Cesium.Cartesian3.fromDegrees(lonLat[0], lonLat[1], 0);
+                                const lonLat = toWgs84(coord);
+                                return Cesium.Cartesian3.fromDegrees(lonLat[0], lonLat[1]);
                             } catch (e) {
                                 console.error(`🎨 Error transforming hole coordinate`, coord, ':', e.message);
                                 return null;
@@ -215,34 +218,37 @@ class AreaTextureManager {
                 );
                 const textureRotation = this.calculateTextureRotation(polygonCoords, imageUrl, tagsObj);
 
-                // Create material
-                const material = new Cesium.ImageMaterialProperty({
-                    image: imageUrl,
-                    transparent: true,
-                    color: new Cesium.Color(1.0, 1.0, 1.0, 0.8)
-                });
-
-                // Create entity
-                const areaEntity = new Cesium.Entity({
-                    polygon: {
-                        hierarchy: hierarchy,
-                        height: modelConfig ? (modelConfig.heightOffset || 0.001) : 0.001,
-                        extrudedHeight: modelConfig ? (modelConfig.heightOffset || 0.001) : 0.001,
-                        material: material,
-                        outline: false,
-                        shadows: Cesium.ShadowMode.DISABLED
-                    },
-                    properties: {
-                        areaId: properties.id || `area_${Date.now()}`,
-                        areaTags: tagsObj,
-                        isArea: true,
-                        textureUrl: imageUrl,
-                        textureRotation: textureRotation
+                // Create GroundPrimitive — same layer as GLTF models, drapes over DEM terrain
+                // No separate data source needed; primitives go into scene.primitives.
+                try {
+                    const gpTexture = new Cesium.GroundPrimitive({
+                        geometryInstances: new Cesium.GeometryInstance({
+                            geometry: new Cesium.PolygonGeometry({
+                                polygonHierarchy: hierarchy,
+                                vertexFormat: Cesium.MaterialAppearance.MaterialSupport.TEXTURED.vertexFormat
+                            }),
+                            attributes: {
+                                color: Cesium.ColorGeometryInstanceAttribute.fromColor(Cesium.Color.WHITE)
+                            }
+                        }),
+                        appearance: new Cesium.MaterialAppearance({
+                            material: new Cesium.Material({
+                                fabric: { type: 'Image', uniforms: { image: imageUrl } }
+                            }),
+                            translucent: true
+                        }),
+                        asynchronous: false
+                    });
+                    // Add directly to scene primitives — same layer as 3D models
+                    if (window.ol3d && window.ol3d.getCesiumScene) {
+                        const scene = window.ol3d.getCesiumScene();
+                        if (scene && scene.primitives) scene.primitives.add(gpTexture);
                     }
-                });
-
-                entities.push(areaEntity);
-                if (cesiumModelsVerbose()) console.log(`🎨 Created entity for polygon ${pIdx}`);
+                    entities.push(gpTexture);
+                    if (cesiumModelsVerbose()) console.log(`🎨 Created GroundPrimitive for polygon ${pIdx}`);
+                } catch (e) {
+                    console.warn('🎨 GroundPrimitive creation error:', e);
+                }
             }
 
             if (entities.length === 0) {
@@ -250,15 +256,6 @@ class AreaTextureManager {
                 return null;
             }
 
-            // Add to data source
-            const dataSource = window.areaTextureManager.getDataSource();
-            if (!dataSource) {
-                console.warn('🎨 No data source available, storing but not rendering');
-                feature.set('areaEntity', entities.length === 1 ? entities[0] : entities);
-                return entities.length === 1 ? entities[0] : entities;
-            }
-
-            entities.forEach(entity => dataSource.entities.add(entity));
             feature.set('areaEntity', entities.length === 1 ? entities[0] : entities);
 
             if (window.ol3d && window.ol3d.getCesiumScene) {
@@ -268,7 +265,7 @@ class AreaTextureManager {
                 }
             }
 
-            if (cesiumModelsVerbose()) console.log(`🎨 ✓ Created ${entities.length} area texture entity(ies)`);
+            if (cesiumModelsVerbose()) console.log(`🎨 ✓ Created ${entities.length} area texture GroundPrimitive(s)`);
             return entities.length === 1 ? entities[0] : entities;
         } catch (error) {
             console.error('🎨 Error creating area texture entity:', error);

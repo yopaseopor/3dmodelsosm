@@ -464,8 +464,7 @@ function processQueryResults(allFeatures, key, value) {
                         const areaEntity = new Cesium.Entity({
                             polygon: {
                                 hierarchy: hierarchy,
-                                height: modelConfig ? (modelConfig.heightOffset || 0.001) : 0.001,
-                                extrudedHeight: modelConfig ? (modelConfig.heightOffset || 0.001) : 0.001, // Flat on ground
+                                heightReference: Cesium.HeightReference.CLAMP_TO_GROUND, // drape over DEM terrain
                                 material: material,
                                 outline: true, // Enable outline for debugging
                                 outlineColor: Cesium.Color.RED,

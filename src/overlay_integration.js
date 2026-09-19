@@ -333,8 +333,7 @@ function assignModelToFeature(feature, allFeatures = null) {
                                     repeat: new Cesium.Cartesian2(1, 1),
                                     stRotation: textureRotation !== 0 ? textureRotation : undefined
                                 }),
-                                height: 0.001, // Small height to ensure consistent rendering order
-                                extrudedHeight: 0.001
+                                heightReference: Cesium.HeightReference.CLAMP_TO_GROUND // drape over DEM terrain (was flat at 0.001m)
                             }
                         });
                         
@@ -501,7 +500,7 @@ function assignModelToFeature(feature, allFeatures = null) {
                     console.log(`  📍 Feature ID: ${properties.id || 'unknown'}, Tags:`, tagsObj);
                 } else {
                     // Default height offset if no config
-                    feature.set('modelHeightOffset', 10);
+                    feature.set('modelHeightOffset', 0);
                 }
                 
                 console.log(`🛤️ SUCCESS: Placed single model at point for line-treated feature with tags:`, tagsObj);
@@ -537,7 +536,7 @@ function assignModelToFeature(feature, allFeatures = null) {
                 console.log(`  📍 Feature ID: ${properties.id || 'unknown'}, Tags:`, tagsObj);
             } else {
                 // Default height offset if no config
-                feature.set('modelHeightOffset', 10);
+                feature.set('modelHeightOffset', 0);
             }
 
             console.log(`🎯 SUCCESS: Assigned point model ${modelFilename} to feature with tags:`, tagsObj);

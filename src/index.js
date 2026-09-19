@@ -492,7 +492,7 @@ $(function () {
             feature.set('modelRotation', modelConfig.rotation);
           } else {
             // Default height offset if no config
-            feature.set('modelHeightOffset', 10);
+            feature.set('modelHeightOffset', 0);
           }
 
           console.log(`🎯 SUCCESS: Assigned 3D model ${modelFilename} to GeoJSON feature with tags:`, tagsObj);
@@ -746,7 +746,7 @@ $(function () {
 										console.log(`  📍 Feature ID: ${properties.id || 'unknown'}, Tags:`, tagsObj);
 									} else {
 										// Default height offset if no config
-										feature.set('modelHeightOffset', 10);
+										feature.set('modelHeightOffset', 0);
 									}
 
 									console.log(`🎯 SUCCESS: Assigned 3D model ${modelFilename} to overlay feature with tags:`, tagsObj);
@@ -1580,7 +1580,13 @@ if (routeLayers.length > 0) {
                             }
                         }, 3000);
                         try {
-                            scene.terrainProvider = new Cesium.EllipsoidTerrainProvider();
+                            // Use the Mapterhorn global DEM as the real 3D ground
+                            // (mountains/valleys) instead of a flat ellipsoid.
+                            if (window.mapterhornTerrain && window.mapterhornTerrain.applyToScene) {
+                                window.mapterhornTerrain.applyToScene(scene);
+                            } else {
+                                scene.terrainProvider = new Cesium.EllipsoidTerrainProvider();
+                            }
                         } catch (error) {
                             console.warn('Failed to set terrain provider, using default:', error);
                             // Continue without custom terrain provider
@@ -1880,9 +1886,10 @@ if (routeLayers.length > 0) {
                         console.log('🎯 Overlay features loaded in 3D mode, adding models...');
                         const cesiumScene = window.ol3d.getCesiumScene();
                         if (cesiumScene && cesiumScene.primitives) {
-                            // Enable depth testing
-                            cesiumScene.globe.depthTestAgainstTerrain = true;
-                            console.log('🎯 Enabled depth test against terrain for overlays');
+                            // Keep depthTestAgainstTerrain FALSE: forcing it true
+                            // made ground-level models and textures disappear behind
+                            // terrain tiles (incongruent z-order with the DEM).
+                            console.log('🎯 Keeping depth test disabled for overlay models');
 
                             let modelsAdded = 0;
                             function addModelsFromLayer(layer) {
@@ -1901,6 +1908,10 @@ if (routeLayers.length > 0) {
                                                         const lonLat = ol.proj.toLonLat(center);
 
                                                         // Create model matrix for positioning
+                                                        // Start ON the rendered ground: height 0 was
+                                                        // below the DEM surface in mountains, burying
+                                                        // these models. CLAMP_TO_GROUND makes Cesium
+                                                        // re-seat them on the terrain every frame.
                                                         const modelMatrix = Cesium.Transforms.eastNorthUpToFixedFrame(
                                                             Cesium.Cartesian3.fromDegrees(lonLat[0], lonLat[1], 0.0)
                                                         );
@@ -1909,9 +1920,12 @@ if (routeLayers.length > 0) {
                                                         const cesiumModel = cesiumScene.primitives.add(Cesium.Model.fromGltf({
                                                             url: model.uri,
                                                             modelMatrix: modelMatrix,
-                                                            scale: (model.scale || 1.0) * 10.0,
+                                                            // Real-world scale: the x10 exaggeration made
+                                                            // models gigantic and incongruent with buildings.
+                                                            scale: (model.scale || 1.0),
                                                             show: true
                                                         }));
+                                                        cesiumModel.heightReference = Cesium.HeightReference.CLAMP_TO_GROUND;
 
                                                         console.log(`🎯 Added GLTF model ${fidx} from overlay at:`, lonLat);
                                                         modelsAdded++;
@@ -2098,6 +2112,7 @@ if (routeLayers.length > 0) {
                 
                 // IMPORTANT: Update the is3d state to true
                 is3d = true;
+                window.is3d = true; // global flag used by nav pad, models and overlays
                 console.log('Updated is3d state to true');
 
                 // Dispatch event to notify buildings module that 3D mode is initialized
@@ -2117,6 +2132,7 @@ if (routeLayers.length > 0) {
                 
                 // IMPORTANT: Update the is3d state to false
                 is3d = false;
+                window.is3d = false;
                 console.log('Updated is3d state to false');
 
                 // Dispatch event to notify buildings module that 3D mode is destroyed

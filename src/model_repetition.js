@@ -263,11 +263,13 @@ function applyModelRepetitions(feature, modelFilename, modelConfig, geometryType
             repetitionFeature.set('model', repModelOptions);
 
             // Set additional model configuration
+            // NOTE: no baked +10m lift — with the MapTerhorn DEM ground, an
+            // offset lifts models into the air. Ground contact needs 0.
             if (rep.config) {
-                repetitionFeature.set('modelHeightOffset', (rep.config.heightOffset || 0) + 10);
+                repetitionFeature.set('modelHeightOffset', rep.config.heightOffset || 0);
                 repetitionFeature.set('modelRotation', rep.config.rotation || [0, 0, 0]);
             } else {
-                repetitionFeature.set('modelHeightOffset', 10);
+                repetitionFeature.set('modelHeightOffset', 0);
                 repetitionFeature.set('modelRotation', [0, 0, 0]);
             }
 
