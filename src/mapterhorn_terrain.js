@@ -43,7 +43,13 @@
     const DEFAULT_SAMPLE_LEVEL = 15;       // zoom used for elevation queries
     const DEFAULT_SAMPLE_RADIUS = 20;      // meters between slope samples
     const DEFAULT_MAX_TILT = 35 * Math.PI / 180; // clamp tilt for models
-    const MAX_CACHED_TILES = 400;          // ~26MB of 129x129 Float32 grids
+    const MAX_CACHED_TILES = 900;          // ~60MB of 129x129 Float32 grids.
+                                           // Sized to keep fine tiles resident when
+                                           // globe.maximumScreenSpaceError=1 demands
+                                           // extra refinement near the camera — if fine
+                                           // tiles get evicted the provider re-serves
+                                           // coarse ancestors and draped textures sag
+                                           // off the mesh ("flying" at grazing angles).
     const TERRARIUM_OFFSET = 32768.0;
 
     function debugEnabled() {

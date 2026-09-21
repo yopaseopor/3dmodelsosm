@@ -828,7 +828,7 @@ $(function () {
 									if (buildingOptions) {
 										// Store building extrusion data on the feature
 										feature.set('extrudedBuilding', buildingOptions);
-										feature.set('buildingHeight', buildingOptions.extrudedHeight);
+										feature.set('buildingHeight', buildingOptions.height);
 										feature.set('buildingTags', tagsObj);
 
 										console.log(`🏗️ SUCCESS: Created extruded building for overlay feature with tags:`, tagsObj);
@@ -1566,6 +1566,24 @@ if (routeLayers.length > 0) {
                         // Configure scene
                         scene.globe.enableLighting = false;
                         scene.globe.depthTestAgainstTerrain = false; // Disable terrain depth test for better performance
+                        // Logarithmic depth buffer — required for ground-level views.
+                        // With the default frustum (near=1m, far=~5e8m) depth precision
+                        // collapses at grazing angles, and GroundPrimitive textures
+                        // (draped per-frame against the terrain depth buffer) detach
+                        // and "fly" meters-to-tens-of-meters above the surface —
+                        // worst when a mountain stretches the depth range. LOG_DEPTH
+                        // redistributes depth precision logarithmically and keeps the
+                        // drape glued to the terrain. Safely ignored on WebGL1 contexts
+                        // without the fragment-depth extension (setter self-guards).
+                        scene.logarithmicDepthBuffer = true;
+                        // Finer terrain mesh: the drape of GroundPrimitive textures is
+                        // classified against the RENDERED mesh, so a coarse mesh (default
+                        // screen-space error 2) lets the surface sag between DEM samples
+                        // — and the drape rides that sag, worst at grazing angles.
+                        // Error 1 doubles tile refinement near the camera and keeps the
+                        // rendered surface within centimeters of the DEM grid that
+                        // buildings and models are placed on.
+                        scene.globe.maximumScreenSpaceError = 1;
                        
                         // Restore any route layers that were hidden for initialization
 if (routeLayers.length > 0) {

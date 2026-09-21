@@ -285,6 +285,11 @@ class GeoJSONLoader {
                             if (window.buildings) {
                                 window.buildings.addBuildingsToScene(window.ol3d);
                             }
+                            
+                            // Simple Indoor Tagging: render indoor elements loaded in 3D mode
+                            if (window.indoor) {
+                                window.indoor.addIndoorVisuals(window.ol3d);
+                            }
                         }
                     }, 100);
                 }

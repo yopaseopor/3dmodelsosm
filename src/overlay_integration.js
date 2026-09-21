@@ -386,6 +386,9 @@ function assignModelToFeature(feature, allFeatures = null) {
                             polyline: {
                                 positions: positions,
                                 width: 5,
+                                clampToGround: true, // drape over DEM terrain — at ellipsoid
+                                                     // height 0 the texture line is buried on
+                                                     // mountains and z-fights at sea level
                                 material: new Cesium.ImageMaterialProperty({
                                     image: `/3dmodelsosm/src/models/${modelFilename}`,
                                     repeat: new Cesium.Cartesian2(coordinates.length * 0.1, 1),
