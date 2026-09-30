@@ -19,6 +19,16 @@ if (typeof window !== 'undefined' && window.globalDebugConfig) {
 function initKeySearch() {
     // if (debugConfig.enabled && debugConfig.logKeySearch) console.log('🔑 initKeySearch called');
 
+    // This function is called from several places (document.ready below, plus a
+    // handful of call sites in index.js once taginfo/i18n settle). Every call used
+    // to re-bind the input, dropdown and Execute handlers, and each binding closed
+    // over its own copy of the state variables — so one click on Execute ran the
+    // handler once per init and fired one Overpass request per stale copy, some
+    // with an outdated key. Bind exactly once.
+    if (window.__keySearchInitialized) {
+        return;
+    }
+
     // Wait for translations to be available
     if (typeof window.getTranslation !== 'function') {
         // console.log('🔑 Waiting for translations to be initialized...');
@@ -42,8 +52,16 @@ function initKeySearch() {
         return;
     }
 
+    window.__keySearchInitialized = true;
+
     let searchTimeout;
+    // Keys the user has merely typed, and the key they actually picked from the
+    // dropdown, are different things. currentKey kept the last of either, so a
+    // typed prefix could be sent even after a suggestion was chosen. The Execute
+    // button prefers selectedKey and only falls back to currentKey when nothing
+    // was selected.
     let currentKey = null;
+    let selectedKey = null;
     let currentResults = [];
     let isSelecting = false; // Flag to block input events during programmatic selection
 
@@ -54,6 +72,10 @@ function initKeySearch() {
         
         const query = $(this).val().trim();
         if (debugConfig.enabled && debugConfig.logUI) console.log('🔑 Key search input:', query);
+
+        // Typing supersedes any earlier selection: the dropdown choice no longer
+        // describes what is in the box.
+        selectedKey = null;
 
         // Store current key for potential generic query execution
         if (query) {
@@ -96,7 +118,17 @@ function initKeySearch() {
     });
 
     // Handle result selection
-    resultsContainer.on('click', '.key-search-result', function() {
+    resultsContainer.on('click', '.key-search-result', function(e) {
+        // A .kv-btn (value suggestion) lives INSIDE .key-search-result, so a
+        // single click on it matches BOTH delegated handlers. jQuery runs
+        // delegated handlers in BINDING order, and this one is bound before the
+        // .kv-btn handler below — so the kv-btn's stopPropagation() had not run
+        // yet and could not prevent this one. Result: selectKeyResult() fired
+        // too, overwrote currentKey and queried a second time, which sent both
+        // the suggested key and the raw text to Overpass. Ignore clicks that
+        // originate from a value suggestion; they are handled on their own.
+        if ($(e.target).closest('.kv-btn').length) return;
+
         const result = $(this).data('result');
         if (debugConfig.enabled && debugConfig.logSelection) console.log('🔑 Clicked key result data:', result);
         if (result) {
@@ -261,7 +293,8 @@ function initKeySearch() {
             // Block input event while we programmatically update the input value
             isSelecting = true;
             
-            currentKey = result.key; 
+            currentKey = result.key;
+            selectedKey = result.key;
             searchInput.val(result.key);
             
             // Release lock after event loop to ensure input event has passed
@@ -309,11 +342,13 @@ function initKeySearch() {
 
     // Handle execute button click for generic key queries
     $('#execute-key-query-btn').on('click', function() {
-        if (currentKey) {
+        // A picked suggestion wins over whatever text happens to be in the box.
+        const keyToExecute = selectedKey || currentKey;
+        if (keyToExecute) {
             const $btn = $(this);
             const executingText = window.getTranslation ? window.getTranslation('executingQuery') || 'Executing query...' : 'Executing query...';
             $btn.prop('disabled', true).text(executingText);
-            executeGenericKeyQuery(currentKey);
+            executeGenericKeyQuery(keyToExecute);
         }
     });
 
@@ -328,6 +363,7 @@ function initKeySearch() {
         isSelecting = true;
         
         currentKey = `${key}${value && value !== '*' ? '=' + value : (value === '*' ? '=*' : '')}`;
+        selectedKey = currentKey;
         $('#key-search').val(key + (value && value !== '*' ? '=' + value : (value === '*' ? '=*' : '')));
         showKeyExecuteButton(currentKey);
         
@@ -351,6 +387,7 @@ function initKeySearch() {
         if (debugConfig.enabled && debugConfig.logUI) console.log('🧹 Key search clear button clicked');
 
         currentKey = null;
+        selectedKey = null;
         currentResults = [];
 
         searchInput.val('');
@@ -374,6 +411,17 @@ function initKeySearch() {
         clearBtn.show();
     }
 
+    /**
+    /**
+     * Execute a key (or key=value) query with the text exactly as typed.
+     *
+     * The query is NEVER rewritten to a "better" key. An earlier version
+     * substituted taginfo's top hit, which queried a tag the user never typed:
+     * a partial "building:colou" became the real key "building:colour" (a
+     * different tag sharing a prefix), so the request asked for something else
+     * and then timed out. Suggestions belong in the dropdown, applied only when
+     * a result is clicked, where the substitution is explicit and visible.
+     */
     function executeGenericKeyQuery(keyOrKeyValue) {
         let key = keyOrKeyValue;
         let value = null;
@@ -381,7 +429,7 @@ function initKeySearch() {
         if (keyOrKeyValue.includes('=')) {
             const parts = keyOrKeyValue.split('=');
             key = parts[0];
-            value = parts[1] || '';  
+            value = parts[1] || '';
         }
 
         if (!window.map) {
@@ -588,6 +636,30 @@ function initKeySearch() {
                                     });
                                     
                                     console.log('📊 Element counts:', elementCounts);
+
+                                    // Run the tag -> 3D model mapping over the results.
+                                    // This was missing, and it is the only place the
+                                    // mapping is ever applied: getModelForTags() is
+                                    // reached exclusively through assignModelToFeature(),
+                                    // which until now ran only for GeoJSON overlays,
+                                    // VectorTile sources and uploaded files. Key-search
+                                    // results therefore carried no 'osm3dModel'
+                                    // descriptor, so addAllModels() found nothing to
+                                    // draw and the points stayed flat circles in 3D.
+                                    // 'recycling:plastic=yes' ->
+                                    // w_recycling_plastic_yes.glb is a live mapping;
+                                    // it simply was never consulted for this path.
+                                    if (window.assignModelToFeature) {
+                                        features.forEach(feature => {
+                                            try {
+                                                window.assignModelToFeature(feature, features);
+                                            } catch (modelError) {
+                                                console.error('🎯 Failed to assign 3D model to feature', modelError);
+                                            }
+                                        });
+                                    } else {
+                                        console.warn('🎯 assignModelToFeature unavailable; 3D models will not be assigned for this query');
+                                    }
 
                                     this.addFeatures(features);
                                     console.log('🎯 Features added to source');

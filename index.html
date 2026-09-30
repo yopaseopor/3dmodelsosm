@@ -164,10 +164,14 @@
 	<script type="module" src="src/init.js"></script>
 
 	<!-- Application Logic -->
+	<script src="src/model_orientation.js"></script>
 	<script src="src/models.js"></script>
 	<script src="src/cesium_models.js"></script>
 	<script src="src/mapterhorn_terrain.js"></script>
 	<script src="src/debug_config.js"></script>
+	<!-- Pre-load panel (progress / ETA / bytes). Must be before model_renderer.js:
+	     the renderer reports into window.loadingProgress as it places models. -->
+	<script src="src/loading_progress.js"></script>
 	<script src="src/model_renderer.js"></script>
 	<script src="src/model_repetition.js"></script>
 	<script src="src/highway_repetition.js"></script>

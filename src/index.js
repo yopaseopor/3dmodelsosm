@@ -429,8 +429,20 @@ $(function () {
         // Extract way coordinates from geometry for bearing calculation (for GeoJSON LineString features)
         let wayCoordinates = null;
         let nodeIndex = null;
+        // These three MUST be declared before the branches below that read them.
+        // They used to sit under the "Determine geometry type" comment, i.e.
+        // BELOW this if/else, so `geomType` was read before its `const`
+        // initialiser had run. That is a temporal-dead-zone ReferenceError
+        // ("Cannot access 'geomType' before initialization") thrown for EVERY
+        // feature the loader added — which is why the whole page went dead, not
+        // just textures: no model, no repetition and no texture was ever
+        // dispatched. `orientationContext` had the same problem, being assigned
+        // in the Point branch above its `let`.
+        let geometryType = 'point';
+        let orientationContext = null;
         const geometry = feature.getGeometry();
-        if (geometry && geometry.getType() === 'LineString') {
+        const geomType = geometry ? geometry.getType() : null;
+        if (geomType === 'LineString') {
             const coordinates = geometry.getCoordinates();
             // Convert from map projection to lon/lat for bearing calculation
             wayCoordinates = coordinates.map(coord => 
@@ -438,11 +450,19 @@ $(function () {
             );
             // Use the middle node for bearing calculation, or first if only one segment
             nodeIndex = Math.floor(wayCoordinates.length / 2);
+        } else if (geomType === 'Point') {
+            // Where the model stands, and which ways exist around it. The rules
+            // in model_orientation.js decide what it turns to face.
+            const source = (event.target && event.target.getFeatures) ? event.target.getFeatures() : [];
+            orientationContext = {
+                pointLonLat: ol.proj.transform(geometry.getCoordinates(), window.map.getView().getProjection(), 'EPSG:4326'),
+                allFeatures: source.indexOf(feature) === -1 ? source.concat([feature]) : source
+            };
         }
 
         // Determine geometry type based on geometry and tags
-        let geometryType = 'point';
-        const geomType = geometry ? geometry.getType() : null;
+        // (geometryType / geomType / orientationContext are declared above,
+        // before their first use)
         if (geomType === 'LineString') {
             // Check if LineString is closed (first and last coordinates are the same)
             const isClosed = window.models && window.models.isLineStringClosed ? 
@@ -469,7 +489,7 @@ $(function () {
         console.log(`🔍 Processing feature with tags:`, tagsObj);
 
         // Check if the tags match any model mapping
-        const modelMapping = window.models ? window.models.getModelForTags(tagsObj, wayCoordinates, nodeIndex, geometryType) : null;
+        const modelMapping = window.models ? window.models.getModelForTags(tagsObj, wayCoordinates, nodeIndex, geometryType, orientationContext) : null;
         if (modelMapping) {
           console.log(`🎯 SUCCESS: Found model mapping for ${geometryType} feature:`, modelMapping);
           const modelFilename = modelMapping.model;
@@ -483,7 +503,7 @@ $(function () {
             heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
           };
 
-          feature.set('model', modelOptions);
+          feature.set(window.OSM3D_MODEL_PROPERTY || 'osm3dModel', modelOptions);
 
           // Set additional model configuration for positioning
           if (modelConfig) {
@@ -652,12 +672,11 @@ $(function () {
 								const tagsObj = {};
 								osmTags.forEach(tag => {
 									tagsObj[tag] = properties[tag];
-								});
-
-								// Extract way coordinates from geometry for bearing calculation
-								let wayCoordinates = null;
-								let nodeIndex = null;
-								const geometry = feature.getGeometry();
+								});										// Extract way coordinates from geometry for bearing calculation
+										let wayCoordinates = null;
+										let nodeIndex = null;
+										let orientationContext = null;
+										const geometry = feature.getGeometry();
 								if (geometry && geometry.getType() === 'LineString') {
 									const coordinates = geometry.getCoordinates();
 									// Convert from map projection to lon/lat for bearing calculation
@@ -667,11 +686,17 @@ $(function () {
 									// Use the middle node for bearing calculation, or first if only one segment
 									nodeIndex = Math.floor(wayCoordinates.length / 2);
 									
-									console.log(`📐 Way coordinates extracted: ${wayCoordinates.length} nodes, calculating bearing at node ${nodeIndex}`);
-									console.log(`📐 Way coordinate sample:`, wayCoordinates.slice(0, 3).map((coord, i) => 
-										`[${i}]: [${coord[0].toFixed(6)}, ${coord[1].toFixed(6)}]`
-									));
-								}
+									console.log(`📐 Way coordinates extracted: ${wayCoordinates.length} nodes, calculating bearing at node ${nodeIndex}`);											console.log(`📐 Way coordinate sample:`, wayCoordinates.slice(0, 3).map((coord, i) => 
+												`[${i}]: [${coord[0].toFixed(6)}, ${coord[1].toFixed(6)}]`
+											));
+										} else if (geometry && geometry.getType() === 'Point') {
+											orientationContext = {
+												pointLonLat: ol.proj.transform(
+													geometry.getCoordinates(), map.getView().getProjection(), 'EPSG:4326'),
+												allFeatures: features
+											};
+										}
+
 
 								// Determine geometry type based on geometry and tags
 								let geometryType = 'point';
@@ -713,10 +738,8 @@ $(function () {
 
 								if (geometryType === 'area') {
 									console.log(`🏞️ DEBUG OSM XML: Found area feature with geometry ${geomType}, tags:`, tagsObj);
-								}
-
-								// Check if the tags match any model mapping
-								const modelMapping = window.models ? window.models.getModelForTags(tagsObj, wayCoordinates, nodeIndex, geometryType) : null;
+								}										// Check if the tags match any model mapping
+										const modelMapping = window.models ? window.models.getModelForTags(tagsObj, wayCoordinates, nodeIndex, geometryType, orientationContext) : null;
 								if (modelMapping) {
 									const modelFilename = modelMapping.model;
 									const modelConfig = modelMapping.config;
@@ -729,7 +752,7 @@ $(function () {
 										heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
 									};
 
-									feature.set('model', modelOptions);
+									feature.set(window.OSM3D_MODEL_PROPERTY || 'osm3dModel', modelOptions);
 
 									// Set additional model configuration for positioning
 									if (modelConfig) {
@@ -1225,13 +1248,17 @@ $(function () {
 			} else {
 				var layerSrc = layer.get('iconSrc'),
 					title = (layerSrc ? '<img src="' + layerSrc + '" height="16"/> ' : '') + layer.get('title'),
-					layerButton = $('<div>').html(title).on('click', function () {
-						// Hide all base layers first
-						config.layers.forEach(function(l) {
-							if (l.get('type') === 'base') {
-								l.setVisible(false);
-							}
-						});
+															layerButton = $('<div>').html(title).on('click', function () {
+									// Hide all other base layers first (radio behaviour).
+									// No layer in config.js ever gets type 'base', so the
+									// old check was dead code and base layers stayed
+									// stacked — which also made the 3D view pick the wrong
+									// background (it took the last visible layer).
+									config.layers.forEach(function(l) {
+										if (l !== layer && l.get('type') !== 'overlay') {
+											l.setVisible(false);
+										}
+									});
 
 						// Show the clicked layer
 						layer.setVisible(true);
@@ -1466,6 +1493,214 @@ var rotateleftControlBuild = function () {
     return container[0];
 };
 
+/**
+ * Camera height (metres above the ellipsoid) that keeps the camera `clearance`
+ * metres above the DEM surface at lon/lat.
+ *
+ * The 3D view runs on the MapTerhorn global DEM, so a hardcoded height (the
+ * former 200 m / 2000 m) drops the camera UNDER the terrain in mountains — a
+ * 1200 m ridge in Llefià or 2000 m in Andorra bury it. Cesium then culls the
+ * globe and the 3D view renders black.
+ *
+ * The ground value comes from the MapTerhorn DEM grid, NOT from
+ * scene.globe.getHeight(): the globe reports the COARSE IN-PROGRESS mesh while
+ * tiles stream (measured 1150 m where the DEM says 296 m), which parked the
+ * entry camera 1450 m up and made the relief look flat. globe.getHeight() is
+ * only a fallback for the case where no DEM module is available at all.
+ *
+ * When the DEM tile is not decoded yet the result is just `clearance`; the
+ * MapTerhorn camera guard (mapterhorn_terrain.keepCameraAboveGround) then
+ * raises the camera to the real surface as soon as it is known.
+ *
+ * @param {Cesium.Scene} scene
+ * @param {number} lon
+ * @param {number} lat
+ * @param {number} clearance metres to keep above the ground
+ * @returns {number} height in metres
+ */
+function terrainSafeHeight(scene, lon, lat, clearance) {
+    let ground = 0;
+    if (window.mapterhornTerrain && window.mapterhornTerrain.getElevation) {
+        const dem = window.mapterhornTerrain.getElevation(lon, lat);
+        if (dem !== null && dem !== undefined && isFinite(dem)) ground = dem;
+    }
+    if (!ground) {
+        try {
+            const carto = new Cesium.Cartographic(
+                Cesium.Math.toRadians(lon), Cesium.Math.toRadians(lat));
+            const h = scene && scene.globe ? scene.globe.getHeight(carto) : undefined;
+            if (h !== undefined && h !== null && isFinite(h) && h > 0) ground = h;
+        } catch (error) {
+            // Terrain not ready yet — assume sea level and let the guard correct it.
+        }
+    }
+    return ground + (clearance || 50);
+}
+
+/**
+ * Ask Cesium to keep rendering for `durationMs`.
+ *
+ * ol-cesium's auto render loop starts the scene with `requestRenderMode` on:
+ * Cesium draws a frame only when someone calls `scene.requestRender()`, and
+ * ol-cesium does that from canvas mouse events. A programmatic `camera.flyTo`
+ * is an animation, so with nothing pumping frames it stalls — the camera never
+ * reached the DEM-aware position and stayed wherever the OL->Cesium camera
+ * synchronizer had put it (14 km up at the default 2D zoom, which flattens the
+ * terrain and looks like "no elevation"). Pumping frames for a couple of
+ * seconds lets the flight animate and lets the globe refine its tiles.
+ *
+ * @param {Cesium.Scene} scene
+ * @param {number} durationMs
+ */
+function pumpSceneRenders(scene, durationMs) {
+    if (!scene || !scene.requestRender) return;
+    const deadline = performance.now() + (durationMs || 3000);
+    (function frame() {
+        if (!scene || scene.isDestroyed()) return;
+        scene.requestRender();
+        if (performance.now() < deadline) requestAnimationFrame(frame);
+    })();
+}
+
+/**
+ * Find the container ol-cesium injected into the map target.
+ *
+ * ol-cesium does not expose it, and the class it uses has changed between
+ * versions, so this looks for a Cesium widget first and otherwise takes the
+ * map's direct child that holds a canvas and is not the OpenLayers viewport.
+ * Returns null when it cannot be found — the caller must cope with that rather
+ * than assume the 3D view can be hidden.
+ */
+function findCesiumContainer() {
+    const mapEl = (window.map && window.map.getTargetElement && window.map.getTargetElement()) ||
+        document.getElementById('map');
+    if (!mapEl) return null;
+
+    const widget = mapEl.querySelector ? mapEl.querySelector('.cesium-widget') : null;
+    if (widget) return widget.parentElement && widget.parentElement !== mapEl ? widget.parentElement : widget;
+
+    const children = mapEl.children || [];
+    for (let i = 0; i < children.length; i++) {
+        const child = children[i];
+        if (child.classList && child.classList.contains('ol-viewport')) continue;
+        if (child.tagName === 'CANVAS') continue;                 // OpenLayers' own canvas
+        if (child.querySelector && child.querySelector('canvas')) return child;
+    }
+    return null;
+}
+
+/**
+ * Pre-load gate: show the progress panel and keep the 3D canvas back until the
+ * model renderer has placed what is close to the camera.
+ *
+ * Why: from the moment ol3d.setEnabled(true) returns the scene exists but is
+ * empty — the models are placed over the next seconds, one frame-budgeted
+ * slice at a time. Showing an empty globe, or freezing the tab while it fills,
+ * is what made 3D look broken. The canvas fades in when the near batch is in;
+ * the 2D map underneath stays interactive the whole time.
+ *
+ * `revealAfterMs` is the safety valve. If the renderer never reports back (no
+ * models, an exception before addAllModels), the scene is revealed anyway.
+ */
+/**
+ * Pre-load message + reveal.
+ *
+ * The placement itself is NOT touched: the renderer still walks the layers and
+ * builds every model, texture and repetition synchronously, exactly as it
+ * always has. This only puts a message on screen around it:
+ *
+ *   1. the panel appears the moment 3D starts, before the heavy work;
+ *   2. the renderer reports how many features it is going through and when it
+ *      has finished (`osm3d:modelsPlaced`);
+ *   3. the canvas only fades in once that arrives, and the panel lingers a
+ *      moment to show the result before it fades out.
+ *
+ * Every step has a safety valve: whatever happens, the 3D view becomes visible
+ * again (8 s) and the panel closes (20 s).
+ */
+function startPreLoadGate(ol3d, revealAfterMs) {
+    const panel = window.loadingProgress;
+    const holder = findCesiumContainer();
+    if (!panel) return;   // panel script missing: never block the 3D view
+
+    let revealed = false;
+    let panelFinished = false;
+    // While Cesium still has terrain/imagery tiles in flight the ground is not
+    // settled yet, so the message stays up; it closes on the settle edge.
+    let terrainPending = 0;
+    let terrainEverBusy = false;
+
+    function closePanel(why) {
+        if (panelFinished) return;
+        panelFinished = true;
+        if (why) console.log('🎯 pre-load message closed (' + why + ')');
+        panel.finish();
+    }
+
+    // Safety timers FIRST, before anything that can throw: the canvas must
+    // become visible and the panel must close no matter what happens below.
+    const emergencyReveal = setTimeout(function () { reveal('safety timer'); }, revealAfterMs || 8000);
+    const emergencyFinish = setTimeout(function () { closePanel('max wait'); }, 45000);
+
+    function showCanvas() {
+        if (!holder) return;
+        holder.style.opacity = '1';
+        holder.style.pointerEvents = '';
+        holder.style.transition = 'opacity .45s ease';
+    }
+
+    function reveal(why) {
+        showCanvas();
+        if (revealed) return;
+        revealed = true;
+        clearTimeout(emergencyReveal);
+        window.dispatchEvent(new CustomEvent('osm3d:revealed'));
+        console.log('🎯 3D scene visible (' + why + ')');
+    }
+
+    try {
+        panel.begin({ title: 'Building 3D scene', hardStopMs: 45000 });
+    } catch (error) {
+        console.warn('🎯 Pre-load panel failed, showing 3D directly:', error);
+        showCanvas();
+        return;
+    }
+
+    // opacity, not display:none — a hidden element has no size and Cesium would
+    // have to be re-measured. pointer-events off so the 2D map underneath keeps
+    // receiving clicks while the canvas is invisible.
+    if (holder) {
+        holder.style.opacity = '0';
+        holder.style.pointerEvents = 'none';
+        holder.style.transition = 'opacity .45s ease';
+    }
+
+    // Called by the Cesium tileLoadProgressEvent listener below.
+    function noteTerrainProgress(queued, processing) {
+        const pending = queued + processing;
+        if (pending > 0) { terrainEverBusy = true; terrainPending = pending; return; }
+        // Settled — but only after something was actually loading, otherwise the
+        // first idle tick (before any tile was requested) would close the
+        // message immediately.
+        if (terrainEverBusy && terrainPending > 0) {
+            terrainPending = 0;
+            setTimeout(function () { closePanel('terrain settled'); }, 1200);
+        }
+    }
+
+    window.notePreLoadTerrain = noteTerrainProgress;
+
+    // The renderer fires this at the end of its (synchronous) pass.
+    window.addEventListener('osm3d:modelsPlaced', function (event) {
+        const placed = event && event.detail ? event.detail.placed : 0;
+        if (panel.summary) panel.summary(placed);
+        reveal(placed + ' models placed');
+        // If no terrain tile ever reported in (flat ellipsoid, cached, no event),
+        // fall back to a fixed beat so the message cannot stay up forever.
+        setTimeout(function () { if (!terrainEverBusy) closePanel('no terrain activity'); }, 6000);
+    }, { once: true });
+}
+
 // 3D Toggle button
 function toggle3DControlBuild() {
     // Check if ol-cesium is available
@@ -1510,6 +1745,10 @@ console.log('3D toggle clicked, current is3d state:', is3d);
 if (!is3d) {
     // Initialize Cesium if not already done
     let routeLayers = []; // Move declaration to higher scope
+    // Remembered before the init block flips the flag: the pre-load gate must
+    // only run the FIRST time. On a later entry the scene is already warm and
+    // the models are placed from cache, so a progress panel would just flash.
+    const firstEntryInto3D = !cesiumInitialized;
     if (!cesiumInitialized) {
         try {
             // Check for and handle active route layers that might cause conflicts
@@ -1551,7 +1790,11 @@ if (routeLayers.length > 0) {
                             map: map,
                             target: 'map',
                             createSvg: false, // Disable SVG creation which can cause issues
-                            useDefaultRenderLoop: false, // Disable default render loop to prevent overlay sync issues
+                            // NOT `createDefaultRenderLoop: false`: ol-cesium's
+                            // default render loop is what drives the Cesium
+                            // viewer (nothing here calls ol3d.render()). This
+                            // unknown key is intentionally left as-is so the loop
+                            // keeps running.
                             time: function() { return Cesium.JulianDate.now(); }
                         });
                         
@@ -1584,6 +1827,13 @@ if (routeLayers.length > 0) {
                         // rendered surface within centimeters of the DEM grid that
                         // buildings and models are placed on.
                         scene.globe.maximumScreenSpaceError = 1;
+                        // Screen-space error 1 doubles the number of terrain
+                        // tiles Cesium wants (see the comment above), and the
+                        // default cache only holds 100 of them: the tiles were
+                        // evicted and re-fetched over and over, which is most of
+                        // the "it freezes when I enter 3D" network traffic.
+                        scene.globe.tileCacheSize = 300;
+                        scene.globe.maximumMemoryUsage = 384;
                        
                         // Restore any route layers that were hidden for initialization
 if (routeLayers.length > 0) {
@@ -1610,112 +1860,12 @@ if (routeLayers.length > 0) {
                             // Continue without custom terrain provider
                         }
                         
-                        // Clear any existing imagery layers
-                        scene.imageryLayers.removeAll();
-                        
-                        // Get the currently visible base layer from the 2D map
-                        let currentBaseLayer = null;
-                        let imageryProvider = null;
-                        
-                        // Find the currently visible base layer
-                        config.layers.forEach(layer => {
-                            if (layer.get && layer.get('type') !== 'overlay' && layer.getVisible && layer.getVisible()) {
-                                currentBaseLayer = layer;
-                            }
-                        });
-                        
-                        // Choose appropriate imagery provider based on the current base layer
-                        if (currentBaseLayer) {
-                            const layerTitle = currentBaseLayer.get('title') || '';
-                            console.log('Current base layer:', layerTitle);
-                            
-                            // Map different base layers to appropriate Cesium providers
-                            if (layerTitle.includes('MapTiler') || layerTitle.includes('Basic')) {
-                                // Use a reliable satellite provider instead of MapTiler to avoid API key issues
-                                imageryProvider = new Cesium.UrlTemplateImageryProvider({
-                                    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-                                    tileWidth: 256,
-                                    tileHeight: 256,
-                                    minimumLevel: 0,
-                                    maximumLevel: 18
-                                });
-                            } else if (layerTitle.includes('OpenStreetMap') || layerTitle.includes('OSM')) {
-                                // Use OSM tiles
-                                imageryProvider = new Cesium.UrlTemplateImageryProvider({
-                                    url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-                                    subdomains: ['a', 'b', 'c'],
-                                    tileWidth: 256,
-                                    tileHeight: 256,
-                                    minimumLevel: 0,
-                                    maximumLevel: 19
-                                });
-                            } else if (layerTitle.includes('Satellite') || layerTitle.includes('Aerial')) {
-                                // Use a satellite provider
-                                imageryProvider = new Cesium.UrlTemplateImageryProvider({
-                                    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-                                    tileWidth: 256,
-                                    tileHeight: 256,
-                                    minimumLevel: 0,
-                                    maximumLevel: 18
-                                });
-                            } else {
-                                // Default fallback to OSM
-                                imageryProvider = new Cesium.UrlTemplateImageryProvider({
-                                    url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-                                    subdomains: ['a', 'b', 'c'],
-                                    tileWidth: 256,
-                                    tileHeight: 256,
-                                    minimumLevel: 0,
-                                    maximumLevel: 19
-                                });
-                            }
-                        } else {
-                            // No base layer found, use default OSM
-                            console.log('No base layer found, using default OSM');
-                            imageryProvider = new Cesium.UrlTemplateImageryProvider({
-                                url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-                                subdomains: ['a', 'b', 'c'],
-                                tileWidth: 256,
-                                tileHeight: 256,
-                                minimumLevel: 0,
-                                maximumLevel: 19
-                            });
-                        }
-                        
-                        // Add the selected imagery provider
-                        try {
-                            scene.imageryLayers.addImageryProvider(imageryProvider);
-                            console.log('Successfully added imagery provider for 3D view');
-                            
-                            // Add error handling for tile loading errors (only if errorEvent exists)
-                            if (imageryProvider.errorEvent && imageryProvider.errorEvent.addEventListener) {
-                                imageryProvider.errorEvent.addEventListener(function(error) {
-                                    console.warn('Imagery provider tile loading error:', error);
-                                    // Silently handle tile errors to prevent console spam
-                                });
-                            }
-                            
-                        } catch (error) {
-                            console.error('Error adding imagery provider, using fallback:', error);
-                            // Fallback to simple OSM provider
-                            const fallbackProvider = new Cesium.UrlTemplateImageryProvider({
-                                url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-                                subdomains: ['a', 'b', 'c'],
-                                tileWidth: 256,
-                                tileHeight: 256,
-                                minimumLevel: 0,
-                                maximumLevel: 19
-                            });
-                            
-                            // Add error handling to fallback provider as well (only if errorEvent exists)
-                            if (fallbackProvider.errorEvent && fallbackProvider.errorEvent.addEventListener) {
-                                fallbackProvider.errorEvent.addEventListener(function(error) {
-                                    console.warn('Fallback imagery provider tile loading error:', error);
-                                });
-                            }
-                            
-                            scene.imageryLayers.addImageryProvider(fallbackProvider);
-                        }
+                        // Replace the 2D basemap with the Cesium equivalent of the
+                        // base layer that is currently visible (applyBaseLayerImagery
+                        // is the single source of truth, also used by
+                        // refresh3DImagery, so a new query can't silently swap the 3D
+                        // background for a different one).
+                        applyBaseLayerImagery(scene);
                         
                         // Disable Cesium ion features that require authentication
                         Cesium.Ion.defaultAccessToken = null;
@@ -1723,10 +1873,12 @@ if (routeLayers.length > 0) {
                         // Add global error handling for tile loading issues (only if events exist)
                         if (scene.globe && scene.globe.tileLoadProgressEvent && scene.globe.tileLoadProgressEvent.addEventListener) {
                             scene.globe.tileLoadProgressEvent.addEventListener(function(queued, processing, ready) {
-                                // Optionally log tile loading progress
-                                if (processing > 0) {
-                                    // Tiles are loading
-                                }
+                                // Feed the pre-load panel: terrain refinement is
+                                // the long tail of "is 3D ready yet".
+                                if (window.loadingProgress) window.loadingProgress.terrain(queued, processing, ready);
+                                // ...and let the gate know when the ground has
+                                // settled, so the message can close itself.
+                                if (window.notePreLoadTerrain) window.notePreLoadTerrain(queued, processing);
                             });
                         }
                         
@@ -1737,20 +1889,16 @@ if (routeLayers.length > 0) {
                             });
                         }
                         
-                        // Set a default view with a reasonable height
+                        // Set a default view above the terrain
                         const view = map.getView();
                         const center = ol.proj.toLonLat(view.getCenter());
-                        const zoom = view.getZoom();
-                        
-                        // Convert OpenLayers zoom to Cesium height
-                        const height = 2000; // Fixed height for better visibility
                         
                         // Set initial camera position
                         scene.camera.flyTo({
                             destination: Cesium.Cartesian3.fromDegrees(
                                 center[0],
                                 center[1],
-                                Math.max(height, 1000) // Ensure minimum height
+                                terrainSafeHeight(scene, center[0], center[1], 2000)
                             ),
                             orientation: {
                                 heading: 0.0,
@@ -1758,6 +1906,9 @@ if (routeLayers.length > 0) {
                                 roll: 0.0
                             }
                         });
+                        // Keep frames coming so the flight above actually plays
+                        // and the globe loads/refines its terrain tiles.
+                        pumpSceneRenders(scene, 4000);
                         
                         cesiumInitialized = true;
                     } catch (error) {
@@ -1788,6 +1939,11 @@ if (routeLayers.length > 0) {
                 
                 // Enable Cesium
                 ol3d.setEnabled(true);
+
+                        // Hold the (still empty) 3D canvas back and show the
+                        // pre-load panel until the models around the camera are
+                        // actually in place.
+                        if (firstEntryInto3D) startPreLoadGate(ol3d, 8000);
                 
                 // Wait for Cesium to initialize
                 await new Promise(resolve => setTimeout(resolve, 100));
@@ -1854,7 +2010,7 @@ if (routeLayers.length > 0) {
                                             const features = source.getFeatures();
                                             console.log(`🎯 Found ${features.length} features in ${layer.get('type')} layer`);
                                             features.forEach((feature, idx) => {
-                                                const model = feature.model;
+                                                const model = feature.get(window.OSM3D_MODEL_PROPERTY || 'osm3dModel');
                                                 if (model) {
                                                     console.log(`🎯 Found feature ${idx} with model: ${model}`);
                                                     console.log(`🎯 Feature geometry:`, feature.getGeometry().getType());
@@ -1899,89 +2055,18 @@ if (routeLayers.length > 0) {
                 console.log('🎯 Event listeners setup complete');
 
                 // Add listener for overlay features loaded to add models in 3D
-                window.addEventListener('overlayFeaturesLoaded', () => {
-                    if (window.is3d && window.ol3d) {
-                        console.log('🎯 Overlay features loaded in 3D mode, adding models...');
-                        const cesiumScene = window.ol3d.getCesiumScene();
-                        if (cesiumScene && cesiumScene.primitives) {
-                            // Keep depthTestAgainstTerrain FALSE: forcing it true
-                            // made ground-level models and textures disappear behind
-                            // terrain tiles (incongruent z-order with the DEM).
-                            console.log('🎯 Keeping depth test disabled for overlay models');
-
-                            let modelsAdded = 0;
-                            function addModelsFromLayer(layer) {
-                                if (layer.getSource && typeof layer.getSource === 'function') {
-                                    try {
-                                        const source = layer.getSource();
-                                        if (source && source.getFeatures) {
-                                            const features = source.getFeatures();
-                                            features.forEach((feature, fidx) => {
-                                                const model = feature.model;
-                                                if (model && typeof model === 'object' && model.uri) {
-                                                    try {
-                                                        const geometry = feature.getGeometry();
-                                                        const extent = geometry.getExtent();
-                                                        const center = ol.extent.getCenter(extent);
-                                                        const lonLat = ol.proj.toLonLat(center);
-
-                                                        // Create model matrix for positioning
-                                                        // Start ON the rendered ground: height 0 was
-                                                        // below the DEM surface in mountains, burying
-                                                        // these models. CLAMP_TO_GROUND makes Cesium
-                                                        // re-seat them on the terrain every frame.
-                                                        const modelMatrix = Cesium.Transforms.eastNorthUpToFixedFrame(
-                                                            Cesium.Cartesian3.fromDegrees(lonLat[0], lonLat[1], 0.0)
-                                                        );
-
-                                                        // Add the model
-                                                        const cesiumModel = cesiumScene.primitives.add(Cesium.Model.fromGltf({
-                                                            url: model.uri,
-                                                            modelMatrix: modelMatrix,
-                                                            // Real-world scale: the x10 exaggeration made
-                                                            // models gigantic and incongruent with buildings.
-                                                            scale: (model.scale || 1.0),
-                                                            show: true
-                                                        }));
-                                                        cesiumModel.heightReference = Cesium.HeightReference.CLAMP_TO_GROUND;
-
-                                                        console.log(`🎯 Added GLTF model ${fidx} from overlay at:`, lonLat);
-                                                        modelsAdded++;
-
-                                                        // Listen for loading
-                                                        cesiumModel.readyPromise.then(function(model) {
-                                                            console.log(`🎯 GLTF Model ${fidx} loaded successfully:`, model);
-                                                        }).catch(function(error) {
-                                                            console.error(`🎯 GLTF Model ${fidx} failed to load:`, error);
-                                                        });
-
-                                                    } catch (modelError) {
-                                                        console.error(`🎯 Error adding GLTF model ${fidx}:`, modelError);
-                                                    }
-                                                }
-                                            });
-                                        }
-                                    } catch (e) {
-                                        console.log('Error accessing layer source in addModelsFromLayer:', e);
-                                    }
-                                }
-                                // Check group children recursively
-                                else if (layer.getLayers && typeof layer.getLayers === 'function') {
-                                    const childLayers = layer.getLayers().getArray();
-                                    childLayers.forEach(childLayer => {
-                                        addModelsFromLayer(childLayer);
-                                    });
-                                }
-                            }
-
-                            const allLayers = window.map.getLayers().getArray();
-                            allLayers.forEach(layer => {
-                                addModelsFromLayer(layer);
-                            });
-                            console.log(`🎯 Added ${modelsAdded} models from overlays`);
-                        }
-                    }
-                });
+                // There used to be an 'overlayFeaturesLoaded' listener here that
+                // built a SECOND copy of every model straight from `feature.model`,
+                // using eastNorthUpToFixedFrame and applying NO rotation. It
+                // overlaid the correctly rotated copy drawn by model_renderer at
+                // the same clamped-to-ground position, which is why turning a model
+                // appeared to do nothing. Worse, `model` is the property name
+                // ol-cesium's VectorSynchronizer looks for, so writing it also made
+                // ol-cesium render a THIRD copy.
+                //
+                // model_renderer is the single producer of 3D models and the only
+                // path that applies modelRotation (see OSM3D_MODEL_PROPERTY in
+                // model_renderer.js). Do not add another one here.
 
                 // Check layers for existing features and assign models if needed
                 console.log('🎯 Checking for existing features and assigning models...');
@@ -1993,7 +2078,11 @@ if (routeLayers.length > 0) {
                                 const features = source.getFeatures();
                                 let modelsAssigned = 0;
                                 features.forEach(feature => {
-                                    if (!feature.model) { // Only assign if no model already
+                                    // Guard on the property model_renderer actually reads.
+                                    // This used to check `feature.model`, which only this
+                                    // function wrote, so the guard never matched and every
+                                    // entry into 3D re-assigned (and overwrote) the rotation.
+                                    if (!feature.get(window.OSM3D_MODEL_PROPERTY || 'osm3dModel')) {
                                         // Try to assign model based on properties
                                         const properties = feature.getProperties();
                                         const osmTags = Object.keys(properties).filter(prop =>
@@ -2009,6 +2098,7 @@ if (routeLayers.length > 0) {
                                         // Extract way coordinates from geometry for bearing calculation
                                         let wayCoordinates = null;
                                         let nodeIndex = null;
+                                        let orientationContext = null;
                                         const geometry = feature.getGeometry();
                                         if (geometry && geometry.getType() === 'LineString') {
                                             const coordinates = geometry.getCoordinates();
@@ -2024,22 +2114,18 @@ if (routeLayers.length > 0) {
                                                 `[${i}]: [${coord[0].toFixed(6)}, ${coord[1].toFixed(6)}]`
                                             ));
                                         } else if (geometry && geometry.getType() === 'Point') {
-                                            // For point features, always try to find bearing from parent ways
-                                            const parentBearing = window.findBearingFromParentWays(feature, features);
-                                            if (parentBearing !== null) {
-                                                // Don't set coordinates when we have parent bearing
-                                                wayCoordinates = null;
-                                                nodeIndex = null;
-                                                
-                                                // Override the bearing in the model configuration by setting a synthetic bearing
-                                                tagsObj._parentWayBearing = parentBearing;
-                                                
-                                                console.log(`🎯 Using parent way bearing ${(parentBearing * 180 / Math.PI).toFixed(2)}° for point feature`);
-                                            }
+                                            // The rules in model_orientation.js decide what this
+                                            // point turns to face; here we only say where it is
+                                            // and what ways are around it.
+                                            orientationContext = {
+                                                pointLonLat: ol.proj.transform(
+                                                    geometry.getCoordinates(), map.getView().getProjection(), 'EPSG:4326'),
+                                                allFeatures: features
+                                            };
                                         }
 
                                         // Check if the tags match any model mapping
-                                        const mapping = window.models ? window.models.getModelForTags(tagsObj, wayCoordinates, nodeIndex) : null;
+                                        const mapping = window.models ? window.models.getModelForTags(tagsObj, wayCoordinates, nodeIndex, 'point', orientationContext) : null;
                                         if (mapping) {
                                             const modelFilename = mapping.model;
                                             const modelConfig = mapping.config;
@@ -2049,7 +2135,13 @@ if (routeLayers.length > 0) {
                                                 scale: modelConfig ? modelConfig.scale : 1.0,
                                                 heightReference: Cesium.HeightReference.NONE,
                                             };
-                                            feature.model = modelOptions;
+                                            // Store under 'osm3dModel', NEVER under the
+                                            // literal name 'model': ol-cesium's
+                                            // VectorSynchronizer renders a feature property
+                                            // called 'model' itself, with no rotation, so
+                                            // writing that name put an unrotated extra copy
+                                            // of every model into the scene.
+                                            feature.set(window.OSM3D_MODEL_PROPERTY || 'osm3dModel', modelOptions);
                                             if (modelConfig) {
                                                 feature.set('modelHeightOffset', modelConfig.heightOffset);
                                                 feature.set('modelRotation', modelConfig.rotation);
@@ -2109,14 +2201,34 @@ if (routeLayers.length > 0) {
                 // Sync camera
                 const view = map.getView();
                 const center = ol.proj.toLonLat(view.getCenter());
-                const zoom = view.getZoom();
-                const height = 200; // Lower height for better building visibility
-                
+
+                // Wait for the DEM tile at the view centre, then place the camera
+                // on the REAL surface. getElevation() is synchronous and happily
+                // samples whatever coarse ancestor happens to be cached (a z8 cell
+                // is ~5 km wide, so on a slope it overshot the true height by
+                // hundreds of metres and left the eye floating at 936 m over 294 m
+                // of ground). getElevationAsync fetches the z15 tile instead — the
+                // same grid the terrain renders from — so the height is exact.
+                let entryGround = null;
+                try {
+                    if (window.mapterhornTerrain && window.mapterhornTerrain.getElevationAsync) {
+                        entryGround = await window.mapterhornTerrain.getElevationAsync(center[0], center[1]);
+                    }
+                } catch (error) {
+                    console.warn('DEM sample for entry camera failed, using clearance only:', error);
+                    entryGround = null;
+                }
+                if (entryGround === null || entryGround === undefined || !isFinite(entryGround)) {
+                    entryGround = 0; // no DEM yet: the guard will lift the camera
+                }
+                console.log('🗺️ entry camera: DEM ' + Math.round(entryGround) +
+                    'm + 300m clearance = ' + Math.round(entryGround + 300) + 'm');
+
                 scene.camera.flyTo({
                     destination: Cesium.Cartesian3.fromDegrees(
                         center[0],
                         center[1],
-                        Math.max(height, 300) // Lower minimum height
+                        entryGround + 300
                     ),
                     orientation: {
                         heading: 0.0,
@@ -2124,6 +2236,22 @@ if (routeLayers.length > 0) {
                         roll: 0.0
                     }
                 });
+                // Same here: pump frames so this flight lands at the DEM-aware
+                // height instead of stalling at the 2D-derived camera position.
+                pumpSceneRenders(scene, 4000);
+
+                // Re-offer the models once the camera has actually landed. The
+                // first sweep ran while the camera was still where the 2D view
+                // left it (kilometres up), so anything outside the load radius
+                // was skipped as "too far" — and nothing retried it, which is
+                // how a session could end up with no models at all. addAllModels
+                // is idempotent: only the missing ones get placed.
+                setTimeout(function () {
+                    if (window.modelRenderer && window.modelRenderer.addAllModels) {
+                        console.log('🎯 camera landed — re-offering models that were out of range');
+                        window.modelRenderer.addAllModels();
+                    }
+                }, 4500);
                 
                 button.innerHTML = '<i class="fa fa-map"></i>';
                 button.title = 'Switch to 2D';
@@ -2410,78 +2538,153 @@ if (routeLayers.length > 0) {
     return element;
 }
 
+// ---------------------------------------------------------------------------
+// Cesium imagery: derive the 3D background from the visible 2D base layer
+// ---------------------------------------------------------------------------
+
+/** The base layers defined in config.layers that are currently visible. */
+function visibleBaseLayers() {
+    return (config.layers || []).filter(layer =>
+        layer.get && layer.get('type') !== 'overlay' &&
+        typeof layer.getVisible === 'function' && layer.getVisible());
+}
+
+/**
+ * Build the Cesium imagery provider matching a 2D base layer.
+ *
+ * The previous implementation only knew four keywords, so most real titles
+ * from config.js ('Esri Sat', 'OpenStreetMap DE/FR', 'ES_IGN - PNOA - Actual',
+ * 'ES_CAT_ICGC - Actual') fell through to plain OSM raster and the 3D view
+ * stopped matching the 2D map. WMS layers now map to
+ * WebMapServiceImageryProvider so IGN/ICGC actually show up in 3D.
+ *
+ * @param {ol.layer.Base} layer
+ * @returns {Cesium.ImageryProvider|null}
+ */
+function createImageryProviderForLayer(layer) {
+    if (!layer) return null;
+    const title = layer.get('title') || '';
+    try {
+        // WMS layers: build the provider from the layer's own source so the
+        // 3D view serves exactly the layers/params configured for 2D.
+        const source = layer.getSource && layer.getSource();
+        if (source instanceof ol.source.TileWMS) {
+            const params = source.getParams() || [];
+            const paramsObject = {};
+            for (let i = 0; i < params.length; i += 2) paramsObject[params[i]] = params[i + 1];
+            const wmsParams = Object.assign({}, paramsObject);
+            // Cesium builds the request itself (bbox, size, crs, layers), so the
+            // 2D-only WMS parameters have to go or they are sent twice.
+            delete wmsParams.WIDTH;
+            delete wmsParams.HEIGHT;
+            delete wmsParams.BBOX;
+            delete wmsParams.FORMAT;
+            delete wmsParams.REQUEST;
+            delete wmsParams.SRS;
+            delete wmsParams.CRS;
+            delete wmsParams.TRANSPARENT;
+            const wmsLayers = wmsParams.LAYERS;
+            delete wmsParams.LAYERS;
+            return new Cesium.WebMapServiceImageryProvider({
+                url: source.getUrl(),
+                layers: wmsLayers,
+                parameters: wmsParams
+            });
+        }
+
+        if (title.includes('Esri') || title.includes('Satellite') || title.includes('Aerial') ||
+            title.includes('PNOA') || title.includes('ICGC') || title.includes('Orto')) {
+            return new Cesium.UrlTemplateImageryProvider({
+                url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+                maximumLevel: 18
+            });
+        }
+        if (title.includes('DE')) {
+            return new Cesium.UrlTemplateImageryProvider({
+                url: 'https://{a-c}.tile.openstreetmap.de/{z}/{x}/{y}.png',
+                subdomains: ['a', 'b', 'c'],
+                maximumLevel: 18
+            });
+        }
+        if (title.includes('FR')) {
+            return new Cesium.UrlTemplateImageryProvider({
+                url: 'https://{a-c}.tile.openstreetmap.fr/osmfr/{z}/{x}/{y}.png',
+                subdomains: ['a', 'b', 'c'],
+                maximumLevel: 19
+            });
+        }
+        // OpenStreetMap, Versatiles, MapTiler, anything else -> OSM raster
+        return new Cesium.UrlTemplateImageryProvider({
+            url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+            subdomains: ['a', 'b', 'c'],
+            maximumLevel: 19
+        });
+    } catch (error) {
+        console.warn('Could not build Cesium imagery for base layer "' + title + '":', error);
+        return null;
+    }
+}
+
+/**
+ * Put the Cesium scene's imagery in sync with the visible 2D base layer.
+ * Always leaves exactly one imagery layer on the scene, falling back to OSM
+ * raster so the globe is never left without imagery (a blank/black viewport).
+ *
+ * @param {Cesium.Scene} scene
+ */
+function applyBaseLayerImagery(scene) {
+    if (!scene || !scene.imageryLayers) return false;
+    try {
+        scene.imageryLayers.removeAll();
+
+        const baseLayers = visibleBaseLayers();
+        // config order wins: the first visible base layer is the one the user
+        // selected. The old loop kept the LAST one, so with two base layers
+        // left visible (see the layer-switch fix) it picked the wrong one.
+        const current = baseLayers[0] || null;
+        const title = current ? (current.get('title') || 'unknown') : 'none';
+        console.log('3D background from base layer:', title);
+
+        let provider = createImageryProviderForLayer(current);
+        if (!provider) {
+            provider = new Cesium.UrlTemplateImageryProvider({
+                url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+                subdomains: ['a', 'b', 'c'],
+                maximumLevel: 19
+            });
+        }
+        if (provider.errorEvent && provider.errorEvent.addEventListener) {
+            provider.errorEvent.addEventListener(function (error) {
+                console.warn('3D imagery tile loading error:', error);
+            });
+        }
+        scene.imageryLayers.addImageryProvider(provider);
+        return true;
+    } catch (error) {
+        console.error('Failed to apply base layer imagery, using OSM fallback:', error);
+        try {
+            scene.imageryLayers.removeAll();
+            scene.imageryLayers.addImageryProvider(new Cesium.UrlTemplateImageryProvider({
+                url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+                subdomains: ['a', 'b', 'c'],
+                maximumLevel: 19
+            }));
+            return true;
+        } catch (fallbackError) {
+            console.error('OSM imagery fallback failed too:', fallbackError);
+            return false;
+        }
+    }
+}
+
 // Function to refresh 3D imagery layers when queries interfere with background tiles
 function refresh3DImagery() {
     if (!window.ol3d || !window.ol3d.getEnabled()) {
         return;
     }
-    
     try {
-        const scene = window.ol3d.getCesiumScene();
-        
-        // Clear existing imagery layers
-        scene.imageryLayers.removeAll();
-        
-        // Get the currently visible base layer from the 2D map
-        let currentBaseLayer = null;
-        let imageryProvider = null;
-        
-        // Find the currently visible base layer
-        config.layers.forEach(layer => {
-            if (layer.get && layer.get('type') !== 'overlay' && layer.getVisible && layer.getVisible()) {
-                currentBaseLayer = layer;
-            }
-        });
-        
-        // Choose appropriate imagery provider based on the current base layer
-        if (currentBaseLayer) {
-            const layerTitle = currentBaseLayer.get('title') || '';
-            console.log('Refreshing 3D imagery with base layer:', layerTitle);
-            
-            // Map different base layers to appropriate Cesium providers
-            if (layerTitle.includes('MapTiler') || layerTitle.includes('Basic')) {
-                // Use a reliable satellite provider instead of MapTiler to avoid API key issues
-                imageryProvider = new Cesium.UrlTemplateImageryProvider({
-                    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-                    tileWidth: 256,
-                    tileHeight: 256,
-                    minimumLevel: 0,
-                    maximumLevel: 18
-                });
-            } else if (layerTitle.includes('OpenStreetMap') || layerTitle.includes('OSM')) {
-                // Use OSM tiles
-                imageryProvider = new Cesium.UrlTemplateImageryProvider({
-                    url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-                    subdomains: ['a', 'b', 'c'],
-                    tileWidth: 256,
-                    tileHeight: 256,
-                    minimumLevel: 0,
-                    maximumLevel: 19
-                });
-            } else if (layerTitle.includes('Satellite') || layerTitle.includes('Aerial')) {
-                imageryProvider = new Cesium.UrlTemplateImageryProvider({
-                    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-                    tileWidth: 256,
-                    tileHeight: 256,
-                    minimumLevel: 0,
-                    maximumLevel: 18
-                });
-            } else {
-                // Default provider
-                imageryProvider = new Cesium.UrlTemplateImageryProvider({
-                    url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-                    tileWidth: 256,
-                    tileHeight: 256,
-                    minimumLevel: 0,
-                    maximumLevel: 18
-                });
-            }
-            
-            // Add the imagery provider to the scene
-            scene.imageryLayers.addImageryProvider(imageryProvider);
-            
-            console.log('3D imagery refreshed successfully');
-        }
+        applyBaseLayerImagery(window.ol3d.getCesiumScene());
+        console.log('3D imagery refreshed successfully');
     } catch (error) {
         console.warn('Failed to refresh 3D imagery:', error);
     }
@@ -2692,7 +2895,7 @@ function show3DBackgroundSelector() {
     const options = [
         { value: 'osm', text: 'OpenStreetMap', url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png' },
         { value: 'satellite', text: 'Satellite', url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}' },
-        { value: 'terrain', text: 'Terrain', url: 'https://stamen-tiles-{s}.a.ssl.fastly.net/terrain/{z}/{x}/{y}.png' }
+        { value: 'terrain', text: 'Terrain', url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png' }
     ];
     
     options.forEach(option => {
@@ -2762,7 +2965,7 @@ function show3DBackgroundSelectorFallback() {
     const options = [
         { value: 'osm', text: 'OpenStreetMap', url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png' },
         { value: 'satellite', text: 'Satellite', url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}' },
-        { value: 'terrain', text: 'Terrain', url: 'https://stamen-tiles-{s}.a.ssl.fastly.net/terrain/{z}/{x}/{y}.png' }
+        { value: 'terrain', text: 'Terrain', url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png' }
     ];
     
     options.forEach(option => {

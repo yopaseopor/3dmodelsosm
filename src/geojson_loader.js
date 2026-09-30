@@ -125,6 +125,7 @@ class GeoJSONLoader {
                             let geometryType = 'point';
                             let wayCoordinates = null;
                             let nodeIndex = null;
+                            let orientationContext = null;
                             
                             if (geometry) {
                                 const geomType = geometry.getType();
@@ -153,6 +154,16 @@ class GeoJSONLoader {
                                     if (isClosed) {
                                         console.log(`Feature ${index}: Closed LineString detected, treating as area`);
                                     }
+                                } else if (geomType === 'Point') {
+                                    // The rules in model_orientation.js decide what this point
+                                    // turns to face; here we only say where it is.
+                                    const allFeatures = layer.getSource().getFeatures();
+                                    orientationContext = {
+                                        pointLonLat: ol.proj.transform(
+                                            geometry.getCoordinates(), window.map.getView().getProjection(), 'EPSG:4326'),
+                                        allFeatures: allFeatures.indexOf(feature) === -1
+                                            ? allFeatures.concat([feature]) : allFeatures
+                                    };
                                 } else if (geomType === 'MultiLineString') {
                                     geometryType = 'line';
                                 } else if (geomType === 'Polygon' || geomType === 'MultiPolygon') {
@@ -167,7 +178,7 @@ class GeoJSONLoader {
                             console.log(`Feature ${index}: Processing ${geometryType} feature with tags:`, tags);
 
                             // Check if the tags match any model mapping (EXACT same approach as existing system)
-                            const modelMapping = window.models ? window.models.getModelForTags(tags, wayCoordinates, nodeIndex, geometryType) : null;
+                            const modelMapping = window.models ? window.models.getModelForTags(tags, wayCoordinates, nodeIndex, geometryType, orientationContext) : null;
                             if (modelMapping) {
                                 console.log(`📍 Feature ${index}: SUCCESS: Found model mapping for ${geometryType} feature:`, modelMapping);
                                 const modelFilename = modelMapping.model;
@@ -187,7 +198,7 @@ class GeoJSONLoader {
                                     heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
                                 };
 
-                                feature.set('model', modelOptions);
+                                feature.set(window.OSM3D_MODEL_PROPERTY || 'osm3dModel', modelOptions);
 
                                 // Set additional model configuration for positioning (EXACT same as existing system)
                                 if (modelConfig) {

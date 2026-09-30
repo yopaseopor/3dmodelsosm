@@ -12,6 +12,19 @@ window.buildings = window.buildings || {};
 // never float over terrain even when DEM detail refines after placement.
 const BUILDING_SKIRT_METERS = 0.5;
 
+/**
+ * Per-feature logging gate.
+ *
+ * processLayerFeatures() used to console.log five or six lines per feature,
+ * most of them dumping a whole tags object. A query over a town produced
+ * thousands of console entries: with devtools open that alone costs seconds of
+ * main-thread time and a full-object copy each, and it happens exactly when 3D
+ * mode is being built. Silent unless the shared debug config asks for it.
+ */
+function buildingLog() {
+    return !!(window.globalDebugConfig && window.globalDebugConfig.enabled);
+}
+
 /* ------------------------------------------------------------------ */
 /* building:part support (https://wiki.openstreetmap.org/wiki/Key:building:part)
  * - An outline tagged building=* that contains building:part=* areas must NOT
@@ -1092,7 +1105,7 @@ function createExtrudedBuilding(feature, tags) {
     // Only handle polygon geometries (building footprints)
     const geometryType = geometry.getType();
     if (geometryType !== 'Polygon' && geometryType !== 'MultiPolygon') {
-        console.log(`Skipping building with geometry type: ${geometryType}`);
+        if (buildingLog()) console.log(`Skipping building with geometry type: ${geometryType}`);
         return null;
     }
 
@@ -1102,13 +1115,14 @@ function createExtrudedBuilding(feature, tags) {
 
         // --- building:part conflicts (Key:building:part / Simple 3D Buildings) ---
         // A feature that already carries a 3D model keeps the model, no extrusion
-        if (feature && feature.get && feature.get('model')) {
-            console.log('🏗️ Skipping extrusion: feature already has a 3D model assigned');
+        if (feature && typeof feature.get === 'function' &&
+            (feature.get('osm3dModel') || feature.get('model'))) {
+            if (buildingLog()) console.log('🏗️ Skipping extrusion: feature already has a 3D model assigned');
             return null;
         }
         // Underground buildings are never extruded
         if (((tags.location || '') + '').toLowerCase() === 'underground') {
-            console.log('🏗️ Skipping underground building (location=underground)');
+            if (buildingLog()) console.log('🏗️ Skipping underground building (location=underground)');
             return null;
         }
         // Previously disabled (outline overlapped by a building:part, etc.)
@@ -1121,10 +1135,10 @@ function createExtrudedBuilding(feature, tags) {
         const partKind = getPartKind(tags);
         if (partKind && !tags.height && !tags['building:levels']) {
             height = getPartDefaultHeight(partKind);
-            console.log(`🏗️ building:part=${tags['building:part']}: default height ${height}m`);
+            if (buildingLog()) console.log(`🏗️ building:part=${tags['building:part']}: default height ${height}m`);
         }
 
-        console.log(`🏗️ Creating extruded building with height: ${height}m`);
+        if (buildingLog()) console.log(`🏗️ Creating extruded building with height: ${height}m`);
 
         // Get coordinates in the correct format for Cesium
         let coordinates;
@@ -1159,7 +1173,7 @@ function createExtrudedBuilding(feature, tags) {
             ol.proj.transform(coord, window.map.getView().getProjection(), 'EPSG:4326'));
         const isPart = !!tags['building:part'];
         if (!isPart && outlineHasPartConflict(outerLonLat)) {
-            console.log('🏗️ Conflict: building outline contains building:part area(s) — outline extrusion disabled');
+            if (buildingLog()) console.log('🏗️ Conflict: building outline contains building:part area(s) — outline extrusion disabled');
             if (feature && feature.set) feature.set('buildingExtrusionDisabled', 'contains building:part');
             return null;
         }
@@ -1171,7 +1185,7 @@ function createExtrudedBuilding(feature, tags) {
         const baseOffset = getBaseOffsetMeters(tags);
         const layerOffset = getLayerOffsetMeters(tags);
         if (height - baseOffset < 0.5) {
-            console.log(`🏗️ Conflict: min_height (${baseOffset.toFixed(1)}m) >= height (${height.toFixed(1)}m) — extrusion disabled`);
+            if (buildingLog()) console.log(`🏗️ Conflict: min_height (${baseOffset.toFixed(1)}m) >= height (${height.toFixed(1)}m) — extrusion disabled`);
             if (feature && feature.set) feature.set('buildingExtrusionDisabled', 'min_height >= height');
             return null;
         }
@@ -1184,7 +1198,7 @@ function createExtrudedBuilding(feature, tags) {
         let facadeTop = height - roofHeight;
         if (roofShape !== 'flat' && facadeTop < 1) {
             // Conflict: roof taller than the building -> disable the roof only
-            console.log('🏗️ Conflict: roof:height consumes the whole height= of the building — roof disabled, rendered flat');
+            if (buildingLog()) console.log('🏗️ Conflict: roof:height consumes the whole height= of the building — roof disabled, rendered flat');
             roofShape = 'flat';
             roofHeight = 0;
             facadeTop = height;
@@ -1267,7 +1281,7 @@ function createExtrudedBuilding(feature, tags) {
             feature: feature
         };
 
-        console.log(`🏗️ Created extruded building with ${cesiumPositions.length} vertices on ground at ${groundElevation.toFixed(1)}m (max ${groundMax.toFixed(1)}m, relief ${baseRelief.toFixed(1)}m, walls skirted below base)`);
+        if (buildingLog()) console.log(`🏗️ Created extruded building with ${cesiumPositions.length} vertices on ground at ${groundElevation.toFixed(1)}m (max ${groundMax.toFixed(1)}m, relief ${baseRelief.toFixed(1)}m, walls skirted below base)`);
 
         return buildingData;
 
@@ -1284,7 +1298,7 @@ function createExtrudedBuilding(feature, tags) {
  */
 function createBuildingEntity(buildingData, container) {
     try {
-        console.log(`🏗️ createBuildingEntity called with:`, buildingData);
+        if (buildingLog()) console.log(`🏗️ createBuildingEntity called with:`, buildingData);
         const { positions, height, color, tags } = buildingData;
         const groundElevation = buildingData.groundElevation || 0;
         const groundMax = (buildingData.groundMax !== undefined) ? buildingData.groundMax : groundElevation;
@@ -1309,7 +1323,7 @@ function createBuildingEntity(buildingData, container) {
             return null;
         }
 
-        console.log(`🏗️ Creating entity with ${positions.length} positions, height: ${height}m, color:`, color);
+        if (buildingLog()) console.log(`🏗️ Creating entity with ${positions.length} positions, height: ${height}m, color:`, color);
 
         // Create polygon hierarchy
         const hierarchy = new Cesium.PolygonHierarchy(positions);
@@ -1323,7 +1337,7 @@ function createBuildingEntity(buildingData, container) {
         const textureTag = tags.texture || tags.building_texture;
         if (textureTag && isTextureUrl(textureTag)) {
             const textureUrl = textureTag;
-            console.log(`🏗️ Using texture for building:`, textureUrl);
+            if (buildingLog()) console.log(`🏗️ Using texture for building:`, textureUrl);
             
             material = new Cesium.Material({
                 fabric: {
@@ -1336,7 +1350,7 @@ function createBuildingEntity(buildingData, container) {
             });
         } else {
             // Use solid color material - ensure color is properly applied
-            console.log(`🏗️ Using solid color for building:`, color);
+            if (buildingLog()) console.log(`🏗️ Using solid color for building:`, color);
             material = color; // Use color directly as material
         }
 
@@ -1438,7 +1452,7 @@ function createBuildingEntity(buildingData, container) {
             try { window.indoor.syncBuildingEntity(entity, layerOffset < 0); } catch (e) { /* noop */ }
         }
 
-        console.log(`🏗️ Created Cesium entity for building with height ${height}m (${roofShape} roof) at position:`, positions[0]); // Log first position for debugging
+        if (buildingLog()) console.log(`🏗️ Created Cesium entity for building with height ${height}m (${roofShape} roof) at position:`, positions[0]); // Log first position for debugging
         return entity;
 
     } catch (error) {
@@ -1456,20 +1470,31 @@ function processLayerFeatures(layer, dataSource) {
     const source = layer.getSource();
     if (source && source.getFeatures) {
         const features = source.getFeatures();
-        console.log(`🏗️ Processing ${features.length} features in layer for buildings`);
+        if (buildingLog()) console.log(`🏗️ Processing ${features.length} features in layer for buildings`);
 
         // Pass 1: register every building:part footprint FIRST so outlines that
         // contain parts are detected no matter which feature comes first.
         registerBuildingPartsFromFeatures(features);
-        
+
+        // Pass 2: extrude every footprint, in one synchronous pass as before.
         features.forEach((feature, index) => {
-            let buildingData = feature.get('extrudedBuilding');
+            processBuildingFeature(feature, index, dataSource);
+        });
+    }
+}
+
+/**
+ * The per-feature extrusion work. Body unchanged from the original
+ * synchronous loop.
+ */
+function processBuildingFeature(feature, index, dataSource) {
+    let buildingData = feature.get('extrudedBuilding');
             // Re-check the outline conflict even for cached building data: the
             // outline may have been extruded (e.g. via geojson_loader) BEFORE
             // its building:part areas were registered.
             if (buildingData && buildingData.outerLonLat && !buildingData.tags['building:part']
                     && outlineHasPartConflict(buildingData.outerLonLat)) {
-                console.log(`🏗️ Conflict: cached outline for feature ${index} contains building:part — extrusion disabled`);
+                if (buildingLog()) console.log(`🏗️ Conflict: cached outline for feature ${index} contains building:part — extrusion disabled`);
                 const staleEntity = buildingEntities.get(feature);
                 if (staleEntity && dataSource && dataSource.entities) {
                     dataSource.entities.remove(staleEntity);
@@ -1482,16 +1507,16 @@ function processLayerFeatures(layer, dataSource) {
             if (buildingData) {
                 // Check if entity already exists for this feature
                 if (!buildingEntities.has(feature)) {
-                    console.log(`🏗️ Feature ${index}: Found existing building data, creating entity`);
+                    if (buildingLog()) console.log(`🏗️ Feature ${index}: Found existing building data, creating entity`);
                     const entity = createBuildingEntity(buildingData, dataSource);
                     if (entity && dataSource && dataSource.entities) {
                         dataSource.entities.add(entity);
                         buildingEntities.set(feature, entity);
-                        console.log(`🏗️ Added building entity for feature ${index}`);
+                        if (buildingLog()) console.log(`🏗️ Added building entity for feature ${index}`);
                     } else {
                         console.warn(`🏗️ Failed to create entity for feature ${index}:`, entity);
                     }
-                } else {
+                } else if (buildingLog()) {
                     console.log(`🏗️ Feature ${index}: Entity already exists`);
                 }
             } else {
@@ -1503,34 +1528,31 @@ function processLayerFeatures(layer, dataSource) {
                     }
                 });
                 
-                console.log(`🏗️ Feature ${index} tags:`, tags);
+                if (buildingLog()) console.log(`🏗️ Feature ${index} tags:`, tags);
                 const isBuilding = isBuildingFeature(tags);
-                console.log(`🏗️ Feature ${index} isBuilding:`, isBuilding);
+                if (buildingLog()) console.log(`🏗️ Feature ${index} isBuilding:`, isBuilding);
                 
                 if (isBuilding) {
-                    console.log(`🏗️ Feature ${index}: Found building feature with tags:`, tags);
+                    if (buildingLog()) console.log(`🏗️ Feature ${index}: Found building feature with tags:`, tags);
                     const buildingOptions = createExtrudedBuilding(feature, tags);
-                    console.log(`🏗️ Feature ${index}: Created building options:`, buildingOptions);
+                    if (buildingLog()) console.log(`🏗️ Feature ${index}: Created building options:`, buildingOptions);
                     if (buildingOptions) {
                         feature.set('extrudedBuilding', buildingOptions);
                         const entity = createBuildingEntity(buildingOptions, dataSource);
-                        console.log(`🏗️ Feature ${index}: Created entity:`, entity);
                         if (entity && dataSource && dataSource.entities) {
                             dataSource.entities.add(entity);
                             buildingEntities.set(feature, entity);
-                            console.log(`🏗️ Created and added building entity for feature ${index}`);
+                            if (buildingLog()) console.log(`🏗️ Created and added building entity for feature ${index}`);
                         } else {
                             console.warn(`🏗️ Failed to add entity for feature ${index}:`, { entity, dataSource, entities: dataSource?.entities });
                         }
-                    } else {
+                    } else if (buildingLog()) {
                         console.warn(`🏗️ Failed to create building options for feature ${index}`);
                     }
-                } else {
+                } else if (buildingLog()) {
                     console.log(`🏗️ Feature ${index}: Not a building, skipping`);
                 }
             }
-        });
-    }
 }
 
 /**
@@ -1622,19 +1644,28 @@ function addBuildingsToScene(ol3d) {
         console.log('🏗️ Using existing Buildings data source');
     }
 
-    // Process all features that have building data
-    window.map.getLayers().forEach(layer => {
-        // Process overlay layers (existing logic) - check if it's a group layer
-        if (layer.get('type') === 'overlay' && typeof layer.getLayers === 'function') {
-            layer.getLayers().forEach(sublayer => {
-                processLayerFeatures(sublayer, dataSource);
-            });
+    // Process all features that have building data.
+    //
+    // This must recurse through EVERY group, not just type==='overlay'.
+    // Overpass / tag-query results are vector layers of type 'tag-query' that
+    // live inside a 'Tag Queries' group which is ALSO type 'tag-query'. The old
+    // walk only descended into 'overlay' groups and only one level deep, so it
+    // matched neither: top-level groups were skipped because their type wasn't
+    // 'overlay', and their children were never visited. Overpass buildings were
+    // therefore never extruded in 3D, while GeoJSON overlays (which sit in
+    // 'overlay' groups) worked fine.
+    const visit = (layer) => {
+        if (!layer) return;
+        // A group: descend, whatever its type ('overlay', 'tag-query', ...).
+        if (typeof layer.getLayers === 'function') {
+            layer.getLayers().forEach(visit);
+            return;
         }
-        // Process GeoJSON layers (new logic)
-        else if (layer instanceof ol.layer.Vector) {
+        if (layer.getSource) {
             processLayerFeatures(layer, dataSource);
         }
-    });
+    };
+    window.map.getLayers().forEach(visit);
 
     console.log(`🏗️ Buildings data source now has ${dataSource.entities.values.length} entities`);
     console.log(`🏗️ Total data sources: ${dataSources.length}`);
@@ -1890,24 +1921,40 @@ window.addEventListener('ol3dInitialized', function(event) {
 });
 
 /**
+ * Overpass / tag-query results usually arrive AFTER 3D mode was entered, so the
+ * one-shot ol3dInitialized hook above had already run and their buildings were
+ * never extruded (only GeoJSON layers were). Re-scan on the same events the
+ * model renderer listens to; processLayerFeatures skips features that already
+ * have an entity, so this is cheap and idempotent.
+ */
+function rebuildBuildingsIf3dActive() {
+    if (window.is3d && window.ol3d && window.ol3d.getEnabled && window.ol3d.getEnabled()) {
+        addBuildingsToScene(window.ol3d);
+    }
+}
+window.addEventListener('tagQueryAdded', rebuildBuildingsIf3dActive);
+window.addEventListener('overlayFeaturesLoaded', rebuildBuildingsIf3dActive);
+
+/**
  * Reprocess all layers for buildings (useful when GeoJSON layers are loaded before 3D mode)
  */
 function reprocessAllLayersForBuildings() {
     if (!window.map) return;
     
     console.log('🏗️ Reprocessing all layers for buildings');
-    window.map.getLayers().forEach(layer => {
-        // Process overlay layers - check if it's a group layer
-        if (layer.get('type') === 'overlay' && typeof layer.getLayers === 'function') {
-            layer.getLayers().forEach(sublayer => {
-                processLayerFeatures(sublayer, null);
-            });
+    // Same recursive walk as addBuildingsToScene: any group type ('overlay',
+    // 'tag-query', ...) at any depth, so Overpass results are covered too.
+    const visit = (layer) => {
+        if (!layer) return;
+        if (typeof layer.getLayers === 'function') {
+            layer.getLayers().forEach(visit);
+            return;
         }
-        // Process GeoJSON layers
-        else if (layer instanceof ol.layer.Vector) {
+        if (layer.getSource) {
             processLayerFeatures(layer, null);
         }
-    });
+    };
+    window.map.getLayers().forEach(visit);
 }
 
 window.addEventListener('ol3dDestroyed', function() {

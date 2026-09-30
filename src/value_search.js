@@ -545,7 +545,7 @@ function processQueryResults(allFeatures, key, value) {
                     }
                 } else {
                     // Point model
-                    feature.set('model', modelOptions);
+                    feature.set(window.OSM3D_MODEL_PROPERTY || 'osm3dModel', modelOptions);
                 }
 
                 // Set additional model configuration for positioning
@@ -601,7 +601,7 @@ function processQueryResults(allFeatures, key, value) {
                     }
                 } else {
                     // Point model
-                    feature.set('model', modelOptions);
+                    feature.set(window.OSM3D_MODEL_PROPERTY || 'osm3dModel', modelOptions);
                 }
 
                 // Set additional model configuration for positioning

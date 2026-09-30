@@ -260,7 +260,7 @@ function applyModelRepetitions(feature, modelFilename, modelConfig, geometryType
                 heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
                 position: rep.position // Store the actual position
             };
-            repetitionFeature.set('model', repModelOptions);
+            repetitionFeature.set(window.OSM3D_MODEL_PROPERTY || 'osm3dModel', repModelOptions);
 
             // Set additional model configuration
             // NOTE: no baked +10m lift — with the MapTerhorn DEM ground, an

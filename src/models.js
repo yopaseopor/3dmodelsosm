@@ -10,14 +10,17 @@ const availableModels = [
     'w_amenity_bench.gltf',
     'w_amenity_bicycle_parking.glb',
     'w_amenity_drinking_water.gltf',
-    'w_amenity_waste_basket.glb',
+    'w_amenity_post_box.glb',
+	'w_amenity_waste_basket.glb',
     'w_area_highway_footway.glb',
     'w_barrier_fence_wood.gltf',
     'w_barrier_kerb.gltf',
+	'w_highway_bus_stop.glb',
     'w_highway_cycleway.gltf',
     'w_highway_footway.glb',
     'w_highway_residential.glb',
     'w_highway_residential.gltf',
+	'w_highway_speed_camera.glb',
     'w_highway_street_lamp.glb',
     'w_highway_street_lamp_straight_mast.glb',
     'w_highway_track.gltf',
@@ -26,6 +29,7 @@ const availableModels = [
     'w_highway_traffic_signals_pedestrian.gltf',
     'w_man_made_pole.glb',
     'w_natural_beach.gltf',
+	'w_recycling_plastic_yes.glb',
     'w_recycling_type_container.glb',
     'w_leisure_garden.glb',
     'w_leisure_playground.glb',
@@ -33,9 +37,12 @@ const availableModels = [
     'w_playground_slide.gltf',
     'w_playground_spring.gltf',
     'w_playground_swing.glb',
+	'w_power_pole.gltf',
+	'w_power_tower.gltf',
     'w_traffic_sign_ES_R2.gltf',
     'w_traffic_sign_ES_R101.gltf',
-    'w_waterway_stream.gltf',
+    'w_vending_parking_tickets.glb',
+	'w_waterway_stream.gltf',
     'ES_CAT_BCN_casa_batllo.glb',
     'ES_CAT_BCN_casa_mila.glb',
    'ES_CAT_BCN_hotel_arts.glb',
@@ -65,9 +72,25 @@ const modelMappings = [
     { tags: ['amenity=bench'], model: 'w_amenity_bench.gltf', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Bicycle parking model for amenity=bicycle_parking
     { tags: ['amenity=bicycle_parking'], model: 'w_amenity_bicycle_parking.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Bicycle parking model for amenity=bicycle_parking
     { tags: ['amenity=drinking_water'], model: 'w_amenity_drinking_water.gltf', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Bicycle parking model for amenity=bicycle_parking
+    { tags: ['amenity=post_box'], model: 'w_amenity_post_box.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Street lamp model for highway=street_lamp
     { tags: ['amenity=waste_basket'], model: 'w_amenity_waste_basket.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Bicycle parking model for amenity=bicycle_parking 
-    { tags: ['highway=street_lamp', 'lamp_mount=straight_mast'], model: 'w_highway_street_lamp_straight_mast.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
-    { tags: ['highway=street_lamp'], model: 'w_highway_street_lamp.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Street lamp model for highway=street_lamp
+    { tags: ['highway=bus_stop'], model: 'w_highway_bus_stop.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Street lamp model for highway=street_lamp
+    { tags: ['highway=speed_camera'], model: 'w_highway_speed_camera.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Street lamp model for highway=street_lamp
+    
+    // rotation[1] here is a constant OFFSET added on top of the computed
+    // bearing, not the bearing itself (see adjustConfigForDirection).
+    //
+    // Both lamp meshes carry a non-identity root rotation in the GLB
+    // (the straight mast is rotated 120 degrees about the 1,-1,1 axis), so
+    // their local axes do not match the +Y-forward assumption the orientation
+    // maths makes. The 90 degree offset below corrects that; without it a lamp
+    // turned to face the road ends up pointing ALONG it.
+    //
+    // If the lamp head ends up facing the wrong way, change the sign:
+    //   Math.PI / 2   head faces the road   (wanted)
+    //  -Math.PI / 2   head faces away from it
+	{ tags: ['highway=street_lamp', 'lamp_mount=straight_mast'], model: 'w_highway_street_lamp_straight_mast.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, Math.PI / 2, 0] } },
+    { tags: ['highway=street_lamp'], model: 'w_highway_street_lamp.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, Math.PI / 2, 0] } },  // Street lamp model for highway=street_lamp
     // More specific traffic signals first
     { tags: ['highway=traffic_signals', 'traffic_signals=cyclist_crossing'], model: 'w_highway_traffic_signals_cycle.gltf', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Traffic signals model for cyclist crossing
     { tags: ['highway=traffic_signals', 'traffic_signals=pedestrian_crossing'], model: 'w_highway_traffic_signals_pedestrian.gltf', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Traffic signals model for pedestrian crossing
@@ -78,8 +101,16 @@ const modelMappings = [
     { tags: ['natural=wood'], model: 'test.gltf', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Could use forest model
     { tags: ['playground=slide'], model: 'w_playground_slide.gltf', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // slide
     { tags: ['playground=springy'], model: 'w_playground_spring.gltf', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // slide
-        { tags: ['playground=swing'], model: 'w_playground_swing.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Could use forest model
-    
+    { tags: ['playground=swing'], model: 'w_playground_swing.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Could use forest model
+	{ tags: ['power=pole'], model: 'w_power_pole.gltf', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // slide
+	{ tags: ['power=tower'], model: 'w_power_tower.gltf', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // slide
+{ tags: ['recycling:plastic=yes'], model: 'w_recycling_plastic_yes.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Recycling container model for    
+{ tags: ['recycling:glass=yes'], model: 'w_recycling_glass_yes.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Recycling container model for    
+{ tags: ['recycling:organic=yes'], model: 'w_recycling_organic_yes.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Recycling container model for    
+{ tags: ['recycling:waste=yes'], model: 'w_recycling_waste_yes.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Recycling container model for    
+{ tags: ['recycling:paper=yes'], model: 'w_recycling_paper_yes.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Recycling container model for    
+   { tags: ['vending=parking_tickets'], model: 'w_vending_parking_tickets.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // slide
+	
     { tags: ['traffic_sign=ES:R2'], model: 'w_traffic_sign_ES_R2.gltf', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Could use forest model
     { tags: ['traffic_sign=ES:R101'], model: 'w_traffic_sign_ES_R101.gltf', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Could use forest model
         { tags: ['wikidata=Q575953'], model: 'ES_CAT_BCN_casa_batllo.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Casa Batlló
@@ -91,7 +122,7 @@ const modelMappings = [
     { tags: ['name=La Pedrera'], model: 'ES_CAT_BCN_casa_mila.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Casa Milà by name
     { tags: ['name=Casa Batlló'], model: 'ES_CAT_BCN_casa_batllo.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Casa Batlló by name
     { tags: ['name=Torre Mapfre'], model: 'ES_CAT_BCN_torre_mapfre.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Torre Mapfre by name
-    { tags: ['recycling_type=container'], model: 'w_recycling_type_container.glb', geometryType: 'point', config: { scale: 4.0, heightOffset: 0.0, rotation: [30, 40, 50] } },  // Recycling container model for recycling_type=container 
+    //{ tags: ['recycling_type=container'], model: 'w_recycling_type_container.glb', geometryType: 'point', config: { scale: 4.0, heightOffset: 0.0, rotation: [30, 40, 50] } },  // Recycling container model for recycling_type=container 
     
     // Area models (new functionality) - supports both actual polygons and ways tagged as areas
    //  { tags: ['area:highway=footway'], model: 'llamborda.jpg', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway area models
@@ -211,6 +242,38 @@ function calculateBearing(wayCoordinates, nodeIndex) {
 }
 
 /**
+ * Work out the bearing a model should be rotated by, in radians.
+ *
+ * A LineString is oriented by its OWN way, as before. A point is oriented by
+ * the street it stands in, resolved through the declarative rules in
+ * model_orientation.js — that is where "turn toward the way" vs "run along
+ * the way" vs "never turn" is decided.
+ *
+ * @returns {number|null} radians, or null for "no rotation"
+ */
+function resolveBearing(tags, wayCoordinates, nodeIndex, orientationContext) {
+    // Backward compatibility: a caller that already worked out a bearing.
+    if (!orientationContext && tags && tags._parentWayBearing !== undefined) {
+        return tags._parentWayBearing;
+    }
+    if (wayCoordinates && nodeIndex !== null) {
+        return calculateBearing(wayCoordinates, nodeIndex);
+    }
+    if (!orientationContext || !orientationContext.pointLonLat || !orientationContext.allFeatures) {
+        return null;
+    }
+    if (!window.modelOrientation) return null;
+
+    const rule = window.modelOrientation.resolveRule(tags);
+    const found = window.modelOrientation.bearingFor(
+        orientationContext.pointLonLat, orientationContext.allFeatures, {
+            facing: rule.facing,
+            against: rule.against
+        });
+    return found ? found.bearing : null;
+}
+
+/**
  * Adjust model config based on direction tags
  * @param {object} config - Original config object
  * @param {object} tags - OSM tags
@@ -222,7 +285,14 @@ function adjustConfigForDirection(config, tags, bearing) {
     // Use bearing from parameter, or from parent way, or default to 0
     const baseBearing = bearing !== null ? bearing : 
                        (tags._parentWayBearing !== undefined ? tags._parentWayBearing : 0);
-    adjustedConfig.rotation[1] = -baseBearing;
+
+    // rotation[1] as AUTHORED in the mapping is a constant OFFSET, added to the
+    // bearing instead of being overwritten by it. A glTF has its own idea of
+    // which way the model faces (forward may be +X, -Z, +Y...), so a model can
+    // come out 90 or 180 degrees out. Set rotation: [0, Math.PI/2, 0] on that
+    // mapping to correct it without touching any orientation code.
+    const offset = (Array.isArray(config.rotation) ? config.rotation[1] : 0) || 0;
+    adjustedConfig.rotation[1] = -baseBearing + offset;
     
     // Check for orientation tag (degrees) first, then direction tag
     const orientation = tags['orientation'];
@@ -231,7 +301,7 @@ function adjustConfigForDirection(config, tags, bearing) {
         // Convert orientation from degrees to radians and apply to Y-axis (heading)
         // Orientation: 0° = north, 90° = east, 180° = south, 270° = west
         const orientationRadians = parseFloat(orientation) * Math.PI / 180;
-        adjustedConfig.rotation[1] = -orientationRadians; // Negative for correct orientation
+        adjustedConfig.rotation[1] = -orientationRadians + offset; // Negative for correct orientation
         console.log(`🧭 Applied orientation ${orientation}° (${orientationRadians.toFixed(3)} rad) to rotation[1]: ${adjustedConfig.rotation[1].toFixed(3)}`);
         return adjustedConfig;
     }
@@ -244,7 +314,7 @@ function adjustConfigForDirection(config, tags, bearing) {
         // Convert direction from degrees to radians and apply to Y-axis (heading)
         // Direction: 0° = north, 90° = east, 180° = south, 270° = west
         const directionRadians = parseFloat(direction) * Math.PI / 180;
-        adjustedConfig.rotation[1] = -directionRadians; // Negative for correct orientation
+        adjustedConfig.rotation[1] = -directionRadians + offset; // Negative for correct orientation
         console.log(`🧭 Applied direction ${direction}° (${directionRadians.toFixed(3)} rad) to rotation[1]: ${adjustedConfig.rotation[1].toFixed(3)}`);
         return adjustedConfig;
     }
@@ -279,9 +349,13 @@ function adjustConfigForDirection(config, tags, bearing) {
  * @param {Array<Array<number>>|null} wayCoordinates - Array of [lon, lat] coordinates of the way, or null
  * @param {number|null} nodeIndex - Index of the node in the way coordinates, or null
  * @param {string} geometryType - The geometry type ('point', 'line', 'area')
+ * @param {{pointLonLat?:Array<number>, allFeatures?:Array}} [orientationContext] - where a POINT
+ *        feature sits, so it can be turned to face (or run along) the right
+ *        way. Which way, and whether it turns at all, comes from the
+ *        declarative rules in model_orientation.js.
  * @returns {object|null} Mapping object {tags, model, geometryType, config} or null if no mapping exists
  */
-function getModelForTags(tags, wayCoordinates = null, nodeIndex = null, geometryType = 'point') {
+function getModelForTags(tags, wayCoordinates = null, nodeIndex = null, geometryType = 'point', orientationContext = null) {
     console.log(`🔍 Checking model mappings for tags:`, tags, `geometry type: ${geometryType}`);
     for (const mapping of modelMappings) {
         // Check if geometry type matches (default to 'point' for backward compatibility)
@@ -298,10 +372,12 @@ function getModelForTags(tags, wayCoordinates = null, nodeIndex = null, geometry
         });
         if (allMatch) {
             console.log(`🔍 Found matching model ${mapping.model} for tags:`, mapping.tags, `geometry type: ${geometryType}`);
-            const bearing = wayCoordinates && nodeIndex !== null ? calculateBearing(wayCoordinates, nodeIndex) : null;
-            console.log(`🔍 For bench: bearing=${bearing}, wayCoordinates=${wayCoordinates ? wayCoordinates.length : 'null'}, nodeIndex=${nodeIndex}`);
+            const bearing = resolveBearing(tags, wayCoordinates, nodeIndex, orientationContext);
+            const rule = window.modelOrientation ? window.modelOrientation.resolveRule(tags) : null;
+            console.log(`🧭 orientation: facing=${rule ? rule.facing : '?'} against=${rule ? rule.against : '?'} ` +
+                        `bearing=${bearing === null ? 'none' : (bearing * 180 / Math.PI).toFixed(2) + '°'}`);
             const adjustedConfig = adjustConfigForDirection(mapping.config, tags, bearing);
-            console.log(`🔍 Final config for bench:`, adjustedConfig);
+            console.log(`🔍 Final config:`, adjustedConfig);
             return { ...mapping, config: adjustedConfig };
         }
     }

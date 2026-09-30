@@ -205,11 +205,18 @@ function assignModelToFeature(feature, allFeatures = null) {
         tagsObj[tag] = properties[tag];
     });
     if (debugConfig.enabled && debugConfig.logModelAssignment) console.log('assignModelToFeature tagsObj:', tagsObj);
-    if (debugConfig.enabled && debugConfig.logGeometryDetection) console.log('geometryType initial:', geometryType);
+
+    // Feature geometry (OL geometry in the map projection). This declaration was
+    // lost in a refactor (commit 4a6a397): the code below read an undeclared
+    // `geometry`, throwing "ReferenceError: geometry is not defined" for every
+    // feature and killing model/texture assignment for all GeoJSON overlays —
+    // the load's .catch() also swallowed the features themselves.
+    const geometry = feature.getGeometry();
 
     let geometryType = 'point'; // default
     let wayCoordinates = null;
     let nodeIndex = null;
+    let orientationContext = null;
     
     if (debugConfig.enabled && debugConfig.logGeometryDetection) console.log(`🎯 Geometry detection for feature with tags:`, tagsObj, `geometry:`, geometry ? geometry.getType() : 'null');
     
@@ -254,19 +261,13 @@ function assignModelToFeature(feature, allFeatures = null) {
             ));
         } else if (geomType === 'Point') {
             geometryType = 'point';
-            // For point features, always try to find bearing from parent ways first
+            // The rules in model_orientation.js decide what this point turns to
+            // face; here we only say where it is and what ways are around it.
             if (allFeatures) {
-                const parentBearing = findBearingFromParentWays(feature, allFeatures);
-                if (parentBearing !== null) {
-                    // Don't set coordinates when we have parent bearing
-                    wayCoordinates = null;
-                    nodeIndex = null;
-                    
-                    // Override the bearing in the model configuration by setting a synthetic bearing
-                    tagsObj._parentWayBearing = parentBearing;
-                    
-                    if (debugConfig.enabled && debugConfig.logGeometryDetection) console.log(`🎯 Using parent way bearing ${(parentBearing * 180 / Math.PI).toFixed(2)}° for point feature`);
-                }
+                orientationContext = {
+                    pointLonLat: ol.proj.transform(geometry.getCoordinates(), window.map.getView().getProjection(), 'EPSG:4326'),
+                    allFeatures: allFeatures
+                };
             }
         }
     }
@@ -282,7 +283,7 @@ function assignModelToFeature(feature, allFeatures = null) {
     }
 
     if (debugConfig.enabled && debugConfig.logGeometryDetection) console.log(`🔍 Final geometry type determination: ${geometryType} for tags:`, tagsObj);
-    const modelMapping = window.models ? window.models.getModelForTags(tagsObj, wayCoordinates, nodeIndex, geometryType) : null;
+    const modelMapping = window.models ? window.models.getModelForTags(tagsObj, wayCoordinates, nodeIndex, geometryType, orientationContext) : null;
     if (debugConfig.enabled && debugConfig.logModelAssignment) console.log(`🎯 Model mapping for tags:`, tagsObj, `geometry type: ${geometryType}:`, modelMapping);
     
     if (modelMapping) {
@@ -300,7 +301,14 @@ function assignModelToFeature(feature, allFeatures = null) {
                 const geometry = feature.getGeometry();
                 if (geometry && geometry.getType() === 'Polygon') {
                     const coordinates = geometry.getCoordinates()[0];
-                    const cesiumPositions = coordinates.map(coord => Cesium.Cartesian3.fromDegrees(coord[0], coord[1]));
+                    // OL geometries are in the map projection (EPSG:3857 meters):
+                    // transform to WGS84 degrees before fromDegrees, otherwise the
+                    // draped texture lands near (0,0) in the Atlantic.
+                    const mapProjection = window.map.getView().getProjection();
+                    const cesiumPositions = coordinates.map(coord => {
+                        const lonLat = ol.proj.transform(coord, mapProjection, 'EPSG:4326');
+                        return Cesium.Cartesian3.fromDegrees(lonLat[0], lonLat[1]);
+                    });
                     
                     if (cesiumPositions.length > 0) {
                         // Check if feature already has an area entity to prevent duplicates
@@ -367,7 +375,12 @@ function assignModelToFeature(feature, allFeatures = null) {
                     }
                 } else if (geometry && geometry.getType() === 'LineString') {
                     const coordinates = geometry.getCoordinates();
-                    const positions = coordinates.map(coord => Cesium.Cartesian3.fromDegrees(coord[0], coord[1]));
+                    // Same projection fix as polygons above (map projection -> WGS84).
+                    const mapProjection = window.map.getView().getProjection();
+                    const positions = coordinates.map(coord => {
+                        const lonLat = ol.proj.transform(coord, mapProjection, 'EPSG:4326');
+                        return Cesium.Cartesian3.fromDegrees(lonLat[0], lonLat[1]);
+                    });
                     
                     if (positions.length > 1) {
                         // Calculate texture rotation based on nearby ways for line textures
@@ -488,7 +501,7 @@ function assignModelToFeature(feature, allFeatures = null) {
                     position: Cesium.Cartesian3.fromDegrees(lonLat[0], lonLat[1])
                 };
                 
-                feature.model = pointModelOptions;
+                feature.set(window.OSM3D_MODEL_PROPERTY || 'osm3dModel', pointModelOptions);
                 
                 // Set additional model configuration for positioning
                 if (modelConfig) {
@@ -521,7 +534,7 @@ function assignModelToFeature(feature, allFeatures = null) {
                 heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
             };
 
-            feature.model = modelOptions;
+            feature.set(window.OSM3D_MODEL_PROPERTY || 'osm3dModel', modelOptions);
 
             // Set additional model configuration for positioning
             if (modelConfig) {
@@ -547,62 +560,12 @@ function assignModelToFeature(feature, allFeatures = null) {
     }
 }
 
-// Function to find bearing from parent ways for a point feature
-function findBearingFromParentWays(feature, allFeatures) {
-    const properties = feature.getProperties();
-    const geometry = feature.getGeometry();
-    
-    // Only process point features
-    if (!geometry || geometry.getType() !== 'Point') return null;
-    
-    const pointCoords = geometry.getCoordinates();
-    const pointLonLat = ol.proj.transform(pointCoords, window.map.getView().getProjection(), 'EPSG:4326');
-    
-    console.log(`🔍 Looking for parent ways for point at [${pointLonLat[0].toFixed(6)}, ${pointLonLat[1].toFixed(6)}]`);
-    
-    let closestWay = null;
-    let closestDistance = Infinity;
-    let closestIndex = 0;
-    
-    // Find the closest way that contains this point
-    for (const otherFeature of allFeatures) {
-        const otherGeometry = otherFeature.getGeometry();
-        if (otherGeometry && otherGeometry.getType() === 'LineString') {
-            const wayCoords = otherGeometry.getCoordinates();
-            
-            // Find the closest point on this way to our point
-            wayCoords.forEach((coord, index) => {
-                const wayLonLat = ol.proj.transform(coord, window.map.getView().getProjection(), 'EPSG:4326');
-                const distance = Math.sqrt(
-                    Math.pow(wayLonLat[0] - pointLonLat[0], 2) + 
-                    Math.pow(wayLonLat[1] - pointLonLat[1], 2)
-                );
-                
-                if (distance < closestDistance) {
-                    closestDistance = distance;
-                    closestWay = wayCoords;
-                    closestIndex = index;
-                }
-            });
-        }
-    }
-    
-    // If we found a close enough way (within ~10 meters), calculate bearing
-    if (closestWay && closestDistance < 0.0001) {
-        const wayLonLatCoords = closestWay.map(coord => 
-            ol.proj.transform(coord, window.map.getView().getProjection(), 'EPSG:4326')
-        );
-        
-        const bearing = window.models.calculateBearing(wayLonLatCoords, closestIndex);
-        console.log(`🎯 Found parent way for point, bearing: ${(bearing * 180 / Math.PI).toFixed(2)}° at distance: ${(closestDistance * 111000).toFixed(1)}m`);
-        return bearing;
-    }
-    
-    return null;
-}
-
-// Make findBearingFromParentWays globally accessible
-window.findBearingFromParentWays = findBearingFromParentWays;
+// findBearingFromParentWays() used to live here. It picked the globally
+// NEAREST way VERTEX with no tag filter and compared distances in raw
+// degrees (0.0001, which is ~11 m north but only ~8 m east). It is gone:
+// a point's orientation is now resolved from the declarative rules in
+// model_orientation.js, which pick the KIND of way to use, not merely the
+// nearest one. Nothing calls this any more; do not reintroduce it.
 
 // Function to integrate overlays
 function integrateOverlays() {

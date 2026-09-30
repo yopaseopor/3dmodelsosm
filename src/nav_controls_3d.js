@@ -366,6 +366,14 @@
 
         applyOrbitState(nav.cur);
 
+        // ol-cesium's auto render loop puts the scene in
+        // `requestRenderMode`: Cesium only draws when a render is requested
+        // (ol-cesium does that from canvas mouse events). The glide drives the
+        // camera from a rAF loop that no pointer event accompanies, so without
+        // this the movement was computed but never painted until the next
+        // click — the pad looked frozen.
+        if (scene.requestRender) scene.requestRender();
+
         // Stop the loop once the pointer is released and we have converged
         const settled = !holding &&
             Math.abs(nav.tgt.heading - nav.cur.heading) < 1e-4 &&
