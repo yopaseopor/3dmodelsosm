@@ -302,9 +302,93 @@ function applyModelRepetitions(feature, modelFilename, modelConfig, geometryType
     }
 }
 
+/**
+ * Place the model of a LINE mapping along its way.
+ *
+ * models.js decides WHICH model a way gets (railway=rail ->
+ * w_railway_rail.glb, and so on). This function decides HOW that model is put
+ * along the way, and it is the single answer to that question for every caller.
+ *
+ * It exists because the decision was spread across two long if/else chains — one
+ * in geojson_loader.js and a near-copy in overlay_integration.js — and both of
+ * them only knew fences, highways, footways and drains. A railway matched none
+ * of those four, so both chains fell off the end and the way received no model
+ * at all, even though models.js maps it perfectly well. The overlay copy did not
+ * even end there: it filled `feature.wayModels`, a property that NOTHING in the
+ * codebase reads (the renderer reads `repetition_0`, `repetition_1`, ...), so
+ * that path produced its models into a dead end.
+ *
+ * So both paths now come through here. The specialised modules keep their own
+ * spacing and their own look; anything they do not claim falls through to the
+ * generic metre-based placement below. No tag silently ends up with nothing.
+ *
+ * @param {ol.Feature} feature         the way
+ * @param {Object} tags                its OSM tags
+ * @param {string} modelFilename       model chosen by models.js
+ * @param {Object} modelConfig         its config (scale, heightOffset, rotation)
+ * @param {string} [fallbackGeometry]  mapping geometry, for the generic fallback
+ */
+function applyLineRepetitions(feature, tags, modelFilename, modelConfig, fallbackGeometry) {
+    const t = tags || {};
+    const barrier = t.barrier;
+    const fenceType = t.fence_type;
+    const highway = t.highway;
+    const railway = t.railway;
+    const waterway = t.waterway;
+
+    // A module that owns this kind of way keeps ownership. One that is missing or
+    // that throws hands over to the next candidate rather than losing the models
+    // entirely: a tag must never fall off the end of this chain.
+    if ((barrier === 'fence' || fenceType) && window.fenceRepetition && window.fenceRepetition.applyFenceRepetitions) {
+        try {
+            window.fenceRepetition.applyFenceRepetitions(feature, modelFilename, modelConfig, fenceType || 'default');
+            return;
+        } catch (error) {
+            console.error('Fence repetitions failed, falling back:', error);
+        }
+    }
+
+    if (highway && highway !== 'footway' && highway !== 'path' && highway !== 'pedestrian'
+        && window.highwayRepetition && window.highwayRepetition.applyHighwayRepetitions) {
+        try {
+            window.highwayRepetition.applyHighwayRepetitions(feature, modelFilename, modelConfig, highway);
+            return;
+        } catch (error) {
+            console.error('Highway repetitions failed, falling back:', error);
+        }
+    }
+
+    if ((highway === 'footway' || highway === 'path' || highway === 'pedestrian')
+        && window.footwayRepetition && window.footwayRepetition.applyFootwayRepetitions) {
+        try {
+            window.footwayRepetition.applyFootwayRepetitions(feature, modelFilename, modelConfig, highway);
+            return;
+        } catch (error) {
+            console.error('Footway repetitions failed, falling back:', error);
+        }
+    }
+
+    // Railway. Its own module because a rail has to lie ALONG a track that
+    // turns, which needs the bearing of each segment, and it is a 3.4 MB model
+    // that must be spaced in metres rather than at the kerb default.
+    if (railway && window.railwayRepetition && window.railwayRepetition.applyRailwayRepetitions) {
+        try {
+            window.railwayRepetition.applyRailwayRepetitions(feature, modelFilename, modelConfig, railway);
+            return;
+        } catch (error) {
+            console.error('Railway repetitions failed, falling back:', error);
+        }
+    }
+
+    // Anything else models.js maps to a line: waterways, power lines, and
+    // whatever is added next, placed here in metres and capped per way.
+    applyModelRepetitions(feature, modelFilename, modelConfig, fallbackGeometry || 'line');
+}
+
 // Export functions for use in other modules
 window.modelRepetition = {
     applyModelRepetitions,
+    applyLineRepetitions,
     generateLineRepetitions,
     generateAreaRepetitions,
     repetitionConfig

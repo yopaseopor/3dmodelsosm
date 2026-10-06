@@ -4,16 +4,143 @@
 // Memory management configuration
 const memoryConfig = {
     maxModelsPerFrame: 40,           // Limit models added per frame
-    loadDistance: 1000,              // Load models within this distance (meters)
-    unloadDistance: 1500,            // Unload models beyond this distance (meters)
+    loadDistance: 2500,              // Load models within this distance (meters)
+    unloadDistance: 9000,            // Unload models beyond this distance (meters)
     lodDistances: {                  // Level of Detail distances
         high: 200,                    // High detail within 200m
         medium: 500,                  // Medium detail within 500m
-        low: 1000                     // Low detail within 1000m
+        low: 2500                     // Low detail within 2500m
     },
     cameraUpdateThrottle: 100,       // Throttle camera updates (ms)
-    maxTotalModels: 400              // Cap concurrent 3D models (memory / GPU)
+
+    // Hard ceiling on live Cesium primitives created by this renderer
+    // (GLTF models + repetition models + area-texture GroundPrimitives).
+    //
+    // This was `maxTotalModels: 400`, compared against `this.totalModelsAdded`
+    // — a counter that NOTHING in the file ever incremented. Its only
+    // assignment anywhere was `= 0` on teardown. The cap therefore never fired
+    // once, on any file of any size: a >1MB GeoJSON placed every model it could
+    // and the two `>= memoryConfig.maxTotalModels` guards were dead code.
+    // The budget is now measured from live tracking, which cannot drift.
+    //
+    // 30000, not 8000, and raised together with the ranges below. With
+    // streaming in place the live count is bounded by WHAT IS IN VIEW, not by
+    // the size of the file, so a bigger ceiling is affordable. A 5km
+    // placement radius over a dense city extract is a lot of models, and the
+    // point of the ceiling is to stop a runaway, not to keep the view thin.
+    //
+    // Override it without editing this file:
+    //   ?primitives=60000     in the URL, or
+    //   modelRenderer.setBudget(60000)  in the console.
+    maxLivePrimitives: 30000,
+
+    // Evict down to this fraction of the budget rather than by one, so the
+    // scan that finds the farthest entries is amortised over many placements.
+    evictToRatio: 0.9,
+
+    // Placement stops at loadDistance * 2 = 5km and unloading starts at 9km.
+    // The gap between them is a hysteresis band: something evicted for being
+    // far can never be re-placed on the very next sweep, so eviction cannot
+    // thrash. Keep unloadDistance comfortably above this product or the two
+    // ranges overlap and a sweep re-creates what the last one just destroyed.
+    placementRangeFactor: 2
 };
+
+// Feature property holding this renderer's stable internal identity.
+//
+// The dedupe map (loadedModels) has to survive repeated sweeps: addAllModels()
+// is called from six call sites plus a guaranteed +4.5s retry plus the
+// tagOverlayLoaded event, and each call walks every feature again. Without a
+// key that is the SAME on every sweep, a sweep cannot tell "already placed"
+// from "never placed" and duplicates the whole scene.
+//
+// It used to synthesise `feature_<layerName>_<fidx>_<geometryHash>`, which has
+// three problems: addRepetitionModel() is not handed a layer or a feature index
+// so it could not build it at all, and geojson_loader.js rebuilt it from
+// `geometry.getExtent().join('_')` WITHOUT the rounding the renderer applied —
+// so the unload-on-layer-removal path never matched a single key and destroyed
+// nothing. OL's per-object uid is stable, unique and needs no arguments, so it
+// is what we cache here.
+const OSM3D_KEY_PROPERTY = 'osm3dKey';
+
+function getFeatureKey(feature) {
+    if (!feature || typeof feature.get !== 'function') return null;
+    const cached = feature.get(OSM3D_KEY_PROPERTY);
+    if (cached) return cached;
+
+    let uid = null;
+    try { if (typeof feature.getUid === 'function') uid = feature.getUid(); } catch (e) { /* not an OL object */ }
+    if ((uid === null || uid === undefined) && typeof ol !== 'undefined' && typeof ol.getUid === 'function') {
+        try { uid = ol.getUid(feature); } catch (e) { /* not an OL object */ }
+    }
+    if (uid === null || uid === undefined) {
+        // Last resort: geometry extent. Same weakness the old key had (two
+        // coincident features collide), but it is stable, which is what the
+        // dedupe actually needs.
+        const geometry = feature.getGeometry && feature.getGeometry();
+        const hash = geometry && geometry.getExtent
+            ? geometry.getExtent().map(c => Math.round(c * 1000000) / 1000000).join('_')
+            : 'no_geom';
+        uid = 'h' + hash;
+    }
+    const key = String(uid);
+    feature.set(OSM3D_KEY_PROPERTY, key);
+    return key;
+}
+
+window.OSM3D_KEY_PROPERTY = OSM3D_KEY_PROPERTY;
+window.getFeatureKey = getFeatureKey;
+
+/**
+ * Has this Cesium primitive already been destroyed?
+ *
+ * Written as a typeof guard on purpose. The earlier form,
+ * `!p.isDestroyed && !p.isDestroyed()`, evaluates `undefined()` on any object
+ * without that method, throws, and the surrounding try/catch swallows the
+ * throw — so the primitive is never removed from the scene while the caller
+ * believes it was. That failure is invisible: the census goes down and the GPU
+ * memory does not.
+ */
+function isPrimitiveDestroyed(p) {
+    return !!(p && typeof p.isDestroyed === 'function' && p.isDestroyed());
+}
+
+/**
+ * Centre of an OL geometry, as lon/lat.
+ *
+ * The OL geometry is in the VIEW projection (EPSG:3857 metres), not degrees,
+ * so it must go through the view transform. Averaging the raw coordinates, or
+ * treating them as degrees, puts the point on Null Island — which then fails
+ * every range test for the wrong reason.
+ */
+function areaGeometryCentreLonLat(geometry) {
+    if (!geometry || typeof geometry.getExtent !== 'function') return null;
+    let centre = null;
+    try {
+        const extent = geometry.getExtent();
+        if (extent && extent.length === 4 && isFinite(extent[0]) && isFinite(extent[2])) {
+            centre = ol.extent.getCenter(extent);
+        }
+    } catch (e) { /* unusable geometry */ }
+    if (!centre) return null;
+    try {
+        const lonLat = ol.proj.toLonLat(centre);
+        return (lonLat && isFinite(lonLat[0]) && isFinite(lonLat[1])) ? lonLat : null;
+    } catch (e) { /* no view projection */ }
+    return null;
+}
+
+/** Mean position of a polygon ring, as lon/lat. Used to range-gate an area. */
+function areaCentroidLonLat(coordinates) {
+    if (!coordinates || !coordinates.length) return null;
+    let lon = 0, lat = 0, n = 0;
+    for (let i = 0; i < coordinates.length; i++) {
+        const c = coordinates[i];
+        if (!c || c.length < 2) continue;
+        lon += c[0]; lat += c[1]; n++;
+    }
+    return n ? [lon / n, lat / n] : null;
+}
 
 /** Max canvas edge for rotated area textures (pixels); lower = less RAM / GPU upload */
 const AREA_TEXTURE_MAX_CANVAS = 2048;
@@ -168,12 +295,18 @@ function sampleGroundElevation(lon, lat) {
 
 window.modelRenderer = {
 
-    loadedModels: new Map(),          // Track loaded models by feature ID
+    loadedModels: new Map(),          // Track live primitives by stable key
+
+    // Live primitive census, maintained by trackEntry/untrackEntry so it can
+    // never drift away from loadedModels the way the old `totalModelsAdded`
+    // counter did.
+    liveByKind: { model: 0, repetition: 0, texture: 0 },
+    liveTotal: 0,
     cameraUpdateTimeout: null,        // Throttle camera updates
     modelPool: new Map(),             // Pool of reusable model instances
     backgroundTasks: [],              // Background loading tasks
     isProcessing: false,              // Prevent concurrent processing
-    totalModelsAdded: 0,              // Track total models added to prevent excessive usage
+    totalModelsAdded: 0,              // DEPRECATED: never incremented by anything. Use liveTotal.
     batchLogStats: {                  // Batch logging to reduce console spam
         modelsAdded: 0,
         repetitionsAdded: 0,
@@ -356,6 +489,307 @@ window.modelRenderer = {
         if (distance <= memoryConfig.lodDistances.low) return 'low';
         return 'none'; // Too far, don't load
     },
+
+    // -----------------------------------------------------------------------
+    // Live primitive accounting
+    // -----------------------------------------------------------------------
+    // Every primitive this renderer creates is reachable from loadedModels, so
+    // it can be counted and — this is the part that was missing — DESTROYED.
+    // Before this, area-texture GroundPrimitives were added straight to
+    // scene.primitives with no record anywhere (addAreaTexture returned
+    // nothing), which meant no cleanup path could ever reach them and the
+    // "placed N models" console line did not even count them.
+
+    /** Adjust the census. `previousKind` of null means "nothing was there". */
+    _trackLive: function(previousKind, newKind) {
+        if (previousKind) this.liveByKind[previousKind] = Math.max(0, this.liveByKind[previousKind] - 1);
+        if (newKind) this.liveByKind[newKind] = (this.liveByKind[newKind] || 0) + 1;
+        this.liveTotal = this.liveByKind.model + this.liveByKind.repetition + this.liveByKind.texture;
+    },
+
+    /** Record a live primitive under `key`. Replaces any entry already there. */
+    trackEntry: function(key, entry) {
+        const previous = this.loadedModels.get(key);
+        this._trackLive(previous ? (previous.kind || 'model') : null, entry.kind || 'model');
+        this.loadedModels.set(key, entry);
+        return entry;
+    },
+
+    /** Stop counting `key` and forget it. Does NOT destroy the primitive. */
+    untrackEntry: function(key) {
+        const entry = this.loadedModels.get(key);
+        if (!entry) return null;
+        this._trackLive(entry.kind || 'model', null);
+        this.loadedModels.delete(key);
+        return entry;
+    },
+
+    /** Forget everything without destroying (the scene is already gone). */
+    resetLive: function() {
+        this.loadedModels.clear();
+        this.liveByKind = { model: 0, repetition: 0, texture: 0 };
+        this.liveTotal = 0;
+    },
+
+    /** Rebuild the census from loadedModels. Defensive: catches any drift. */
+    recountLive: function() {
+        this.liveByKind = { model: 0, repetition: 0, texture: 0 };
+        this.loadedModels.forEach(function(entry) {
+            const kind = entry.kind || 'model';
+            this.liveByKind[kind] = (this.liveByKind[kind] || 0) + 1;
+        }, this);
+        this.liveTotal = this.liveByKind.model + this.liveByKind.repetition + this.liveByKind.texture;
+        return this.liveTotal;
+    },
+
+    // -----------------------------------------------------------------------
+    // Releasing memory
+    // -----------------------------------------------------------------------
+    /** Forget a pooled primitive so it is not handed out again. */
+    dropFromPool: function(modelUrl, modelInstance) {
+        const pool = this.modelPool.get(modelUrl);
+        if (!pool) return;
+        const i = pool.findIndex(item => item.model === modelInstance);
+        if (i > -1) pool.splice(i, 1);
+    },
+
+    /**
+     * Destroy the primitive behind an entry and stop counting it.
+     *
+     * `unloadDistance` had zero readers before, so nothing placed was ever
+     * released: on a 7MB file with 197km of ways, every primitive built during
+     * the session stayed in scene.primitives for the life of the scene.
+     */
+    unloadEntry: function(key, cesiumScene) {
+        const entry = this.loadedModels.get(key);
+        if (!entry) return false;
+
+        // An entry from an older 3D session points at a primitive that died
+        // with the old scene. Just stop counting it.
+        if (entry.sessionId !== undefined && entry.sessionId !== this._session3dId) {
+            this.untrackEntry(key);
+            return true;
+        }
+
+        const scene = entry.scene || cesiumScene ||
+            (window.ol3d && window.ol3d.getCesiumScene ? window.ol3d.getCesiumScene() : null);
+
+        try {
+            if (entry.kind === 'texture') {
+                const list = Array.isArray(entry.primitives) ? entry.primitives
+                    : (entry.primitives ? [entry.primitives] : []);
+                if (scene && scene.primitives) {
+                    for (let i = 0; i < list.length; i++) {
+                        const p = list[i];
+                        if (p && !isPrimitiveDestroyed(p)) scene.primitives.remove(p);
+                    }
+                }
+                // createAreaEntity() early-returns on this property, so it has
+                // to be cleared or the area can never be built again.
+                if (entry.feature && typeof entry.feature.set === 'function') {
+                    entry.feature.set('areaEntity', undefined);
+                }
+                // Drop the generated data URL / canvas reference with the entry.
+                entry.primitives = null;
+            } else if (entry.model) {
+                // Pooled base models: leaving them in the pool keeps the GPU
+                // memory, so remove them from BOTH the pool and the scene.
+                // Cesium caches the parsed glTF by url, so re-placing later is
+                // cheap rather than a re-download.
+                this.dropFromPool(entry.modelUrl, entry.model);
+                if (scene && scene.primitives && !isPrimitiveDestroyed(entry.model)) {
+                    scene.primitives.remove(entry.model);
+                }
+            }
+        } catch (e) {
+            // Already destroyed / scene gone. Still stop counting it.
+        }
+
+        this.untrackEntry(key);
+        return true;
+    },
+
+    /** Cheap planar distance in metres; avoids per-entry Cesium maths. */
+    _roughDistance: function(entry, camLon, camLat, camHeight) {
+        const dy = (entry.lat - camLat) * 110540;
+        const dx = (entry.lon - camLon) * 111320 * Math.cos(camLat * Math.PI / 180);
+        const dh = (entry.elevation || 0) - camHeight;
+        return Math.sqrt(dx * dx + dy * dy + dh * dh);
+    },
+
+    /**
+     * Destroy every tracked primitive beyond unloadDistance.
+     * Called from the throttled camera hook.
+     */
+    unloadDistantModels: function(cesiumScene) {
+        if (!cesiumScene || !cesiumScene.camera) return 0;
+        const carto = cesiumScene.camera.positionCartographic;
+        if (!carto) return 0;
+        const camLon = Cesium.Math.toDegrees(carto.longitude);
+        const camLat = Cesium.Math.toDegrees(carto.latitude);
+        const camHeight = carto.height;
+
+        const stale = [];
+        this.loadedModels.forEach(function(entry, key) {
+            if (entry.lon === undefined || entry.lat === undefined) return;
+            if (this._roughDistance(entry, camLon, camLat, camHeight) > memoryConfig.unloadDistance) {
+                stale.push(key);
+            }
+        }, this);
+
+        for (let i = 0; i < stale.length; i++) this.unloadEntry(stale[i], cesiumScene);
+        return stale.length;
+    },
+
+    /**
+     * Enforce the hard primitive budget, farthest first.
+     *
+     * Only entries that are ALREADY outside unloadDistance are eligible. If
+     * everything still on screen is within it, there is nothing safe to drop,
+     * ensureBudget() returns false and the caller places nothing — the budget
+     * is respected even when that means fewer models than ideal.
+     *
+     * Because eviction only touches what is beyond unloadDistance and placement
+     * only accepts what is within loadDistance * placementRangeFactor, the two ranges never
+     * overlap, so an evicted primitive is not immediately re-created.
+     */
+    ensureBudget: function(cesiumScene) {
+        if (this.liveTotal < memoryConfig.maxLivePrimitives) return true;
+        this.evictFarthest(cesiumScene);
+        return this.liveTotal < memoryConfig.maxLivePrimitives;
+    },
+
+    evictFarthest: function(cesiumScene) {
+        if (!cesiumScene || !cesiumScene.camera) return 0;
+        const carto = cesiumScene.camera.positionCartographic;
+        if (!carto) return 0;
+        const camLon = Cesium.Math.toDegrees(carto.longitude);
+        const camLat = Cesium.Math.toDegrees(carto.latitude);
+        const camHeight = carto.height;
+
+        const eligible = [];
+        this.loadedModels.forEach(function(entry, key) {
+            if (entry.lon === undefined || entry.lat === undefined) return;
+            const d = this._roughDistance(entry, camLon, camLat, camHeight);
+            if (d > memoryConfig.unloadDistance) eligible.push([d, key]);
+        }, this);
+        if (!eligible.length) return 0;
+
+        eligible.sort(function(a, b) { return b[0] - a[0]; });   // farthest first
+        const target = Math.floor(memoryConfig.maxLivePrimitives * memoryConfig.evictToRatio);
+        let removed = 0;
+        for (let i = 0; i < eligible.length && this.liveTotal > target; i++) {
+            this.unloadEntry(eligible[i][1], cesiumScene);
+            removed++;
+        }
+        if (removed > 0) {
+            // Counted so the report can say whether the ceiling is being hit
+            // regularly or only on the first sweep.
+            this.evictions = (this.evictions || 0) + 1;
+            this._lastEvicted = removed;
+        }
+        return removed;
+    },
+
+    // -----------------------------------------------------------------------
+    // Camera-driven streaming
+    // -----------------------------------------------------------------------
+    // Placements are range-gated, but without this nothing ever REMOVED one, so
+    // the peak was the whole file rather than the view. The hook is throttled
+    // because camera.changed fires on every mouse pixel.
+
+    hookCameraStreaming: function() {
+        if (this._cameraStreamingHooked) return;
+        if (!window.ol3d || !window.ol3d.getCesiumScene) return;
+        let scene = null;
+        try { scene = window.ol3d.getCesiumScene(); } catch (e) { return; }
+        if (!scene || !scene.camera || !scene.camera.changed) return;
+
+        const self = this;
+        scene.camera.changed.addEventListener(function() { self.requestStreamingUpdate(); });
+        this._cameraStreamingHooked = true;
+    },
+
+    requestStreamingUpdate: function() {
+        if (this._streamPending) return;
+        const now = Date.now();
+        const wait = memoryConfig.cameraUpdateThrottle - (now - (this._lastStreamAt || 0));
+        if (wait > 0) {
+            const self = this;
+            this._streamPending = setTimeout(function() {
+                self._streamPending = null;
+                self.streamingUpdate();
+            }, wait);
+            return;
+        }
+        this._lastStreamAt = now;
+        this.streamingUpdate();
+    },
+
+    streamingUpdate: function() {
+        if (this._streaming) return;
+        if (!window.ol3d || !window.ol3d.getCesiumScene) return;
+        let scene = null;
+        try { scene = window.ol3d.getCesiumScene(); } catch (e) { return; }
+        if (!scene) return;
+
+        this._streaming = true;
+        try {
+            const removed = this.unloadDistantModels(scene);
+            // Only re-sweep if something actually went away; a camera nudge
+            // inside the loaded area must not trigger a full walk.
+            if (removed > 0) this.addAllModels();
+        } catch (error) {
+            console.error('🎯 streaming update failed:', error);
+        } finally {
+            this._streaming = false;
+        }
+    },
+
+    evictions: 0,                    // how often the ceiling has forced a sacrifice
+
+    /** One line of truth about what is currently resident. */
+    memoryReport: function() {
+        let text = this.liveTotal + ' live primitive(s): models ' + this.liveByKind.model +
+            ', repetitions ' + this.liveByKind.repetition + ', area textures ' + this.liveByKind.texture +
+            ' (budget ' + memoryConfig.maxLivePrimitives +
+            ', range ' + Math.round(memoryConfig.loadDistance * memoryConfig.placementRangeFactor) + 'm' +
+            ', unload ' + memoryConfig.unloadDistance + 'm)';
+        // If the ceiling ever actually bites, say so and say how often. A budget
+        // that silently refuses placements reads as "the data ends here".
+        if (this.evictions > 0) {
+            text += ' — at budget ' + this.evictions + ' time(s), last freed ' + this._lastEvicted + ' farthest';
+        }
+        return text;
+    },
+
+    /**
+     * Raise or lower the live-primitive ceiling while the app is running.
+     *
+     * @param {number} value  new ceiling, in primitives
+     * @returns {number} the ceiling now in force
+     */
+    setBudget: function(value) {
+        const next = parseInt(value, 10);
+        if (!isFinite(next) || next < 0) {
+            console.warn('🎯 setBudget: expected a non-negative number, got ' + value);
+            return memoryConfig.maxLivePrimitives;
+        }
+        memoryConfig.maxLivePrimitives = next;
+        console.log('🎯 budget now ' + next + ' primitive(s) — was ' + this.liveTotal + ' live');
+        // Deliberately does NOT kick off a sweep.
+        //
+        // addAllModels() opens a new 3D session whenever the scene object is
+        // not the one it saw last time, and opening a session calls resetLive()
+        // — which forgets every tracked primitive. If the scene identity ever
+        // differs from the last sweep (ol-cesium handing back a fresh wrapper),
+        // calling a sweep from here would silently stop tracking every live
+        // primitive while leaving them all in the scene: the exact leak this
+        // whole mechanism exists to prevent.
+        //
+        // The next camera move, or the +4.5s retry, picks up the new ceiling.
+        return next;
+    },
     
     // -----------------------------------------------------------------------
     // Pre-load panel reporting + sliced placement
@@ -448,6 +882,11 @@ window.modelRenderer = {
                 return;
             }
             self._placing = false;
+            // Reconcile the census against the map once per pass. Incremental
+            // counting cannot drift as long as everything goes through
+            // trackEntry/untrackEntry; this makes that self-checking rather than
+            // merely true, and it is where the memory line gets its number.
+            self.recountLive();
             self._progressSummary();
             // A query that arrived while this pass was running gets its own
             // sweep now; it is idempotent, so it only places what is missing.
@@ -457,7 +896,7 @@ window.modelRenderer = {
             }
         }
 
-        if (total === 0) { this._placing = false; this._progressSummary(); return; }
+        if (total === 0) { this._placing = false; this.recountLive(); this._progressSummary(); return; }
         slice();
     },
 
@@ -467,6 +906,12 @@ window.modelRenderer = {
             if (window.loadingProgress.summary) window.loadingProgress.summary(live);
         }
         console.log('🎯 placed ' + live + ' model(s) for ' + this._progressTotal + ' feature(s)');
+        // Second line, and the only one that was truthful: `live` above counts
+        // map entries, which never included the area-texture GroundPrimitives
+        // (nothing tracked them) and was compared against a budget that never
+        // fired. Not gated on debugConfig on purpose — the whole point of a
+        // memory ceiling is being able to see it without turning on logging.
+        console.log('🎯   ' + this.memoryReport());
         this._progressTotal = 0;
         this._progressDone = 0;
         window.dispatchEvent(new CustomEvent('osm3d:modelsPlaced', { detail: { placed: live } }));
@@ -551,31 +996,25 @@ window.modelRenderer = {
         const lodLevel = this.getLODLevel(distance);
 
         // Skip if too far or not visible - but be less aggressive with LOD
-        const loadDistance = memoryConfig.loadDistance * 1.5; // Increase load distance
+        // Same gate as every other primitive kind. This line carried its own hardcoded
+        // `* 1.5` while repetitions and area textures used
+        // memoryConfig.placementRangeFactor, so base models stopped being placed
+        // 1.25km before the rest of the scene did — an invisible seam where a
+        // lamp post vanished but the kerb beside it stayed.
+        const loadDistance = memoryConfig.loadDistance * memoryConfig.placementRangeFactor;
         if (distance > loadDistance && !isVisible) {
             return;
         }
 
-        // Create a stable feature ID that doesn't change between calls
-        let featureId = feature.getId();
-        if (!featureId) {
-            // Use layer name, feature index, and stable geometry hash for ID
-            const layerName = layer.get('title') || layer.get('name') || 'unknown';
-            const geometry = feature.getGeometry();
-            let geometryHash = 'no_geom';
-            if (geometry) {
-                // Round coordinates to avoid floating point precision issues
-                const extent = geometry.getExtent().map(coord => Math.round(coord * 1000000) / 1000000);
-                geometryHash = extent.join('_');
-            }
-            featureId = `feature_${layerName}_${fidx}_${geometryHash}`;
-        }
+        // Create a stable feature ID that doesn't change between calls.
+        // Cached on the feature, so every sweep — and every repetition — agrees
+        // on the same key (see getFeatureKey).
+        const featureId = getFeatureKey(feature) || ('feature_' + fidx);
 
-        // Check total model limit to prevent excessive resource usage
-        if (this.totalModelsAdded >= memoryConfig.maxTotalModels) {
-            if (debugConfig.enabled) console.warn(`🎯 Model limit reached (${memoryConfig.maxTotalModels}), skipping model at distance ${Math.round(distance)}m`);
-            return;
-        }
+        // Hard memory budget. This guard used to read
+        // `this.totalModelsAdded >= memoryConfig.maxTotalModels`, and
+        // totalModelsAdded was never incremented by anything, so it never fired.
+        if (!this.ensureBudget(cesiumScene)) return;
 
         // Debug logging
         if (debugConfig.enabled) {
@@ -702,7 +1141,8 @@ window.modelRenderer = {
         pooledModel.model.show = true; // Ensure it's visible
 
         // Track loaded model for the current 3D session only
-        this.loadedModels.set(featureId, {
+        this.trackEntry(featureId, {
+            kind: 'model',
             model: pooledModel.model,
             feature: feature,
             sessionId: this._session3dId,
@@ -711,6 +1151,7 @@ window.modelRenderer = {
             heightOffset: heightOffset,
             lon: lonLat[0],
             lat: lonLat[1],
+            elevation: terrainElevation,
             distance: distance,
             lodLevel: lodLevel,
             modelUrl: modelUrl,
@@ -792,11 +1233,15 @@ window.modelRenderer = {
 
     // Add individual repetition model
     addRepetitionModel: function(feature, repIndex, repModel, cesiumScene) {
-        // Check total model limit to prevent excessive repetition models
-        if (this.totalModelsAdded >= memoryConfig.maxTotalModels) {
-            if (debugConfig.enabled && debugConfig.logRepetitionModels) console.warn(`🚶 Model limit reached (${memoryConfig.maxTotalModels}), skipping repetition model ${repIndex}`);
-            return;
-        }
+        // Stable key for this (feature, repetition) pair. It used to be
+        // `'rep_' + repIndex + '_' + this._repSeq` with a MONOTONIC counter, so
+        // the key was different on every sweep and no sweep could ever dedupe.
+        // With addAllModels() called from six places plus a guaranteed +4.5s
+        // retry, each pass rebuilt every repetition primitive and stacked a
+        // second copy on top of the first — doubling the scene each time.
+        const featureKey = getFeatureKey(feature);
+        const textureKey = featureKey ? 'reptex_' + featureKey + '_' + repIndex : null;
+
         // Check if this is a polygon texture instead of individual model instances
         const repType = feature.get(`repetition_${repIndex}_type`);
         if (repType === 'polygon_texture') {
@@ -806,6 +1251,24 @@ window.modelRenderer = {
             const imageUri = repModel.uri;
 
             if (polygonCoordinates && imageUri) {
+                // Already built this one: the old key made every sweep add
+                // another copy of the same canvas.
+                if (textureKey) {
+                    const built = this.loadedModels.get(textureKey);
+                    if (built && built.sessionId === this._session3dId) return;
+                }
+
+                // Same range gate as every other primitive. Area textures are
+                // built on a canvas up to AREA_TEXTURE_MAX_CANVAS square, so
+                // an ungated one is not cheap.
+                const centre = areaCentroidLonLat(polygonCoordinates);
+                if (centre) {
+                    const texDistance = this.getDistanceFromCamera(centre[0], centre[1], cesiumScene);
+                    const texVisible = this.isPositionVisible(centre[0], centre[1], cesiumScene);
+                    if (texDistance > memoryConfig.loadDistance * memoryConfig.placementRangeFactor && !texVisible) return;
+                }
+                if (!this.ensureBudget(cesiumScene)) return;
+
                 // Force recalculation of rotation instead of using stored value
                 const polygonCoords4326 = polygonCoordinates.map(coord => 
                     ol.proj.transform(coord, window.map.getView().getProjection(), 'EPSG:4326')
@@ -814,7 +1277,7 @@ window.modelRenderer = {
                 if (modelRendererTexLog()) console.log(`🖼️ Recalculated repetition rotation ${repIndex}: ${(recalculatedRotation * 180 / Math.PI).toFixed(1)}° ${imageUri}`);
                 
                 if (debugConfig.enabled) console.log(`🖼️ Adding polygon texture for ${repIndex} with ${polygonCoordinates.length} coordinates and recalculated rotation: ${(recalculatedRotation * 180 / Math.PI).toFixed(1)}°`);
-                this.addAreaTexture(
+                const created = this.addAreaTexture(
                     {
                         outer: polygonCoordinates,
                         holes: polygonHoles
@@ -823,9 +1286,29 @@ window.modelRenderer = {
                     { spacing: spacing, rotation: recalculatedRotation, scale: repModel.scale },
                     cesiumScene
                 );
+                // addAreaTexture used to return nothing, so these primitives
+                // were unreachable: nothing could count them, destroy them, or
+                // notice a second sweep had made another one.
+                if (textureKey) {
+                    this.trackEntry(textureKey, {
+                        kind: 'texture',
+                        primitives: created,
+                        feature: feature,
+                        sessionId: this._session3dId,
+                        lon: centre ? centre[0] : undefined,
+                        lat: centre ? centre[1] : undefined,
+                        elevation: 0,
+                        distance: 0,
+                        lodLevel: 'texture',
+                        lastUpdate: Date.now()
+                    });
+                }
                 return;
             }
         }
+
+        // Budget check, before any expensive placement work.
+        if (!this.ensureBudget(cesiumScene)) return;
 
         // Original individual model logic continues below
         // Use the stored position from repetition generation
@@ -841,10 +1324,29 @@ window.modelRenderer = {
         // No need to convert again
         const repLonLat = repPosition;
 
-        // Distance gate. Repetitions used to be placed at ANY distance from the
-        // camera: one road query produces repetitions along every metre of it,
-        // so a 2 km street meant hundreds of live primitives — kerbs, fences,
-        // lamps — that were never unloaded. Base models already had this gate.const repScene = cesiumScene || (window.ol3d && window.ol3d.getCesiumScene ? window.ol3d.getCesiumScene() : null);
+        // Distance gate.
+        //
+        // This gate — and the `const repScene = ...` that used to follow it —
+        // were swallowed into the end of this comment by a bad edit:
+        //
+        //     // lamps — that were never unloaded. Base models already had this gate.const repScene = ...
+        //
+        // so the code compiled, the comment described a check that did not
+        // exist, and repetitions were placed at ANY distance from the camera.
+        // Base models were range-gated; repetitions were not. On pedrola.geojson
+        // that is 197km of ways at 20-50cm spacing, so the live primitive count
+        // scaled with the FILE, not with the view.
+        const repDistance = this.getDistanceFromCamera(repLonLat[0], repLonLat[1], cesiumScene);
+        const repVisible = this.isPositionVisible(repLonLat[0], repLonLat[1], cesiumScene);
+        if (repDistance > memoryConfig.loadDistance * memoryConfig.placementRangeFactor && !repVisible) {
+            return;
+        }
+
+        const repKey = featureKey ? 'rep_' + featureKey + '_' + repIndex : null;
+        if (repKey) {
+            const built = this.loadedModels.get(repKey);
+            if (built && built.sessionId === this._session3dId) return;
+        }
 
         if (debugConfig.enabled) console.log(`🚶 Repetition model ${repIndex} using stored position: [${repPosition[0].toFixed(6)}, ${repPosition[1].toFixed(6)}] (already lon/lat)`);
         
@@ -944,14 +1446,17 @@ window.modelRenderer = {
         // when terrain tiles refine AFTER placement (without this, kerbs,
         // fences and lamps placed before fine tiles arrived stayed floating).
         this._repSeq = (this._repSeq || 0) + 1;
-        this.loadedModels.set('rep_' + repIndex + '_' + this._repSeq, {
+        this.trackEntry(repKey || ('rep_' + repIndex + '_' + this._repSeq), {
+            kind: 'repetition',
             model: repCesiumModel,
+            scene: sceneToUse,
             feature: feature,
             sessionId: this._session3dId,
             heightOffset: repHeightOffset,
             lon: repLonLat[0],
             lat: repLonLat[1],
-            distance: 0,
+            elevation: repTerrainElevation,
+            distance: repDistance,
             lodLevel: 'rep',
             modelUrl: repModel.uri,
             lastUpdate: Date.now()
@@ -980,6 +1485,22 @@ window.modelRenderer = {
                 tagsObj[prop] = properties[prop];
             }
         });
+
+        // Range gate and budget, BEFORE anything is built.
+        //
+        // This path had neither. The polygon_texture branch of
+        // addRepetitionModel() gates on distance and calls ensureBudget();
+        // this one went straight into createAreaEntity, so on a large file every
+        // tagged polygon in the file got a canvas and a GroundPrimitive
+        // regardless of where it was, and it could push the scene past the
+        // budget no matter how many were already resident.
+        const areaCentre = areaGeometryCentreLonLat(geometry);
+        if (areaCentre) {
+            const areaDistance = this.getDistanceFromCamera(areaCentre[0], areaCentre[1], cesiumScene);
+            const areaVisible = this.isPositionVisible(areaCentre[0], areaCentre[1], cesiumScene);
+            if (areaDistance > memoryConfig.loadDistance * memoryConfig.placementRangeFactor && !areaVisible) return;
+        }
+        if (!this.ensureBudget(cesiumScene)) return;
 
         // Check if model URI is valid
         if (!model || !model.uri || model.uri.trim() === '') {
@@ -1011,6 +1532,29 @@ window.modelRenderer = {
 
             if (areaEntity) {
                 if (debugConfig.enabled) console.log(`🎨 Successfully created area texture entity for feature ${fidx}`);
+                // createAreaEntity() does its own "already has one" early-return,
+                // so this cannot double-build; it just makes the primitive
+                // visible to the census and to the unload path.
+                //
+                // Deliberately NOT inside the surrounding try. If tracking threw,
+                // that catch would swallow it and leave a GroundPrimitive in
+                // the scene that nothing owns — the precise leak this tracking
+                // exists to remove.
+                const key = getFeatureKey(feature);
+                if (key) {
+                    this.trackEntry('areatex_' + key, {
+                        kind: 'texture',
+                        primitives: areaEntity,
+                        feature: feature,
+                        sessionId: this._session3dId,
+                        lon: areaCentre ? areaCentre[0] : undefined,
+                        lat: areaCentre ? areaCentre[1] : undefined,
+                        elevation: 0,
+                        distance: 0,
+                        lodLevel: 'texture',
+                        lastUpdate: Date.now()
+                    });
+                }
             } else {
                 console.warn(`🎨 Failed to create area texture entity for feature ${fidx} - createAreaEntity returned null`);
             }
@@ -1028,6 +1572,10 @@ window.modelRenderer = {
 
     // Add textured polygon for area coverage
     addAreaTexture: function(polygonData, imageUri, repModel, cesiumScene) {
+        // Returns the GroundPrimitive(s) it created, so the caller can record
+        // them. It used to return nothing at all, which is why nothing in this
+        // file could ever count, evict or destroy an area texture.
+        const created = [];
         const polygonCoordinates = Array.isArray(polygonData) ? polygonData : polygonData.outer;
         const polygonHoles = Array.isArray(polygonData) ? [] : (polygonData.holes || []);
         if (debugConfig.enabled) console.log(`🖼️ addAreaTexture called with ${polygonCoordinates.length} outer coordinates and ${polygonHoles.length} hole(s), texture: ${imageUri}`);
@@ -1208,6 +1756,7 @@ window.modelRenderer = {
                             asynchronous: false
                         });
                         _sceneRT.primitives.add(gpRot);
+                        created.push(gpRot);
                         if (modelRendererTexLog()) console.log(`🖼️ Created GroundPrimitive with rotated texture`);
                     } catch (e) { if (debugConfig.enabled) console.warn('GroundPrimitive creation error:', e); }
                 }
@@ -1233,6 +1782,7 @@ window.modelRenderer = {
                             asynchronous: false
                         });
                         _sceneNR.primitives.add(gpNr);
+                        created.push(gpNr);
                         if (modelRendererTexLog()) console.log(`🖼️ Created GroundPrimitive with original texture`);
                     } catch (e) { if (debugConfig.enabled) console.warn('GroundPrimitive creation error:', e); }
                 }
@@ -1241,7 +1791,17 @@ window.modelRenderer = {
             if (debugConfig.enabled) console.log(`🖼️ Fixed texture repeat: ${textureRepeatX.toFixed(2)} x ${textureRepeatY.toFixed(2)} (polygon ${widthMeters.toFixed(1)}m x ${heightMeters.toFixed(1)}m, desired tile size ${desiredTextureSizeMeters}m)`);
         };
 
-        img.src = imageUri;
+        // Everything the onload handler needs is built BEFORE `img.src` is
+        // assigned.
+        //
+        // `polygonHierarchy` used to be declared ten lines below `img.src`. The
+        // handler reads it, so the ordering only held together because setting
+        // `src` is normally asynchronous. Anything that completes the load
+        // synchronously — an already-decoded image in the browser cache — runs
+        // the handler while `polygonHierarchy` is still in its temporal dead
+        // zone; the ReferenceError is thrown inside the handler's own
+        // try/catch, so it is swallowed and the area texture silently never
+        // appears. Building it first removes the ordering dependency entirely.
 
         // Initial repeat (will be updated when image loads) - apply scale here too
         const textureScale = repModel ? (repModel.scale || 1.0) : 1.0;
@@ -1255,10 +1815,17 @@ window.modelRenderer = {
         // Create polygon hierarchy
         const polygonHierarchy = new Cesium.PolygonHierarchy(cartesianPositions, cartesianHoleHierarchies);
 
+        img.src = imageUri;
+
         // Area textures are now rendered as GroundPrimitive on scene.primitives
         // (same layer as GLTF models) — avoids flying textures and keeps everything
         // on a single rendering layer. The primitive is created inside img.onload
-        // below, once the texture image has loaded.
+        // above, once the texture image has loaded.
+        //
+        // `created` is returned by reference and filled in by the handler when
+        // the image arrives, so the caller's array ends up holding every
+        // primitive that was made — including ones built a moment later.
+        return created;
     },
 
     /**
@@ -2051,7 +2618,7 @@ window.modelRenderer = {
                 }));
             });
             if (!created.length) return;
-            this.plainResults.set(feature, { entities: created, sessionId: this._session3dId });
+            this.plainResults.set(feature, { entities: created, layer: layer, sessionId: this._session3dId });
             if (debugConfig.enabled) {
                 console.log('➖ Plain line draped on ground: ' + created.length + ' path(s)');
             }
@@ -2082,14 +2649,68 @@ window.modelRenderer = {
             id: this._nextPlainId(),
             position: positions[0]
         }, graphics));
-        this.plainResults.set(feature, { entities: [entity], sessionId: this._session3dId });
+        this.plainResults.set(feature, { entities: [entity], layer: layer, sessionId: this._session3dId });
         if (debugConfig.enabled) console.log('➖ Plain ' + type + ' draped on ground');
     },
 
-    /** Drop plain results tracked for a previous 3D session (primitives died). */
+    /**
+     * Remove plain-result entities from the scene, not just from the map.
+     *
+     * This used to be `plainResults.clear(); _plainDataSource = null;` — which
+     * is a no-op for memory. The entities live in a Cesium.CustomDataSource
+     * that was added to ol3d's dataSources collection; dropping the reference
+     * leaves both the collection and every entity in it alive, and the next
+     * call to getPlainDataSource() sees the old source is still "contained"
+     * and hands it straight back. The only thing that actually went away was
+     * the bookkeeping.
+     */
     clearPlainResults: function() {
+        const dataSource = this._plainDataSource;
+        if (dataSource) {
+            try {
+                if (dataSource.entities && typeof dataSource.entities.removeAll === 'function') {
+                    dataSource.entities.removeAll();
+                }
+                const ol3d = window.ol3d;
+                const collection = ol3d && typeof ol3d.getDataSources === 'function'
+                    ? ol3d.getDataSources() : null;
+                if (collection && typeof collection.remove === 'function') {
+                    collection.remove(dataSource);
+                }
+            } catch (e) { /* scene already gone */ }
+        }
         if (this.plainResults) this.plainResults.clear();
         this._plainDataSource = null;
+    },
+
+    /**
+     * Release the plain markers that belong to one layer.
+     *
+     * Removing a GeoJSON layer frees its models and textures through
+     * loadedModels, but plain markers were not in that map and had no release
+     * path at all: a feature with no model draped a billboard or polyline that
+     * survived the layer it came from, for the rest of the session. On a
+     * >1MB file that is most of the features.
+     *
+     * @returns {number} how many entries were released
+     */
+    unloadPlainResultsForLayer: function(layer) {
+        if (!this.plainResults || !layer) return 0;
+        const dataSource = this._plainDataSource;
+        let released = 0;
+        this.plainResults.forEach(function (entry, feature) {
+            if (!entry || entry.layer !== layer) return;
+            const entities = Array.isArray(entry.entities) ? entry.entities
+                : (entry.entities ? [entry.entities] : []);
+            if (dataSource && dataSource.entities && typeof dataSource.entities.remove === 'function') {
+                for (let i = 0; i < entities.length; i++) {
+                    try { dataSource.entities.remove(entities[i]); } catch (e) { /* already gone */ }
+                }
+            }
+            this.plainResults.delete(feature);
+            released++;
+        }, this);
+        return released;
     },
 
     addAllModels: function() {
@@ -2113,8 +2734,12 @@ window.modelRenderer = {
         if (this._sceneRef !== cesiumScene) {
             this._sceneRef = cesiumScene;
             this._session3dId = (this._session3dId || 0) + 1;
-            this.loadedModels.clear();
+            this.resetLive();
             this.modelPool.clear();
+            // The camera listener is bound to the OLD scene's camera. Unhook so
+            // hookCameraStreaming() re-binds to the new one; otherwise streaming
+            // silently stops working after the first 3D session ends.
+            this._cameraStreamingHooked = false;
             // A pass in flight belongs to the previous scene; its primitives are
             // about to be destroyed with it.
             this._placing = false;
@@ -2132,6 +2757,10 @@ window.modelRenderer = {
 
         if (cesiumScene && cesiumScene.primitives) {
             try {
+                // Start streaming: from now on, moving the camera releases what
+                // falls outside unloadDistance instead of letting the scene
+                // grow for the whole session.
+                if (this.hookCameraStreaming) this.hookCameraStreaming();
                 if (debugConfig.enabled) console.log('🎯 Cesium scene available, processing layers...');
                 // One pass at a time: a second sweep arriving mid-pass (a new
                 // query, the +3s retry) waits for this one instead of placing
@@ -2251,9 +2880,8 @@ window.addEventListener('tagOverlayLoaded', function () {
 // instead of reusing primitives that belong to a destroyed scene.
 window.addEventListener('ol3dDestroyed', function () {
     if (window.modelRenderer) {
-        window.modelRenderer.loadedModels.clear();
+        window.modelRenderer.resetLive();
         window.modelRenderer.modelPool.clear();
-        window.modelRenderer.totalModelsAdded = 0;
         window.modelRenderer._placing = false;
         window.modelRenderer._pendingSweep = false;
         if (window.modelRenderer.clearPlainResults) window.modelRenderer.clearPlainResults();
@@ -2263,3 +2891,27 @@ window.addEventListener('ol3dDestroyed', function () {
         if (debugConfig.enabled) console.log('🎯 Cleared model tracking after 3D mode ended');
     }
 });
+
+// How many models, textures and repetitions to allow.
+// -----------------------------------------------------
+// A hard number in memoryConfig is the wrong shape for this: the right ceiling
+// depends on the machine, and the only way to find it is to watch the frame
+// rate while raising it. Two overrides, neither requiring a file edit:
+//
+//   ?primitives=60000            in the URL, read once at load
+//   modelRenderer.setBudget(60000)  in the console, takes effect immediately
+//
+// Both only raise the CEILING. The ranges that decide how much of the file is
+// worth placing are separate numbers in memoryConfig (loadDistance,
+// placementRangeFactor, unloadDistance) and are deliberately not reachable from
+// the URL — changing those changes what the map looks like, which is a
+// decision to make in the file rather than by typo in an address bar.
+(function applyPrimitiveBudgetOverride() {
+    if (typeof window === 'undefined' || !window.location) return;
+    var match = /[?&]primitives=(\d+)/.exec(window.location.search || '');
+    if (!match) return;
+    var requested = parseInt(match[1], 10);
+    if (!isFinite(requested) || requested <= 0) return;
+    memoryConfig.maxLivePrimitives = requested;
+    console.log('🎯 primitive budget set to ' + requested + ' from the URL');
+})();

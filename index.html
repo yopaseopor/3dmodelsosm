@@ -172,9 +172,33 @@
 	<!-- Pre-load panel (progress / ETA / bytes). Must be before model_renderer.js:
 	     the renderer reports into window.loadingProgress as it places models. -->
 	<script src="src/loading_progress.js"></script>
+	<!-- Time-sliced scheduler. This is what keeps a large GeoJSON from freezing
+	     the tab: every bulk loop (the loader's per-feature pass, the overlay
+	     pass, building extrusion) runs through progressive.forEach, which hands
+	     the browser back to the event loop between slices.
+
+	     Without this tag window.progressive is undefined, those loops fall back
+	     to a plain synchronous forEach, and a city-sized file is processed in
+	     ONE blocking pass - the tab stops responding and the progress panel
+	     never gets a chance to paint, so it looks frozen for the whole load.
+	     It replaces requestIdleCallback, which Firefox starves under Cesium
+	     (67.5s -> 3.9s on the 3854-feature Paris file when it was measured). -->
+	<script src="src/progressive.js"></script>
+	<!-- Background pre-charge: fetches and parses the big overlay GeoJSONs
+	     before you click them, so the click is instant. Optional - the app works
+	     without it - but precharge.take() is what lets the loader skip its own
+	     fetch when the data is already in hand. -->
+	<script src="src/precharge.js"></script>
 	<script src="src/model_renderer.js"></script>
 	<script src="src/model_repetition.js"></script>
 	<script src="src/highway_repetition.js"></script>
+	<!-- Railway: repeats the rail model along each way, using the BEARING of the
+	     segment it sits on, so a rail follows a curving track instead of all
+	     pointing the same way. Must load before model_renderer.js runs a sweep,
+	     and before geojson_loader.js / overlay_integration.js call into it:
+	     window.railwayRepetition is what those two look for, and without this
+	     tag it is undefined, so a railway matched no branch and got no model. -->
+	<script src="src/railway_repetition.js"></script>
 	<script src="src/footway_repetition.js"></script>
 	<script src="src/fence_repetition.js"></script>
 	<script src="src/area_repetition.js"></script>

@@ -39,6 +39,7 @@ const availableModels = [
     'w_playground_swing.glb',
 	'w_power_pole.gltf',
 	'w_power_tower.gltf',
+	'w_railway_rail.glb',
     'w_traffic_sign_ES_R2.gltf',
     'w_traffic_sign_ES_R101.gltf',
     'w_vending_parking_tickets.glb',
@@ -63,6 +64,7 @@ const availableModels = [
     'i_parking.png',
     'i_terra_verd.jpg',
     'i_panot.jpg',
+	'noimage.png',
         'i_llamborda.jpg'
 ];
 
@@ -133,10 +135,10 @@ const modelMappings = [
   { tags: ['amenity=parking', 'orientation=diagonal'], model: '', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Parking area models  
    { tags: ['amenity=parking_space'], model: '', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Parking area models  
     { tags: ['amenity=parking'], model: '', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Parking area models
-  { tags: ['area:barrier=kerb'], model: 'noimage.jpg', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway area texture
-  { tags: ['area:highway=cycleway'], model: 'noimage.jpg', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway area texture    
-  { tags: ['area:highway=footway', 'footway=sidewalk'], model: 'noimage.jpg', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway area texture
-  { tags: ['area:highway=footway', 'footway=crossing'], model: 'noimage.jpg', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway point models
+  { tags: ['area:barrier=kerb'], model: 'noimage.png', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway area texture
+  { tags: ['area:highway=cycleway'], model: 'noimage.png', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway area texture    
+  { tags: ['area:highway=footway', 'footway=sidewalk'], model: 'noimage.png', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway area texture
+  { tags: ['area:highway=footway', 'footway=crossing'], model: 'noimage.png', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway point models
 { tags: ['area:highway=residential'], model: 'i_asfalt.jpg', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Residential area-tagged ways
 { tags: ['amenity=motorcycle_parking'], model: '', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Motorcycle parking model for amenity=motorcycle_parking   
 { tags: ['leisure=garden'], model: '', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Garden area models
@@ -169,6 +171,7 @@ const modelMappings = [
    { tags: ['highway=track'], model: 'w_highway_track.gltf', geometryType: 'line', config: { scale: 6.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Residential road line models
    { tags: ['natural=beach'], model: 'w_natural_beach.gltf', geometryType: 'line', config: { scale: 12.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Residential road line models
    { tags: ['natural=coastline'], model: 'w_natural_beach.gltf', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Residential road line models
+   { tags: ['railway=rail'], model: 'w_railway_rail.glb', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Railway rail
    { tags: ['barrier=kerb'], model: 'w_barrier_kerb.gltf', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Kerb
     { tags: ['waterway=drain'], model: 'w_waterway_stream.gltf', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Drain area models (closed drains)
    
@@ -355,33 +358,131 @@ function adjustConfigForDirection(config, tags, bearing) {
  *        declarative rules in model_orientation.js.
  * @returns {object|null} Mapping object {tags, model, geometryType, config} or null if no mapping exists
  */
-function getModelForTags(tags, wayCoordinates = null, nodeIndex = null, geometryType = 'point', orientationContext = null) {
-    console.log(`🔍 Checking model mappings for tags:`, tags, `geometry type: ${geometryType}`);
-    for (const mapping of modelMappings) {
-        // Check if geometry type matches (default to 'point' for backward compatibility)
+// ---------------------------------------------------------------------------
+// Inverted lookup index
+// ---------------------------------------------------------------------------
+// getModelForTags() used to walk the WHOLE catalogue — all 76 mappings — for
+// EVERY feature, testing each mapping's tags one at a time. It also printed a
+// line per tag tested. For a city extract that is 3854 features x 76 mappings x
+// ~2 tags, i.e. hundreds of thousands of string comparisons and console lines
+// re-deriving the same answer over and over, which is most of what made
+// switching to 3D feel like it was hanging.
+//
+// The catalogue never changes at runtime, so the work does not belong per
+// feature. This builds the index ONCE, on first use:
+//
+//     geometryType -> firstTagKey -> firstTagValue -> [mappings, in catalogue order]
+//
+// A mapping can only ever match a feature if its FIRST tag matches, so a feature
+// that fails the first tag needs no further test. Looking a feature up is then
+// "which mappings could possibly apply to it", which is a hash lookup plus a
+// handful of confirmations instead of 76 scans.
+//
+// Two things are preserved exactly, because the order decides which model wins:
+//
+//   1. CATALOGUE ORDER. `amenity=parking_space` (specific) is listed before
+//      `amenity=parking` (generic) on purpose, and the first match is the one
+//      that applies. The buckets therefore keep their catalogue order and the
+//      confirmed candidates are re-sorted by that order before one is chosen.
+//
+//   2. FIRST MATCH WINS ACROSS BUCKETS. A mapping may name a tag the feature
+//      also has, so candidates arrive from several buckets at once; they are
+//      merged and ordered before the first hit is returned.
+//
+// Nothing about the returned object changes: same mapping, same adjusted config.
+let mappingIndex = null;
+
+function buildMappingIndex() {
+    const index = new Map();
+
+    modelMappings.forEach((mapping, order) => {
         const mappingGeometryType = mapping.geometryType || 'point';
-        if (mappingGeometryType !== geometryType) continue;
-        
+        let byKey = index.get(mappingGeometryType);
+        if (!byKey) {
+            byKey = new Map();
+            index.set(mappingGeometryType, byKey);
+        }
+
+        // Bucket on the FIRST tag only — that is the one that has to match for
+        // the mapping to be a candidate at all. `split('=')` is what the
+        // original test used, and keeping it means a tag with no '=' (value
+        // undefined) still lands in the same place it used to match.
+        const firstTag = mapping.tags[0];
+        const [key, value] = String(firstTag).split('=');
+
+        let byValue = byKey.get(key);
+        if (!byValue) {
+            byValue = new Map();
+            byKey.set(key, byValue);
+        }
+        let bucket = byValue.get(value);
+        if (!bucket) {
+            bucket = [];
+            byValue.set(value, bucket);
+        }
+        bucket.push({ order, mapping });
+    });
+
+    return index;
+}
+
+/** Drop the cached index. Only needed if modelMappings is ever mutated. */
+function invalidateMappingIndex() {
+    mappingIndex = null;
+}
+
+/**
+ * How many mappings the index holds, and how deep a lookup has to go.
+ * Handy for confirming the index was actually built.
+ */
+function getMappingIndexStats() {
+    if (!mappingIndex) mappingIndex = buildMappingIndex();
+    const stats = {};
+    mappingIndex.forEach((byKey, geometryType) => {
+        let mappings = 0;
+        byKey.forEach(byValue => { mappings += byValue.size; });
+        stats[geometryType] = { firstTagKeys: byKey.size, mappings };
+    });
+    return stats;
+}
+
+function getModelForTags(tags, wayCoordinates = null, nodeIndex = null, geometryType = 'point', orientationContext = null) {
+    if (!mappingIndex) mappingIndex = buildMappingIndex();
+
+    const byKey = mappingIndex.get(geometryType);
+    // Nothing in the catalogue is declared for this geometry type at all —
+    // e.g. asking for 'line' models on a file with no line mappings. One lookup,
+    // done, instead of 76 failed scans.
+    if (!byKey) return null;
+
+    // Gather every mapping whose FIRST tag this feature satisfies, then let the
+    // catalogue order decide between them (see the note at the top).
+    const candidates = [];
+    byKey.forEach((byValue, key) => {
+        const bucket = byValue.get(tags[key]);
+        if (bucket) {
+            for (let i = 0; i < bucket.length; i++) candidates.push(bucket[i]);
+        }
+    });
+    if (candidates.length === 0) return null;
+    candidates.sort((a, b) => a.order - b.order);
+
+    for (let c = 0; c < candidates.length; c++) {
+        const mapping = candidates[c].mapping;
+
+        // Confirm the REMAINING tags. The first one already matched (that is
+        // what put this mapping in the bucket), but re-testing all of them keeps
+        // the rule identical to the original "every tag must match".
         const allMatch = mapping.tags.every(tag => {
             const [key, value] = tag.split('=');
-            // Handle compound keys like 'area:highway' - these are single tags, not combinations
-            const tagValue = tags[key];
-            const matches = tagValue === value;
-            console.log(`🔍 Checking tag ${key}=${value}, found value: ${tagValue}, matches: ${matches}`);
-            return matches;
+            return tags[key] === value;
         });
-        if (allMatch) {
-            console.log(`🔍 Found matching model ${mapping.model} for tags:`, mapping.tags, `geometry type: ${geometryType}`);
-            const bearing = resolveBearing(tags, wayCoordinates, nodeIndex, orientationContext);
-            const rule = window.modelOrientation ? window.modelOrientation.resolveRule(tags) : null;
-            console.log(`🧭 orientation: facing=${rule ? rule.facing : '?'} against=${rule ? rule.against : '?'} ` +
-                        `bearing=${bearing === null ? 'none' : (bearing * 180 / Math.PI).toFixed(2) + '°'}`);
-            const adjustedConfig = adjustConfigForDirection(mapping.config, tags, bearing);
-            console.log(`🔍 Final config:`, adjustedConfig);
-            return { ...mapping, config: adjustedConfig };
-        }
+        if (!allMatch) continue;
+
+        const bearing = resolveBearing(tags, wayCoordinates, nodeIndex, orientationContext);
+        const adjustedConfig = adjustConfigForDirection(mapping.config, tags, bearing);
+        return { ...mapping, config: adjustedConfig };
     }
-    console.log(`🔍 No model mapping found for tags:`, tags, `geometry type: ${geometryType}`);
     return null;
 }
 
@@ -401,6 +502,8 @@ window.models = {
     availableModels,
     modelMappings,
     getModelForTags,
+    invalidateMappingIndex,
+    getMappingIndexStats,
     modelExists,
     calculateBearing,
     isLineStringClosed

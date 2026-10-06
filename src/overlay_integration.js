@@ -29,6 +29,72 @@ function createOlLayer(overlay) {
     }
     
     let vectorSource;
+
+    /**
+     * Turn one parsed GeoJSON object into features on the map.
+     *
+     * This is the single path for overlay data, used by both the normal fetch
+     * and the precharge hand-off. It was inline in the fetch's .then() before,
+     * so there was nowhere for an already-parsed file to enter except by
+     * fetching and parsing it all over again.
+     */
+    function ingestGeoJSON(data, projection) {
+        setOverlaySpinner(false);
+        if (debugConfig.enabled && debugConfig.logOverlayLoading) console.log('Received GeoJSON data for ' + overlay.title, data);
+        if (debugConfig.enabled && debugConfig.logOverlayLoading) console.log('Number of features in GeoJSON:', data.features ? data.features.length : 'unknown');
+        const features = new ol.format.GeoJSON().readFeatures(data, {
+            featureProjection: projection
+        });
+
+        if (debugConfig.enabled && debugConfig.logFeatureProcessing) console.log('Parsed features count:', features.length);
+        if (debugConfig.enabled && debugConfig.logFeatureProcessing) console.log('First few features:', features.slice(0, 3).map(f => ({
+            type: f.getGeometry().getType(),
+            properties: f.getProperties()
+        })));
+
+        // Assign 3D models to features based on their properties
+        if (debugConfig.enabled && debugConfig.logModelAssignment) console.log('🎯 About to assign models to', features.length, 'features');
+
+        // Same reason as the GeoJSON loader's sweep: thousands of features in
+        // one blocking loop freeze the tab, so it is time-sliced here too.
+        //
+        // The fallback keeps the old synchronous behaviour, so a missing
+        // progressive.js degrades to "slow" rather than to "broken" - and it
+        // calls onDone itself, which is why the add lives in onDone and not
+        // straight after the call.
+        const assignAll = window.progressive && window.progressive.forEach
+            ? window.progressive.forEach
+            : function (items, worker, opts) {
+                for (let i = 0; i < items.length; i++) {
+                    try { worker(items[i], i); }
+                    catch (error) { if (opts && opts.onError) opts.onError(items[i], error, i); }
+                }
+                if (opts && opts.onDone) opts.onDone();
+            };
+
+        // Everything after the sweep: the features are only added to the source
+        // once EVERY one of them has its model, otherwise the renderer would
+        // wake up on a half-finished layer and never revisit it.
+        function publishFeatures() {
+            if (debugConfig.enabled && debugConfig.logOverlayLoading) console.log('Added ' + features.length + ' features for ' + overlay.title);
+            vectorSource.addFeatures(features);
+            // Dispatch event to trigger global summary update
+            window.dispatchEvent(new CustomEvent('overlayFeaturesLoaded'));
+        }
+
+        assignAll(features, (feature, index) => {
+            if (index < 5 && debugConfig.enabled && debugConfig.logFeatureProcessing) { // Log first 5
+                console.log('🎯 Processing feature', index, 'properties:', feature.getProperties());
+            }
+            assignModelToFeature(feature, features);
+        }, {
+            label: 'overlay features',
+            onError: (feature, error, index) => {
+                console.error('Overlay "' + overlay.title + '" feature ' + index + ' failed, skipping this feature only:', error);
+            },
+            onDone: publishFeatures
+        });
+    }
     
     if (overlay.geojson) {
         // Handle GeoJSON overlays
@@ -40,6 +106,19 @@ function createOlLayer(overlay) {
                     // Show spinner before fetch
                     setOverlaySpinner(true);
                     const url = overlay.geojson;
+
+                    // Precharge may already have fetched AND parsed this file
+                    // in the background. Take it instead of asking for it again:
+                    // no request, no JSON.parse, straight to the map. Without
+                    // this the background work was thrown away and opening the
+                    // overlay still cost the full download plus parse.
+                    const precharged = window.precharge ? window.precharge.take(url) : null;
+                    if (precharged) {
+                        console.log('⚡ Using precharged data for ' + overlay.title);
+                        ingestGeoJSON(precharged, projection);
+                        return;
+                    }
+
                     fetch(url)
                         .then(response => {
                             if (!response.ok) {
@@ -48,32 +127,7 @@ function createOlLayer(overlay) {
                             return response.json();
                         })
                         .then(data => {
-                            setOverlaySpinner(false);
-                            if (debugConfig.enabled && debugConfig.logOverlayLoading) console.log('Received GeoJSON data for ' + overlay.title, data);
-                            if (debugConfig.enabled && debugConfig.logOverlayLoading) console.log('Number of features in GeoJSON:', data.features ? data.features.length : 'unknown');
-                            const features = new ol.format.GeoJSON().readFeatures(data, {
-                                featureProjection: projection
-                            });
-                            
-                            if (debugConfig.enabled && debugConfig.logFeatureProcessing) console.log('Parsed features count:', features.length);
-                            if (debugConfig.enabled && debugConfig.logFeatureProcessing) console.log('First few features:', features.slice(0, 3).map(f => ({ 
-                                type: f.getGeometry().getType(),
-                                properties: f.getProperties() 
-                            })));
-                            
-                            // Assign 3D models to features based on their properties
-                            if (debugConfig.enabled && debugConfig.logModelAssignment) console.log('🎯 About to assign models to', features.length, 'features');
-                            features.forEach((feature, index) => {
-                                if (index < 5 && debugConfig.enabled && debugConfig.logFeatureProcessing) { // Log first 5
-                                    console.log('🎯 Processing feature', index, 'properties:', feature.getProperties());
-                                }
-                                assignModelToFeature(feature, features);
-                            });
-                            
-                            if (debugConfig.enabled && debugConfig.logOverlayLoading) console.log('Added ' + features.length + ' features for ' + overlay.title);
-                            vectorSource.addFeatures(features);
-                            // Dispatch event to trigger global summary update
-                            window.dispatchEvent(new CustomEvent('overlayFeaturesLoaded'));
+                            ingestGeoJSON(data, projection);
                         })
                         .catch(error => {
                             setOverlaySpinner(false);
@@ -457,38 +511,32 @@ function assignModelToFeature(feature, allFeatures = null) {
             
             // Start with option 1: place models at intervals along the way
             if (wayCoordinates && wayCoordinates.length > 1) {
-                const wayModels = [];
-                
-                for (let i = 0; i < wayCoordinates.length - 1; i += 0.05) {
-                    const floorI = Math.floor(i);
-                    const frac = i - floorI;
-                    const curr = wayCoordinates[floorI];
-                    const next = wayCoordinates[floorI + 1];
-                    
-                    // Interpolate position
-                    const lon = curr[0] + (next[0] - curr[0]) * frac;
-                    const lat = curr[1] + (next[1] - curr[1]) * frac;
-                    
-                    const bearing = window.models.calculateBearing(wayCoordinates, floorI);
-                    const adjustedConfig = window.models.adjustConfigForDirection ? 
-                        window.models.adjustConfigForDirection(modelConfig, tagsObj, bearing) : modelConfig;
-                    
-                    const wayModelOptions = {
-                        uri: `/3dmodelsosm/src/models/${modelFilename}`,
-                        scale: adjustedConfig ? adjustedConfig.scale : 1.0,
-                        heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
-                        position: Cesium.Cartesian3.fromDegrees(lon, lat)
-                    };
-                    
-                    wayModels.push({
-                        position: [lon, lat],
-                        model: wayModelOptions,
-                        config: adjustedConfig
-                    });
+                // Models along a way must be written as repetition_0, repetition_1,
+                // ... because that is the ONLY thing model_renderer reads when it
+                // places a feature (see addRepetitionModels).
+                //
+                // This block used to build the whole run of way models right here,
+                // at a step of 0.05 along the way index (20 models PER SEGMENT),
+                // and park the result on `feature.wayModels`. Nothing ever read
+                // that property: it is written in this file and in value_search.js
+                // and read nowhere in the codebase. So every line model produced
+                // here went into a dead end, which is why a railway way in an
+                // overlay GeoJSON resolved to w_railway_rail.glb and then drew
+                // nothing at all.
+                //
+                // The 170k intermediate objects it built per overlay are gone too:
+                // paris.geojson has ~8500 way segments, so one overlay produced
+                // 170,280 of them on every load.
+                //
+                // applyLineRepetitions (model_repetition.js) is now the one place
+                // that decides how a tagged way is populated: fence -> highway ->
+                // footway -> railway -> generic metre-based fallback. It never ends
+                // in "nothing to do", which is what a railway used to hit.
+                if (window.modelRepetition && window.modelRepetition.applyLineRepetitions) {
+                    window.modelRepetition.applyLineRepetitions(feature, tagsObj, modelFilename, modelConfig, mappingGeometryType);
+                } else if (window.modelRepetition && window.modelRepetition.applyModelRepetitions) {
+                    window.modelRepetition.applyModelRepetitions(feature, modelFilename, modelConfig, mappingGeometryType);
                 }
-                
-                feature.wayModels = wayModels;
-                console.log(`🛤️ SUCCESS: Placed ${wayModels.length} models along way with tags:`, tagsObj);
             } else if (!wayCoordinates && geometry && geometry.getType() === 'Point') {
                 // Handle point features treated as lines: place a single model at the point
                 const pointCoords = geometry.getCoordinates();
@@ -580,6 +628,14 @@ function integrateOverlays() {
     const allOverlaysFlat = Object.values(window.allOverlays)
         .filter(Array.isArray)
         .flat();
+
+    // Start downloading and parsing the overlay files NOW, in the background,
+    // so that opening one later is instant instead of a long download plus a
+    // long JSON.parse while the tab is frozen. precharge probes each file with
+    // a HEAD request first and only really fetches the big ones.
+    if (window.precharge && window.precharge.warmAll) {
+        window.precharge.warmAll(allOverlaysFlat);
+    }
         
     // Group overlays by their group property
     const groupMap = {};
