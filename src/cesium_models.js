@@ -10,6 +10,27 @@ const CESIUM_AREA_TEXTURE_JPEG_QUALITY = 0.78;
 // When bridgeUseSingleHeight is true, bridge textures use a single middle height
 // for the whole deck instead of per-vertex chord interpolation.
 // bridgeTextureHeight specifies the height to use (in meters) when single height mode is enabled.
+
+// Vertical stacking from OSM layer=* (shared with buildings.js / model_renderer.js).
+// Kept in cesium_models.js so the area texture deck path can apply the same vertical separation.
+const LAYER_STACK_METERS = typeof window !== 'undefined' && window.LAYER_STACK_METERS ? window.LAYER_STACK_METERS : 0.5;
+const LAYER_STACK_CLAMP = typeof window !== 'undefined' && window.LAYER_STACK_CLAMP ? window.LAYER_STACK_CLAMP : 5;
+
+function parseNumberLayer(value) {
+    if (value === undefined || value === null || value === '') return NaN;
+    if (typeof value === 'number') return isFinite(value) ? value : NaN;
+    const str = String(value).trim().replace(',', '.');
+    const match = str.match(/(-?\d+(?:\.\d+)?)/);
+    return match ? parseFloat(match[1]) : NaN;
+}
+
+function getLayerVerticalOffsetMeters(tags) {
+    const layer = parseNumberLayer(tags && tags.layer);
+    if (!isFinite(layer) || layer === 0) return 0;
+    const clamped = Math.max(-LAYER_STACK_CLAMP, Math.min(LAYER_STACK_CLAMP, layer));
+    return clamped * LAYER_STACK_METERS;
+}
+
 const bridgeUseSingleHeight = false;
 const bridgeTextureHeight = 0;
 
@@ -230,6 +251,9 @@ class AreaTextureManager {
                     const endCoord = outerRing[outerRing.length - 1];
                     const hStart = (demSampler(startCoord[0], startCoord[1]) || 0);
                     const hEnd = (demSampler(endCoord[0], endCoord[1]) || 0);
+                    const layerOffsetDeck = getLayerVerticalOffsetMeters(bridgeTags);
+                    const hStartWithLayer = hStart + layerOffsetDeck;
+                    const hEndWithLayer = hEnd + layerOffsetDeck;
 
                     const dx = endCoord[0] - startCoord[0];
                     const dy = endCoord[1] - startCoord[1];
@@ -245,7 +269,7 @@ class AreaTextureManager {
                                 const along = (cdx * dx + cdy * dy) / (chordDeg * chordDeg || 1);
                                 t = Math.max(0, Math.min(1, along));
                             }
-                            const h = hStart + (hEnd - hStart) * t;
+                            const h = hStartWithLayer + (hEndWithLayer - hStartWithLayer) * t;
                             return Cesium.Cartesian3.fromDegrees(lonLat[0], lonLat[1], h);
                         } catch (e) {
                             console.error(`🎨 Error transforming bridge coordinate`, coord, ':', e.message);
@@ -259,7 +283,9 @@ class AreaTextureManager {
                 // a bridge repetition. The createAreaEntity path uses the SAME indicator.
                 let hasBridgeInclination = !!window.bridgeUseBridgeInclination;
                 const bridgeDeckChordM = hasBridgeInclination && chordDeg > 0 ? chordDeg * 111320 * Math.cos(Cesium.Math.toRadians((endCoord[1] + startCoord[1]) / 2)) : 0;
-                const bridgeDeckInclination = hasBridgeInclination && bridgeDeckChordM > 0 ? Math.atan2(hEnd - hStart, bridgeDeckChordM) : 0;
+                const layerOffsetDeck = getLayerVerticalOffsetMeters(bridgeTags);
+
+                const bridgeDeckInclination = hasBridgeInclination && bridgeDeckChordM > 0 ? Math.atan2(hEndWithLayer - hStartWithLayer, bridgeDeckChordM) : 0;
 
                 if (cesiumOuter.length < 3) {
                     console.warn(`🎨 Polygon ${pIdx} has less than 3 Cartesian points after transformation`);

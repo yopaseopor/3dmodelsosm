@@ -160,6 +160,27 @@ if (typeof window !== 'undefined' && window.globalDebugConfig) {
     };
 }
 
+// Vertical stacking from OSM layer=* (shared with buildings.js).
+// Kept in model_renderer.js so both repetition/GLTF placement and area-texture
+// deck placement can apply the same vertical separation when layer is present.
+var LAYER_STACK_METERS = typeof window !== 'undefined' && window.LAYER_STACK_METERS ? window.LAYER_STACK_METERS : 0.5;
+var LAYER_STACK_CLAMP = typeof window !== 'undefined' && window.LAYER_STACK_CLAMP ? window.LAYER_STACK_CLAMP : 5;
+
+function parseNumberLayer(value) {
+    if (value === undefined || value === null || value === '') return NaN;
+    if (typeof value === 'number') return isFinite(value) ? value : NaN;
+    const str = String(value).trim().replace(',', '.');
+    const match = str.match(/(-?\d+(?:\.\d+)?)/);
+    return match ? parseFloat(match[1]) : NaN;
+}
+
+function getLayerVerticalOffsetMeters(tags) {
+    const layer = parseNumberLayer(tags && tags.layer);
+    if (!isFinite(layer) || layer === 0) return 0;
+    const clamped = Math.max(-LAYER_STACK_CLAMP, Math.min(LAYER_STACK_CLAMP, layer));
+    return clamped * LAYER_STACK_METERS;
+}
+
 function modelRendererTexLog() {
     return debugConfig.enabled && debugConfig.logTextureProcessing;
 }
@@ -1502,28 +1523,42 @@ window.modelRenderer = {
         
         // Bridge repetition models: one straight ramp between the chord endpoints,
         // with the deck tilted to that ramp instead of the terrain under the bridge.
+        // Vertical separation for overlapping features (OSM layer=*).
+        // A feature on layer=1 sits above layer=0 ground features, which keeps
+        // stacked roads (bridge above the road under it) visually separated in 3D.
+        const layerOffset = getLayerVerticalOffsetMeters(feature.getProperties());
+        const repTotalHeightWithLayer = repTotalHeight + layerOffset;
+
         let repModelMatrix = Cesium.Transforms.eastNorthUpToFixedFrame(
-            Cesium.Cartesian3.fromDegrees(repLonLat[0], repLonLat[1], repTotalHeight)
-        );
-        
-        if (isBridgeRepetition && window.mapterhornTerrain && window.mapterhornTerrain.applySlopeTilt) {
-            // Apply bridge ramp tilt to the deck so the deck follows the bridge's
-            // own medium incline instead of staying flat and the road under the
-            // bridge being inclined to the road on top of the bridge.
-            //
-            // bridgeUseBridgeInclination is set here so createAreaEntity can use
-            // the same inclination for the area texture on the bridge deck.
-            try {
-                window.bridgeUseBridgeInclination = true;
-                repModelMatrix = window.mapterhornTerrain.applySlopeTilt(repModelMatrix, repLonLat[0], repLonLat[1]);
-            } catch (e) { /* no DEM data yet */ }
-        } else if (!isBridgeRepetition &&
-                   window.mapterhornTerrain &&
-                   window.mapterhornTerrain.applySlopeTilt) {
-            try {
-                repModelMatrix = window.mapterhornTerrain.applySlopeTilt(repModelMatrix, repLonLat[0], repLonLat[1]);
-            } catch (e) { /* no DEM data yet */ }
-        }
+            Cesium.Cartesian3.fromDegrees(repLonLat[0], repLonLat[1], repTotalHeightWithLayer)
+        );                if (isBridgeRepetition && window.mapterhornTerrain && window.mapterhornTerrain.applySlopeTilt) {
+                    // Apply bridge ramp tilt to the deck so the deck follows the bridge's
+                    // own medium incline instead of staying flat and the road under the
+                    // bridge being inclined to the road on top of the bridge.
+                    //
+                    // bridgeUseBridgeInclination is set here so createAreaEntity can use
+                    // the same inclination for the area texture on the bridge deck.
+                    try {
+                        window.bridgeUseBridgeInclination = true;
+                        repModelMatrix = window.mapterhornTerrain.applySlopeTilt(repModelMatrix, repLonLat[0], repLonLat[1]);
+                    } catch (e) { /* no DEM data yet */ }
+                } else if (!isBridgeRepetition &&
+                           window.mapterhornTerrain &&
+                           window.mapterhornTerrain.applySlopeTilt) {
+                    try {
+                        repModelMatrix = window.mapterhornTerrain.applySlopeTilt(repModelMatrix, repLonLat[0], repLonLat[1]);
+                    } catch (e) { /* no DEM data yet */ }
+                }
+
+                // Apply the same layer=* vertical offset to the model matrix so stacked
+                // 3D features (bridge above the road under it) do not touch each other.
+                if (layerOffset !== 0) {
+                    repModelMatrix = Cesium.Matrix4.multiplyByTranslation(
+                        repModelMatrix,
+                        new Cesium.Cartesian3(0, 0, layerOffset),
+                        new Cesium.Matrix4()
+                    );
+                }
         
         if (debugConfig.enabled && repTerrainElevation > 0) {
             console.log(`🚶 Repetition model ${repIndex} positioned at terrain elevation: ${repTerrainElevation.toFixed(1)}m + offset: ${repHeightOffset.toFixed(1)}m = ${repTotalHeight.toFixed(1)}m`);
