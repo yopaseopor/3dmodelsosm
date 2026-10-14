@@ -6,6 +6,13 @@
 const CESIUM_AREA_TEXTURE_MAX_CANVAS = 2048;
 const CESIUM_AREA_TEXTURE_JPEG_QUALITY = 0.78;
 
+// Bridge height configuration for area textures
+// When bridgeUseSingleHeight is true, bridge textures use a single middle height
+// for the whole deck instead of per-vertex chord interpolation.
+// bridgeTextureHeight specifies the height to use (in meters) when single height mode is enabled.
+const bridgeUseSingleHeight = false;
+const bridgeTextureHeight = 0;
+
 function cesiumModelsVerbose() {
     return typeof window !== 'undefined' && window.globalDebugConfig &&
         window.globalDebugConfig.cesiumModels && window.globalDebugConfig.cesiumModels.verbose;
@@ -167,19 +174,92 @@ class AreaTextureManager {
                     return ol.proj.transform(coord, projection, 'EPSG:4326');
                 };
 
-                // Convert to Cesium Cartesian3 WITHOUT explicit heights: the
-                // polygon is ground-clamped (see entity below), so Cesium drapes
-                // it over the rendered terrain + imagery exactly — no step edges,
-                // no z-fighting, stays aligned with ways on slopes.
-                const cesiumOuter = outerRing.map((coord, idx) => {
-                    try {
-                        const lonLat = toWgs84(coord);
-                        return Cesium.Cartesian3.fromDegrees(lonLat[0], lonLat[1]);
-                    } catch (e) {
-                        console.error(`🎨 Error transforming coordinate`, coord, ':', e.message);
-                        return null;
+                // Bridge detection: a feature tagged bridge=yes/true must be a
+                // single straight ramp from start to end — DEM heights are sampled
+                // only at the two endpoints, and every interior vertex gets a
+                // height by linear interpolation along that chord.
+                const bridgeTags = properties || tagsObj || {};
+                const isBridge =
+                    bridgeTags.bridge === 'yes' || bridgeTags.bridge === true ||
+                    bridgeTags['bridge'] === 'yes' ||
+                    bridgeTags['bridge'] === true ||
+                    (bridgeTags['bridge'] && bridgeTags['bridge'] !== 'no' && bridgeTags['bridge'] !== false);
+
+                // Bridge: single flat height for the whole texture when available.
+                // Bridge: straight-ramp heights from the chord.
+                const demSampler = (function() {
+                    if (window.mapterhornTerrain && window.mapterhornTerrain.getElevation) {
+                        return (lon, lat) => window.mapterhornTerrain.getElevation(lon, lat);
                     }
-                }).filter(c => c !== null);
+                    if (window.terrainManager && window.terrainManager.getElevation) {
+                        return (lon, lat) => window.terrainManager.getElevation(lon, lat);
+                    }
+                    return () => 0;
+                })();
+
+                const cesiumOuter = (function() {
+                    if (!isBridge) {
+                        // Non-bridge: no explicit heights — ground-clamped draping.
+                        return outerRing.map((coord, idx) => {
+                            try {
+                                const lonLat = toWgs84(coord);
+                                return Cesium.Cartesian3.fromDegrees(lonLat[0], lonLat[1]);
+                            } catch (e) {
+                                console.error(`🎨 Error transforming coordinate`, coord, ':', e.message);
+                                return null;
+                            }
+                        }).filter(c => c !== null);
+                    }
+
+                    // Bridge: single flat height for the whole texture when available.
+                    if (window.bridgeUseSingleHeight) {
+                        const h = window.bridgeTextureHeight;
+                        return outerRing.map((coord) => {
+                            try {
+                                const lonLat = toWgs84(coord);
+                                return Cesium.Cartesian3.fromDegrees(lonLat[0], lonLat[1], h);
+                            } catch (e) {
+                                console.error(`🎨 Error transforming bridge coordinate`, coord, ':', e.message);
+                                return null;
+                            }
+                        }).filter(c => c !== null);
+                    }
+
+                    // Bridge: straight-ramp heights from the chord.
+                    const startCoord = outerRing[0];
+                    const endCoord = outerRing[outerRing.length - 1];
+                    const hStart = (demSampler(startCoord[0], startCoord[1]) || 0);
+                    const hEnd = (demSampler(endCoord[0], endCoord[1]) || 0);
+
+                    const dx = endCoord[0] - startCoord[0];
+                    const dy = endCoord[1] - startCoord[1];
+                    const chordDeg = Math.sqrt(dx * dx + dy * dy);
+
+                    return outerRing.map((coord) => {
+                        try {
+                            const lonLat = toWgs84(coord);
+                            let t = 0;
+                            if (chordDeg > 0) {
+                                const cdx = coord[0] - startCoord[0];
+                                const cdy = coord[1] - startCoord[1];
+                                const along = (cdx * dx + cdy * dy) / (chordDeg * chordDeg || 1);
+                                t = Math.max(0, Math.min(1, along));
+                            }
+                            const h = hStart + (hEnd - hStart) * t;
+                            return Cesium.Cartesian3.fromDegrees(lonLat[0], lonLat[1], h);
+                        } catch (e) {
+                            console.error(`🎨 Error transforming bridge coordinate`, coord, ':', e.message);
+                            return null;
+                        }
+                    }).filter(c => c !== null);
+                })();
+
+                // If the bridge deck should follow the bridge's own ramp (straight-ramp)
+                // rather than staying flat, set this global when addRepetitionModels detects
+                // a bridge repetition. The createAreaEntity path uses the SAME indicator.
+                let hasBridgeInclination = !!window.bridgeUseBridgeInclination;
+                const bridgeDeckChordM = hasBridgeInclination && chordDeg > 0 ? chordDeg * 111320 * Math.cos(Cesium.Math.toRadians((endCoord[1] + startCoord[1]) / 2)) : 0;
+                const bridgeDeckInclination = hasBridgeInclination && bridgeDeckChordM > 0 ? Math.atan2(hEnd - hStart, bridgeDeckChordM) : 0;
 
                 if (cesiumOuter.length < 3) {
                     console.warn(`🎨 Polygon ${pIdx} has less than 3 Cartesian points after transformation`);
@@ -225,7 +305,7 @@ class AreaTextureManager {
                         geometryInstances: new Cesium.GeometryInstance({
                             geometry: new Cesium.PolygonGeometry({
                                 polygonHierarchy: hierarchy,
-                                vertexFormat: Cesium.MaterialAppearance.MaterialSupport.TEXTURED.vertexFormat
+                                vertexFormat: vertexFormat
                             }),
                             attributes: {
                                 color: Cesium.ColorGeometryInstanceAttribute.fromColor(Cesium.Color.WHITE)
@@ -233,7 +313,7 @@ class AreaTextureManager {
                         }),
                         appearance: new Cesium.MaterialAppearance({
                             material: new Cesium.Material({
-                                fabric: { type: 'Image', uniforms: { image: imageUrl } }
+                                fabric: { type: 'Image', uniforms: { image: imageUrl, inclination: bridgeDeckInclination } }
                             }),
                             translucent: true
                         }),
