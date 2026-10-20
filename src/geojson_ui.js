@@ -10,6 +10,8 @@ class GeoJSONUI {
         this.fileInput = null;
         this.layersList = null;
         this.statusPanel = null;
+        this.downloadButton = null;
+        this.downloadStatus = null;
     }
 
     /**
@@ -126,6 +128,124 @@ class GeoJSONUI {
             toggleBtn.addEventListener('click', () => {
                 this.toggle();
             });
+        }
+
+        this.downloadButton = document.getElementById('geojson-download-btn');
+        this.downloadStatus = document.getElementById('geojson-download-status');
+        if (this.downloadButton) {
+            this.downloadButton.addEventListener('click', () => {
+                this.downloadVisibleArea();
+            });
+        }
+    }
+
+    /**
+     * Download the current map extent as GeoJSON through the selected Overpass server.
+     */
+    async downloadVisibleArea() {
+        const map = window.map;
+        if (!map || !map.getView()) {
+            this.setDownloadStatus('Map is not ready yet.');
+            return;
+        }
+
+        const view = map.getView();
+        if (view.getZoom() < 20) {
+            this.setDownloadStatus('Zoom to level 20 or higher to download.');
+            return;
+        }
+
+        const size = map.getSize();
+        if (!size || !size[0] || !size[1]) {
+            this.setDownloadStatus('Map extent is unavailable.');
+            return;
+        }
+
+        const config = window.config;
+        if (!config || typeof config.overpassApi !== 'function') {
+            this.setDownloadStatus('Overpass API configuration is unavailable.');
+            return;
+        }
+
+        const savedTimeout = parseInt(localStorage.getItem('overpassTimeoutSeconds') || '0', 10);
+        const configuredTimeout = Number.isInteger(config.overpassTimeoutSeconds) && config.overpassTimeoutSeconds > 0
+            ? config.overpassTimeoutSeconds
+            : 25;
+        const timeoutSeconds = savedTimeout > 0
+            ? savedTimeout
+            : configuredTimeout;
+        const extent = view.calculateExtent(size);
+        const lonLatExtent = ol.proj.transformExtent(extent, view.getProjection(), 'EPSG:4326');
+        const [west, south, east, north] = lonLatExtent;
+        const bbox = `${south},${west},${north},${east}`;
+        const query = `[out:xml][timeout:${timeoutSeconds}];(nwr(${bbox}););out body geom;`;
+        const xhr = new XMLHttpRequest();
+
+        if (this.downloadButton) {
+            this.downloadButton.disabled = true;
+        }
+        this.setDownloadStatus('Requesting the visible area from Overpass...');
+
+        try {
+            const xml = await new Promise((resolve, reject) => {
+                xhr.open('POST', config.overpassApi());
+                xhr.timeout = (timeoutSeconds + 15) * 1000;
+                xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded; charset=UTF-8');
+                xhr.onload = () => {
+                    if (xhr.status < 200 || xhr.status >= 300) {
+                        reject(new Error(`Overpass returned HTTP ${xhr.status}.`));
+                        return;
+                    }
+                    resolve(xhr.responseText);
+                };
+                xhr.onerror = () => reject(new Error('Could not connect to the Overpass API.'));
+                xhr.ontimeout = () => reject(new Error(`Overpass request timed out after ${timeoutSeconds} seconds.`));
+                xhr.onabort = () => reject(new Error('Overpass request was cancelled.'));
+                xhr.send(`data=${encodeURIComponent(query)}`);
+            });
+
+            const xmlDocument = new DOMParser().parseFromString(xml, 'text/xml');
+            if (xmlDocument.getElementsByTagName('parsererror').length) {
+                throw new Error('Overpass returned invalid XML.');
+            }
+            const remark = xmlDocument.getElementsByTagName('remark')[0];
+            if (remark && remark.textContent.trim()) {
+                throw new Error(`Overpass error: ${remark.textContent.trim()}`);
+            }
+
+            const features = new ol.format.OSMXML().readFeatures(xmlDocument, {
+                featureProjection: view.getProjection()
+            });
+            const geoJSON = new ol.format.GeoJSON().writeFeaturesObject(features, {
+                dataProjection: 'EPSG:4326',
+                featureProjection: view.getProjection()
+            });
+            const blob = new Blob([JSON.stringify(geoJSON, null, 2)], {
+                type: 'application/geo+json'
+            });
+            const objectUrl = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            const center = ol.proj.transform(view.getCenter(), view.getProjection(), 'EPSG:4326');
+            link.href = objectUrl;
+            link.download = `overpass_${center[1].toFixed(5)}_${center[0].toFixed(5)}.geojson`;
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+            this.setDownloadStatus(`Downloaded ${features.length} feature(s) as GeoJSON.`);
+        } catch (error) {
+            console.error('📍 Error downloading GeoJSON from Overpass:', error);
+            this.setDownloadStatus(`Download failed: ${error.message}`);
+        } finally {
+            if (this.downloadButton) {
+                this.downloadButton.disabled = false;
+            }
+        }
+    }
+
+    setDownloadStatus(message) {
+        if (this.downloadStatus) {
+            this.downloadStatus.textContent = message;
         }
     }
 
