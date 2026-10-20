@@ -133,6 +133,22 @@ const areaRepetitionConfigs = [
         description: 'Parking areas'
     },
        {
+        tags: ['area:highway=motorway'],
+        model: 'i_asfalt.jpg',
+        config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] },
+        spacing: 1.0, // 5 meter spacing for area-tagged residential streets
+        maxModels: 10000,
+        description: 'Area-tagged residential street areas'
+    },
+       {
+        tags: ['area:highway=motorway_link'],
+        model: 'i_asfalt.jpg',
+        config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] },
+        spacing: 1.0, // 5 meter spacing for area-tagged residential streets
+        maxModels: 10000,
+        description: 'Area-tagged residential street areas'
+    },
+       {
         tags: ['area:highway=residential'],
         model: 'i_asfalt.jpg',
         config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] },

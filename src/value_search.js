@@ -1826,6 +1826,15 @@ function initValueSearch() {
                     <option value="5">https://overpass.osm.ch/api/interpreter</option>
                     <option value="6">https://z.overpass-api.de/api/interpreter</option>
                 </select>
+                <label for="overpass-timeout-select" style="margin-left: 15px;">${window.getTranslation ? window.getTranslation('overpassTimeout') : 'Overpass Timeout'}:</label>
+                <select id="overpass-timeout-select" style="margin-left: 5px; padding: 2px;">
+                    <option value="60">60 s</option>
+                    <option value="90">90 s</option>
+                    <option value="120">120 s</option>
+                    <option value="150">150 s</option>
+                    <option value="180">180 s</option>
+                    <option value="240">240 s</option>
+                </select>
             </div>
         `;
 
@@ -1842,18 +1851,46 @@ function initValueSearch() {
         }
     } else {
         console.log('🔍 DEBUG: Server selector already exists, skipping creation');
-    }
+    }        // Set current server from localStorage (always update in case it changed)
+        const currentServerIndex = parseInt(localStorage.getItem('overpassServerIndex') || '0');
+        $('#overpass-server-select').val(currentServerIndex.toString());
 
-    // Set current server from localStorage (always update in case it changed)
-    const currentServerIndex = parseInt(localStorage.getItem('overpassServerIndex') || '0');
-    $('#overpass-server-select').val(currentServerIndex.toString());
+        // Set current Overpass timeout from localStorage (or config default)
+        const savedTimeout = parseInt(localStorage.getItem('overpassTimeoutSeconds') || '0', 10);
+        const defaultTimeout = (window.config && typeof window.config.overpassTimeoutSeconds === 'number')
+            ? window.config.overpassTimeoutSeconds : 25;
+        const effectiveTimeout = (savedTimeout > 0) ? savedTimeout : defaultTimeout;
+        $('#overpass-timeout-select').val(effectiveTimeout.toString());
 
-    // Handle server selection change (only if selector exists)
-    $('#overpass-server-select').off('change').on('change', function() {
-        const selectedIndex = parseInt($(this).val());
-        localStorage.setItem('overpassServerIndex', selectedIndex.toString());
-        console.log('Overpass server changed to:', config.overpassApi());
-    });
+        // Handle server selection change (only if selector exists)
+        $('#overpass-server-select').off('change').on('change', function() {
+            const selectedIndex = parseInt($(this).val());
+            localStorage.setItem('overpassServerIndex', selectedIndex.toString());
+            console.log('Overpass server changed to:', config.overpassApi());
+        });
+
+        // Handle Overpass timeout selection change
+        $('#overpass-timeout-select').off('change').on('change', function() {
+            const timeoutSeconds = parseInt($(this).val(), 10);
+            if (!isNaN(timeoutSeconds) && timeoutSeconds > 0) {
+                localStorage.setItem('overpassTimeoutSeconds', timeoutSeconds.toString());
+                console.log('Overpass timeout changed to:', timeoutSeconds, 's');
+                // Inform the app if it exposes a setter; the actual query path in
+                // index.js reads config.overpassTimeoutSeconds on each request.
+                if (typeof window.setOverpassTimeout === 'function') {
+                    try { window.setOverpassTimeout(timeoutSeconds); } catch (e) { /* ignore */ }
+                }
+            }
+        });
+
+        // Sync the app-side config default with the selector default when it changes
+        try {
+            if (window.config && typeof window.config.overpassTimeoutSeconds !== 'undefined') {
+                if (typeof window.setOverpassTimeout === 'function') {
+                    window.setOverpassTimeout(window.config.overpassTimeoutSeconds);
+                }
+            }
+        } catch (e) { /* ignore */ }
 
     const searchInput = $('#value-search');
     const resultsContainer = $('#value-search-dropdown');

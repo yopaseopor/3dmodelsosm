@@ -71,6 +71,9 @@ var config = {
 		'https://overpass.osm.ch/api/interpreter',
 		'https://z.overpass-api.de/api/interpreter'
 	],
+	// Default Overpass query timeout in seconds. The UI selector lets the user
+	// override this per session; unset/null falls back to 25 (the historic value).
+	overpassTimeoutSeconds: 25,
 	overpassApi: function(){
 		// Try to get the server selected by the user from localStorage, or use the first one
 		var servers = this._overpassServers;

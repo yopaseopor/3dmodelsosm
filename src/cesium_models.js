@@ -138,6 +138,53 @@ class AreaTextureManager {
 
             if (cesiumModelsVerbose()) console.log(`🎨 Processing ${polygonSets.length} polygon set(s)`);
 
+            const bridgeTag = tagsObj.bridge;
+            const bridgeValue = typeof bridgeTag === 'string' ? bridgeTag.trim().toLowerCase() : '';
+            const isBridgeTexture = bridgeTag === true || bridgeTag === 1 ||
+                (bridgeValue !== '' && !['no', 'false', '0'].includes(bridgeValue));
+            const toWgs84 = (coord) => {
+                if (coord[0] >= -180 && coord[0] <= 180 && coord[1] >= -90 && coord[1] <= 90) {
+                    return coord;
+                }
+                return ol.proj.transform(coord, projection, 'EPSG:4326');
+            };
+            let bridgeSurfaceHeight = null;
+            if (isBridgeTexture) {
+                bridgeSurfaceHeight = feature.get('bridgeRefHeight');
+                if (bridgeSurfaceHeight === undefined || bridgeSurfaceHeight === null || !isFinite(bridgeSurfaceHeight)) {
+                    const firstOuterRing = polygonSets[0] && normalizeRing(polygonSets[0][0]);
+                    if (!firstOuterRing || firstOuterRing.length === 0) {
+                        throw new Error('Bridge texture has no outer-ring coordinates');
+                    }
+                    const referencePosition = firstOuterRing.reduce((sum, coord) => {
+                        const lonLat = toWgs84(coord);
+                        sum[0] += lonLat[0];
+                        sum[1] += lonLat[1];
+                        return sum;
+                    }, [0, 0]).map(value => value / firstOuterRing.length);
+                    if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
+                        window.mapterhornTerrain.warmUp(referencePosition[0], referencePosition[1]);
+                    }
+                    const localHeight = window.terrainManager && window.terrainManager.getElevation
+                        ? window.terrainManager.getElevation(referencePosition[0], referencePosition[1])
+                        : null;
+                    const terrainHeight = window.mapterhornTerrain && window.mapterhornTerrain.getElevation
+                        ? window.mapterhornTerrain.getElevation(referencePosition[0], referencePosition[1])
+                        : null;
+                    bridgeSurfaceHeight = localHeight !== null && localHeight !== undefined && isFinite(localHeight)
+                        ? localHeight
+                        : (terrainHeight !== null && terrainHeight !== undefined && isFinite(terrainHeight)
+                            ? terrainHeight
+                            : 0);
+                    feature.set('bridgeRefHeight', bridgeSurfaceHeight);
+                    feature.set('bridgeRefPosition', referencePosition);
+                }
+            } else if (modelConfig &&
+                typeof modelConfig.underBridgeSurfaceHeight === 'number' &&
+                isFinite(modelConfig.underBridgeSurfaceHeight)) {
+                bridgeSurfaceHeight = modelConfig.underBridgeSurfaceHeight;
+            }
+
             const entities = [];
 
             for (let pIdx = 0; pIdx < polygonSets.length; pIdx++) {
@@ -160,21 +207,15 @@ class AreaTextureManager {
                     outerRing = outerRing.concat([outerRing[0]]);
                 }
 
-                const toWgs84 = (coord) => {
-                    if (coord[0] >= -180 && coord[0] <= 180 && coord[1] >= -90 && coord[1] <= 90) {
-                        return coord; // Already WGS84
-                    }
-                    return ol.proj.transform(coord, projection, 'EPSG:4326');
-                };
-
-                // Convert to Cesium Cartesian3 WITHOUT explicit heights: the
-                // polygon is ground-clamped (see entity below), so Cesium drapes
-                // it over the rendered terrain + imagery exactly — no step edges,
-                // no z-fighting, stays aligned with ways on slopes.
+                // Ordinary surfaces follow the terrain. A bridge surface uses
+                // one explicit height for every vertex so it cannot slope with
+                // the mountain beneath it.
                 const cesiumOuter = outerRing.map((coord, idx) => {
                     try {
                         const lonLat = toWgs84(coord);
-                        return Cesium.Cartesian3.fromDegrees(lonLat[0], lonLat[1]);
+                        return bridgeSurfaceHeight === null
+                            ? Cesium.Cartesian3.fromDegrees(lonLat[0], lonLat[1])
+                            : Cesium.Cartesian3.fromDegrees(lonLat[0], lonLat[1], bridgeSurfaceHeight);
                     } catch (e) {
                         console.error(`🎨 Error transforming coordinate`, coord, ':', e.message);
                         return null;
@@ -198,7 +239,9 @@ class AreaTextureManager {
                         const holePositions = closedHole.map((coord, hi) => {
                             try {
                                 const lonLat = toWgs84(coord);
-                                return Cesium.Cartesian3.fromDegrees(lonLat[0], lonLat[1]);
+                                return bridgeSurfaceHeight === null
+                                    ? Cesium.Cartesian3.fromDegrees(lonLat[0], lonLat[1])
+                                    : Cesium.Cartesian3.fromDegrees(lonLat[0], lonLat[1], bridgeSurfaceHeight);
                             } catch (e) {
                                 console.error(`🎨 Error transforming hole coordinate`, coord, ':', e.message);
                                 return null;
@@ -218,14 +261,19 @@ class AreaTextureManager {
                 );
                 const textureRotation = this.calculateTextureRotation(polygonCoords, imageUrl, tagsObj);
 
-                // Create GroundPrimitive — same layer as GLTF models, drapes over DEM terrain
-                // No separate data source needed; primitives go into scene.primitives.
+                // Use a regular primitive for bridge polygons at their fixed
+                // height; GroundPrimitive remains appropriate for terrain-draped
+                // surfaces beneath bridges and elsewhere.
                 try {
-                    const gpTexture = new Cesium.GroundPrimitive({
+                    const texturePrimitive = bridgeSurfaceHeight === null
+                        ? Cesium.GroundPrimitive
+                        : Cesium.Primitive;
+                    const gpTexture = new texturePrimitive({
                         geometryInstances: new Cesium.GeometryInstance({
                             geometry: new Cesium.PolygonGeometry({
                                 polygonHierarchy: hierarchy,
-                                vertexFormat: Cesium.MaterialAppearance.MaterialSupport.TEXTURED.vertexFormat
+                                vertexFormat: Cesium.MaterialAppearance.MaterialSupport.TEXTURED.vertexFormat,
+                                perPositionHeight: bridgeSurfaceHeight !== null
                             }),
                             attributes: {
                                 color: Cesium.ColorGeometryInstanceAttribute.fromColor(Cesium.Color.WHITE)

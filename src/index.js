@@ -603,10 +603,22 @@ $(function () {
 			var vectorSource = new ol.source.Vector({ 
 			format: new ol.format.OSMXML(),
 			loader: function (extent, resolution, projection) {
+				// Read timeout from localStorage first (set by timeout selector), fall back to config
+				var savedTimeout = parseInt(localStorage.getItem('overpassTimeoutSeconds') || '0', 10);
+				var chosenTimeout = (savedTimeout > 0) ? savedTimeout : 
+					(typeof config.overpassTimeoutSeconds === 'number' && isFinite(config.overpassTimeoutSeconds)) ? config.overpassTimeoutSeconds : 25;
+				
 				loading.show();
+				
+				// Update config so it persists for this session
+				if (window.config) {
+					window.config.overpassTimeoutSeconds = chosenTimeout;
+				}
+				
 				var me = this;
 				var epsg4326Extent = ol.proj.transformExtent(extent, projection, 'EPSG:4326');
-				var query = '[out:xml][timeout:25];' + overlay['query']; // Added timeout parameter
+				var timeoutSeconds = chosenTimeout;
+				var query = '[out:xml][timeout:' + timeoutSeconds + '];' + overlay['query']; // Timeout from config
 				query = query.replace(/{{bbox}}/g, epsg4326Extent[1] + ',' + epsg4326Extent[0] + ',' + epsg4326Extent[3] + ',' + epsg4326Extent[2]);
 
 				var client = new XMLHttpRequest();
@@ -2261,6 +2273,30 @@ if (routeLayers.length > 0) {
                 window.is3d = true; // global flag used by nav pad, models and overlays
                 console.log('Updated is3d state to true');
 
+                // CRITICAL: Disable bbox strategy on all Overpass overlay layers to prevent
+                // automatic refetching when camera moves in 3D mode. User queries via
+                // buttons/selectors still work because they create new overlays without this restriction.
+                if (window.map && config.layers) {
+                    config.layers.forEach(function(layer) {
+                        if (layer.getLayers && layer.get('type') === 'overlay') {
+                            layer.getLayers().forEach(function(overlayLayer) {
+                                if (overlayLayer.getSource && overlayLayer.getSource().getStrategy) {
+                                    const currentStrategy = overlayLayer.getSource().getStrategy();
+                                    // Only change if it's using bbox strategy
+                                    if (currentStrategy === ol.loadingstrategy.bbox) {
+                                        console.log('🔒 Disabling bbox strategy for overlay to prevent auto-refetch in 3D');
+                                        overlayLayer.getSource().setStrategy(ol.loadingstrategy.none);
+                                        // Store reference to restore later
+                                        if (!overlayLayer._originalStrategy) {
+                                            overlayLayer._originalStrategy = currentStrategy;
+                                        }
+                                    }
+                                }
+                            });
+                        }
+                    });
+                }
+
                 // Dispatch event to notify buildings module that 3D mode is initialized
                 window.dispatchEvent(new CustomEvent('ol3dInitialized', {
                     detail: { ol3d: ol3d }
@@ -2280,6 +2316,26 @@ if (routeLayers.length > 0) {
                 is3d = false;
                 window.is3d = false;
                 console.log('Updated is3d state to false');
+
+                // CRITICAL: Restore bbox strategy on all Overpass overlay layers that were
+                // disabled when entering 3D mode. This allows them to refetch normally in 2D.
+                if (window.map && config.layers) {
+                    config.layers.forEach(function(layer) {
+                        if (layer.getLayers && layer.get('type') === 'overlay') {
+                            layer.getLayers().forEach(function(overlayLayer) {
+                                if (overlayLayer.getSource && overlayLayer.getSource().getStrategy && overlayLayer._originalStrategy) {
+                                    const currentStrategy = overlayLayer.getSource().getStrategy();
+                                    // Only restore if currently using 'none' and had original bbox strategy
+                                    if (currentStrategy === ol.loadingstrategy.none && overlayLayer._originalStrategy === ol.loadingstrategy.bbox) {
+                                        console.log('🔓 Restoring bbox strategy for overlay after exiting 3D');
+                                        overlayLayer.getSource().setStrategy(ol.loadingstrategy.bbox);
+                                        overlayLayer._originalStrategy = null;
+                                    }
+                                }
+                            });
+                        }
+                    });
+                }
 
                 // Dispatch event to notify buildings module that 3D mode is destroyed
                 window.dispatchEvent(new CustomEvent('ol3dDestroyed'));

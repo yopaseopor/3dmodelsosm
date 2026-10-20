@@ -39,6 +39,18 @@ const highwayRepetitionConfig = {
         maxModels: 800 // Reduced from 1000
     },
     
+    motorway: {
+        interval: 0.20, // meters between models for primary roads
+        sideOffset: 0, // directly on the primary road line
+        maxModels: 3000 // Reduced from 2000
+    },
+    
+    motorway_link: {
+        interval: 0.20, // meters between models for primary roads
+        sideOffset: 0, // directly on the primary road line
+        maxModels: 3000 // Reduced from 2000
+    },
+    
     primary: {
         interval: 0.20, // meters between models for primary roads
         sideOffset: 0, // directly on the primary road line
