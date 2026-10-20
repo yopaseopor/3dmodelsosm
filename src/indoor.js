@@ -928,6 +928,9 @@
                 }
             }
         } catch (e) { /* area textures not present */ }
+        if (window.modelRenderer && typeof window.modelRenderer.setUndergroundVisibility === 'function') {
+            window.modelRenderer.setUndergroundVisibility(undergroundEnabled);
+        }
     }
 
     /**

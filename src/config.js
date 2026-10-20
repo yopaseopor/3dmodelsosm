@@ -633,6 +633,57 @@ geojson: './src/vng5_area.geojson',
         return style;
 /*   cerrar */								}
 
+/*@@ fin-inicio de copia */			},
+/*   abrir */							{
+    group: 'Geojson',
+    title: 'ES_CAT_VNG Ponts C-15',
+geojson: './src/tunnelbridgemotorway.geojson',
+    iconSrc: imgSrc + 'icones/maxspeed_empty.svg',
+    iconStyle: 'background-color:rgba(255,255,255,0.4)',
+    style: function (feature) {
+        var key_regex = /^name$/;
+        var name_key = feature.getKeys().filter(function(t){return t.match(key_regex)}).pop() || "name";
+        var name = feature.get(name_key) || '';
+        var fill = new ol.style.Fill({
+            color: 'rgba(117,63,79,0.4)'
+        });
+        var stroke = new ol.style.Stroke({
+            color: 'rgba(117,63,79,1)',
+            width: 1
+        });
+        // Get the geometry type
+        var geom = feature.getGeometry();
+        var isPolygon = geom.getType() === 'Polygon' || geom.getType() === 'MultiPolygon';
+        
+        var style = new ol.style.Style({
+            image: new ol.style.Icon({
+                src: imgSrc + 'icones/maxspeed_empty.svg',
+                scale: 0.03
+            }),
+            text: new ol.style.Text({
+                text: name,
+             			
+                fill: new ol.style.Fill({
+                    color: 'rgba(0,0,0,1)'
+                }),
+                stroke: new ol.style.Stroke({
+                    color: 'rgba(255,255,255,0.7)',
+                    width: 2
+                }),
+                // For polygons, we'll use a different placement strategy
+                placement: isPolygon ? 'point' : 'point',
+				textAlign: 'center',
+                textBaseline: 'bottom',
+                offsetY: isPolygon ? -15 : 0, // Move text up for polygons
+                overflow: true // Allow text to be rendered outside the view
+            }),
+            fill: fill,
+            stroke: stroke
+        });
+        
+        return style;
+/*   cerrar */								}
+
 },
 /*   abrir */							{
     group: 'Geojson',
@@ -739,7 +790,7 @@ geojson: './src/pedrola.geojson',
 /*   abrir */							{
     group: 'Geojson',
     title: 'ES_CAT_StAnBa Sant Andreu de la Barca',
-geojson: './src/catalunya_sab.geojson',
+geojson: './src/sab_catalunya.geojson',
     iconSrc: imgSrc + 'icones/maxspeed_empty.svg',
     iconStyle: 'background-color:rgba(255,255,255,0.4)',
     style: function (feature) {

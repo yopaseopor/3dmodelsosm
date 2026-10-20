@@ -11,6 +11,19 @@ function cesiumModelsVerbose() {
         window.globalDebugConfig.cesiumModels && window.globalDebugConfig.cesiumModels.verbose;
 }
 
+function isUndergroundAreaTexture(tagsObj) {
+    const tunnel = String(tagsObj && tagsObj.tunnel || '').trim().toLowerCase();
+    const layer = parseFloat(String(tagsObj && tagsObj.layer || '').trim().replace(',', '.'));
+    return tunnel === 'yes' || (isFinite(layer) && layer === -1);
+}
+
+function shouldShowAreaTexture(tagsObj) {
+    const underground = !!(window.indoor &&
+        typeof window.indoor.isUndergroundEnabled === 'function' &&
+        window.indoor.isUndergroundEnabled());
+    return isUndergroundAreaTexture(tagsObj) === underground;
+}
+
 // Area texture management
 class AreaTextureManager {
     constructor() {
@@ -140,15 +153,20 @@ class AreaTextureManager {
 
             const bridgeTag = tagsObj.bridge;
             const bridgeValue = typeof bridgeTag === 'string' ? bridgeTag.trim().toLowerCase() : '';
-            const isBridgeTexture = bridgeTag === true || bridgeTag === 1 ||
-                (bridgeValue !== '' && !['no', 'false', '0'].includes(bridgeValue));
+            const isBridgeTexture = !(modelConfig && modelConfig.tunnelSurface) &&
+                (bridgeTag === true || bridgeTag === 1 ||
+                    (bridgeValue !== '' && !['no', 'false', '0'].includes(bridgeValue)));
             const toWgs84 = (coord) => {
                 if (coord[0] >= -180 && coord[0] <= 180 && coord[1] >= -90 && coord[1] <= 90) {
                     return coord;
                 }
                 return ol.proj.transform(coord, projection, 'EPSG:4326');
             };
-            let bridgeSurfaceHeight = null;
+            let bridgeSurfaceHeight = modelConfig &&
+                typeof modelConfig.fixedSurfaceHeight === 'number' &&
+                isFinite(modelConfig.fixedSurfaceHeight)
+                ? modelConfig.fixedSurfaceHeight
+                : null;
             if (isBridgeTexture) {
                 bridgeSurfaceHeight = feature.get('bridgeRefHeight');
                 if (bridgeSurfaceHeight === undefined || bridgeSurfaceHeight === null || !isFinite(bridgeSurfaceHeight)) {
@@ -287,6 +305,7 @@ class AreaTextureManager {
                         }),
                         asynchronous: false
                     });
+                    gpTexture.show = shouldShowAreaTexture(tagsObj);
                     // Add directly to scene primitives — same layer as 3D models
                     if (window.ol3d && window.ol3d.getCesiumScene) {
                         const scene = window.ol3d.getCesiumScene();

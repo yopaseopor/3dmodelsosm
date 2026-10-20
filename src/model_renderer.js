@@ -71,6 +71,28 @@ function parseOsNumber(value) {
     return match ? parseFloat(match[1]) : NaN;
 }
 
+function isTunnelFeature(feature) {
+    if (!feature || typeof feature.get !== 'function') return false;
+    const tunnel = String(feature.get('tunnel') || '').trim().toLowerCase();
+    return tunnel === 'yes' && parseOsNumber(feature.get('layer')) === -1;
+}
+
+function isUndergroundFeature(feature) {
+    if (!feature || typeof feature.get !== 'function') return false;
+    const tunnel = String(feature.get('tunnel') || '').trim().toLowerCase();
+    return tunnel === 'yes' || parseOsNumber(feature.get('layer')) === -1;
+}
+
+function getTunnelElevation() {
+    // Treat OSM layer -1 as one storey below a flat, DEM-independent datum.
+    return -3;
+}
+
+function isUndergroundViewEnabled() {
+    return !!(window.indoor && typeof window.indoor.isUndergroundEnabled === 'function' &&
+        window.indoor.isUndergroundEnabled());
+}
+
 /**
  * Check whether a feature has a positive OSM bridge value.
  * @param {ol.Feature} feature - OpenLayers feature with OSM tags as properties
@@ -728,7 +750,30 @@ window.modelRenderer = {
         const previous = this.loadedModels.get(key);
         this._trackLive(previous ? (previous.kind || 'model') : null, entry.kind || 'model');
         this.loadedModels.set(key, entry);
+        this.setUndergroundEntryVisibility(entry, isUndergroundViewEnabled());
         return entry;
+    },
+
+    setUndergroundEntryVisibility: function(entry, undergroundVisible) {
+        if (!entry || !entry.feature) return;
+        const isUnderground = isUndergroundFeature(entry.feature);
+        const items = entry.kind === 'texture'
+            ? (Array.isArray(entry.primitives) ? entry.primitives : [entry.primitives])
+            : [entry.model];
+        items.forEach(function(item) {
+            if (item) item.show = isUnderground === !!undergroundVisible;
+        });
+    },
+
+    setUndergroundVisibility: function(undergroundVisible) {
+        if (!this.loadedModels) return;
+        this.loadedModels.forEach(function(entry) {
+            this.setUndergroundEntryVisibility(entry, undergroundVisible);
+        }, this);
+        const scene = window.ol3d && window.ol3d.getCesiumScene
+            ? window.ol3d.getCesiumScene()
+            : null;
+        if (scene && scene.requestRender) scene.requestRender();
     },
 
     /** Stop counting `key` and forget it. Does NOT destroy the primitive. */
@@ -1279,14 +1324,17 @@ window.modelRenderer = {
         //   they do not undulate along the way.
         // - Non-bridge ways (including everything UNDER a bridge): stay at
         //   ground level per-position DEM height, independently of the bridge.
-        const isBridge = isBridgeFeature(feature);
-        const bridgeAbove = isBridge ? null : findBridgeAboveFeature(feature, lonLat);
+        const isTunnel = isTunnelFeature(feature);
+        const isBridge = !isTunnel && isBridgeFeature(feature);
+        const bridgeAbove = (isBridge || isTunnel) ? null : findBridgeAboveFeature(feature, lonLat);
         const underBridge = bridgeAbove
             ? getUnderBridgeSurface(feature, bridgeAbove, lonLat)
             : null;
 
         let terrainElevation;
-        if (isBridge) {
+        if (isTunnel) {
+            terrainElevation = getTunnelElevation();
+        } else if (isBridge) {
             terrainElevation = getBridgeReferenceHeight(feature, lonLat);
         } else if (underBridge) {
             terrainElevation = underBridge.height;
@@ -1306,7 +1354,7 @@ window.modelRenderer = {
         
         // Tilt the model to follow the terrain slope so it stands correctly
         // inclined on mountains (MapTerhorn DEM surface normal)
-        if (!isBridge && !underBridge && window.mapterhornTerrain && window.mapterhornTerrain.applySlopeTilt) {
+        if (!isTunnel && !isBridge && !underBridge && window.mapterhornTerrain && window.mapterhornTerrain.applySlopeTilt) {
             try {
                 modelMatrix = window.mapterhornTerrain.applySlopeTilt(modelMatrix, lonLat[0], lonLat[1]);
             } catch (e) { /* no DEM data yet */ }
@@ -1365,6 +1413,7 @@ window.modelRenderer = {
             lon: lonLat[0],
             lat: lonLat[1],
             elevation: terrainElevation,
+            isTunnel: isTunnel,
             distance: distance,
             lodLevel: lodLevel,
             modelUrl: modelUrl,
@@ -1486,7 +1535,9 @@ window.modelRenderer = {
                 let surfaceHeightOffset = 0;
                 let underBridgeKey = null;
                 let underBridgeFeature = null;
-                if (isBridgeFeature(feature) && centre) {
+                if (isTunnelFeature(feature)) {
+                    flatSurfaceHeight = getTunnelElevation();
+                } else if (isBridgeFeature(feature) && centre) {
                     if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
                         try { window.mapterhornTerrain.warmUp(centre[0], centre[1]); } catch (e) { /* no DEM yet */ }
                     }
@@ -1525,8 +1576,10 @@ window.modelRenderer = {
                         spacing: spacing,
                         rotation: recalculatedRotation,
                         scale: repModel.scale,
-                        bridgeSurfaceHeight: flatSurfaceHeight,
-                        bridgeFeature: isBridgeFeature(feature) ? feature : null,
+                        bridgeSurfaceHeight: isTunnelFeature(feature) ? null : flatSurfaceHeight,
+                        fixedSurfaceHeight: isTunnelFeature(feature) ? getTunnelElevation() : null,
+                        undergroundFeature: feature,
+                        bridgeFeature: !isTunnelFeature(feature) && isBridgeFeature(feature) ? feature : null,
                         underBridgeFeature: underBridgeFeature,
                         underBridgeKey: underBridgeKey,
                         surfaceHeightOffset: surfaceHeightOffset,
@@ -1542,9 +1595,10 @@ window.modelRenderer = {
                         kind: 'texture',
                         primitives: created,
                         feature: feature,
+                        isTunnel: isTunnelFeature(feature),
                         surfaceFeature: underBridgeFeature,
                         sessionId: this._session3dId,
-                        bridgeSurfaceHeight: flatSurfaceHeight,
+                        bridgeSurfaceHeight: isTunnelFeature(feature) ? null : flatSurfaceHeight,
                         isUnderBridge: underBridgeKey !== null,
                         underBridgeKey: underBridgeKey,
                         surfaceHeightOffset: surfaceHeightOffset,
@@ -1616,8 +1670,9 @@ window.modelRenderer = {
         }
         
         // Keep bridge repetitions level with one sampled terrain height.
-        const repIsBridge = isBridgeFeature(feature);
-        const bridgeAbove = repIsBridge ? null : findBridgeAboveFeature(feature, repLonLat);
+        const repIsTunnel = isTunnelFeature(feature);
+        const repIsBridge = !repIsTunnel && isBridgeFeature(feature);
+        const bridgeAbove = (repIsBridge || repIsTunnel) ? null : findBridgeAboveFeature(feature, repLonLat);
         const underBridge = bridgeAbove
             ? getUnderBridgeSurface(feature, bridgeAbove, repLonLat)
             : null;
@@ -1628,7 +1683,7 @@ window.modelRenderer = {
 
         // Prime the DEM tile before sampling (see addModelForFeature): without it
         // repetitions placed early in a session are built at elevation 0.
-        if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
+        if (!repIsTunnel && window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
             try { window.mapterhornTerrain.warmUp(repLonLat[0], repLonLat[1]); } catch (e) { /* no DEM yet */ }
         }
         
@@ -1637,7 +1692,9 @@ window.modelRenderer = {
         // (no undulation down mountains). Non-bridge ways sample per-position
         // (ground level) and must NOT climb up to meet the bridge.
         let repTerrainElevation;
-        if (repIsBridge) {
+        if (repIsTunnel) {
+            repTerrainElevation = getTunnelElevation();
+        } else if (repIsBridge) {
             repTerrainElevation = getBridgeReferenceHeight(feature, repLonLat);
         } else if (underBridge) {
             repTerrainElevation = underBridge.height;
@@ -1654,7 +1711,7 @@ window.modelRenderer = {
         );
 
         // Follow terrain slope so poles/fences stand perpendicular to the ground
-        if (!repIsBridge && !underBridge && window.mapterhornTerrain && window.mapterhornTerrain.applySlopeTilt) {
+        if (!repIsTunnel && !repIsBridge && !underBridge && window.mapterhornTerrain && window.mapterhornTerrain.applySlopeTilt) {
             try {
                 repModelMatrix = window.mapterhornTerrain.applySlopeTilt(repModelMatrix, repLonLat[0], repLonLat[1]);
             } catch (e) { /* no DEM data yet */ }
@@ -1735,6 +1792,7 @@ window.modelRenderer = {
             distance: repDistance,
             lodLevel: 'rep',
             modelUrl: repModel.uri,
+            isTunnel: repIsTunnel,
             lastUpdate: Date.now()
         });
         
@@ -1771,7 +1829,8 @@ window.modelRenderer = {
         // regardless of where it was, and it could push the scene past the
         // budget no matter how many were already resident.
         const areaCentre = areaGeometryCentreLonLat(geometry);
-        const bridgeAbove = isBridgeFeature(feature) || !areaCentre
+        const isTunnel = isTunnelFeature(feature);
+        const bridgeAbove = isTunnel || isBridgeFeature(feature) || !areaCentre
             ? null
             : findBridgeAboveFeature(feature, areaCentre);
         const underBridgeFeature = bridgeAbove
@@ -1813,10 +1872,12 @@ window.modelRenderer = {
 
         // Use the area texture manager to create the entity
         try {
-            const areaEntity = window.areaTextureManager.createAreaEntity(
-                feature,
-                model.uri, // This is the texture filename
-                underBridge
+            const textureModel = isTunnel
+                ? Object.assign({}, model, {
+                    fixedSurfaceHeight: getTunnelElevation(),
+                    tunnelSurface: true
+                })
+                : (underBridge
                     ? Object.assign({}, model, {
                         underBridgeSurfaceHeight: underBridge.height + underBridgeHeightOffset,
                         underBridgeSurfacePosition: underBridge.position,
@@ -1824,7 +1885,11 @@ window.modelRenderer = {
                         underBridgeSurfaceHeightOffset: underBridgeHeightOffset,
                         underBridgeSurfaceFeature: underBridgeFeature
                     })
-                    : model, // Pass the model config
+                    : model);
+            const areaEntity = window.areaTextureManager.createAreaEntity(
+                feature,
+                model.uri, // This is the texture filename
+                textureModel,
                 tagsObj,
                 properties
             );
@@ -1845,6 +1910,7 @@ window.modelRenderer = {
                         kind: 'texture',
                         primitives: areaEntity,
                         feature: feature,
+                        isTunnel: isTunnel,
                         surfaceFeature: underBridgeFeature,
                         sessionId: this._session3dId,
                         bridgeSurfaceHeight: isBridgeFeature(feature)
@@ -1904,6 +1970,9 @@ window.modelRenderer = {
         let bridgeSurfaceHeight = repModel && isFinite(repModel.bridgeSurfaceHeight)
             ? repModel.bridgeSurfaceHeight
             : null;
+        if (repModel && isFinite(repModel.fixedSurfaceHeight)) {
+            bridgeSurfaceHeight = repModel.fixedSurfaceHeight;
+        }
         const bridgeFeature = repModel && repModel.bridgeFeature;
         const createPolygonHierarchy = (surfaceHeight) => {
             const positions = polygonCoordinates.map(coord =>
@@ -2096,6 +2165,9 @@ window.modelRenderer = {
                             }),
                             asynchronous: false
                         });
+                        if (repModel && repModel.undergroundFeature) {
+                            gpRot.show = isUndergroundFeature(repModel.undergroundFeature) === isUndergroundViewEnabled();
+                        }
                         _sceneRT.primitives.add(gpRot);
                         created.push(gpRot);
                         if (modelRendererTexLog()) console.log(`🖼️ Created GroundPrimitive with rotated texture`);
@@ -2127,6 +2199,9 @@ window.modelRenderer = {
                             }),
                             asynchronous: false
                         });
+                        if (repModel && repModel.undergroundFeature) {
+                            gpNr.show = isUndergroundFeature(repModel.undergroundFeature) === isUndergroundViewEnabled();
+                        }
                         _sceneNR.primitives.add(gpNr);
                         created.push(gpNr);
                         if (modelRendererTexLog()) console.log(`🖼️ Created GroundPrimitive with original texture`);
@@ -3149,6 +3224,7 @@ window.modelRenderer = {
                 // Skip entries from older 3D sessions — their primitives were
                 // destroyed with the previous scene and must not be touched.
                 if (entry.sessionId !== undefined && entry.sessionId !== this._session3dId) return;
+                if (isTunnelFeature(entry.feature)) return;
                 if (entry.kind === 'texture') {
                     if (typeof entry.bridgeSurfaceHeight !== 'number' ||
                         !isFinite(entry.bridgeSurfaceHeight) || !entry.surfacePosition) return;
