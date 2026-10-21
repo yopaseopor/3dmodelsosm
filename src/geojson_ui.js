@@ -12,6 +12,9 @@ class GeoJSONUI {
         this.statusPanel = null;
         this.downloadButton = null;
         this.downloadStatus = null;
+        this.downloadResult = null;
+        this.downloadObjectUrl = null;
+        this.downloadFile = null;
     }
 
     /**
@@ -132,11 +135,18 @@ class GeoJSONUI {
 
         this.downloadButton = document.getElementById('geojson-download-btn');
         this.downloadStatus = document.getElementById('geojson-download-status');
+        this.downloadResult = document.getElementById('geojson-download-result');
         if (this.downloadButton) {
             this.downloadButton.addEventListener('click', () => {
                 this.downloadVisibleArea();
             });
         }
+
+        window.addEventListener('beforeunload', () => {
+            if (this.downloadObjectUrl) {
+                URL.revokeObjectURL(this.downloadObjectUrl);
+            }
+        });
     }
 
     /**
@@ -223,16 +233,15 @@ class GeoJSONUI {
             const blob = new Blob([JSON.stringify(geoJSON, null, 2)], {
                 type: 'application/geo+json'
             });
-            const objectUrl = URL.createObjectURL(blob);
-            const link = document.createElement('a');
             const center = ol.proj.transform(view.getCenter(), view.getProjection(), 'EPSG:4326');
-            link.href = objectUrl;
-            link.download = `overpass_${center[1].toFixed(5)}_${center[0].toFixed(5)}.geojson`;
-            document.body.appendChild(link);
-            link.click();
-            link.remove();
-            window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
-            this.setDownloadStatus(`Downloaded ${features.length} feature(s) as GeoJSON.`);
+            const filename = `overpass_${center[1].toFixed(5)}_${center[0].toFixed(5)}.geojson`;
+            if (this.downloadObjectUrl) {
+                URL.revokeObjectURL(this.downloadObjectUrl);
+            }
+            this.downloadFile = new File([blob], filename, { type: 'application/geo+json' });
+            this.downloadObjectUrl = URL.createObjectURL(this.downloadFile);
+            this.showDownloadActions(filename);
+            this.setDownloadStatus(`GeoJSON ready: ${features.length} feature(s). Choose Save or Share.`);
         } catch (error) {
             console.error('📍 Error downloading GeoJSON from Overpass:', error);
             this.setDownloadStatus(`Download failed: ${error.message}`);
@@ -246,6 +255,42 @@ class GeoJSONUI {
     setDownloadStatus(message) {
         if (this.downloadStatus) {
             this.downloadStatus.textContent = message;
+        }
+    }
+
+    showDownloadActions(filename) {
+        if (!this.downloadResult || !this.downloadFile || !this.downloadObjectUrl) {
+            return;
+        }
+
+        this.downloadResult.replaceChildren();
+
+        const saveLink = document.createElement('a');
+        saveLink.href = this.downloadObjectUrl;
+        saveLink.download = filename;
+        saveLink.textContent = 'Save GeoJSON';
+        saveLink.style.cssText = 'display: inline-block; margin: 4px; padding: 10px 14px; background: #4CAF50; color: white; border-radius: 4px; font-weight: bold; text-decoration: none; touch-action: manipulation;';
+        this.downloadResult.appendChild(saveLink);
+
+        if (navigator.share && navigator.canShare && navigator.canShare({ files: [this.downloadFile] })) {
+            const shareButton = document.createElement('button');
+            shareButton.type = 'button';
+            shareButton.textContent = 'Share GeoJSON';
+            shareButton.style.cssText = 'display: inline-block; margin: 4px; padding: 10px 14px; background: #2196F3; color: white; border: none; border-radius: 4px; font-weight: bold; touch-action: manipulation;';
+            shareButton.addEventListener('click', async () => {
+                try {
+                    await navigator.share({
+                        files: [this.downloadFile],
+                        title: filename
+                    });
+                } catch (error) {
+                    if (error.name !== 'AbortError') {
+                        console.error('📍 Error sharing GeoJSON:', error);
+                        this.setDownloadStatus(`Could not share GeoJSON: ${error.message}`);
+                    }
+                }
+            });
+            this.downloadResult.appendChild(shareButton);
         }
     }
 

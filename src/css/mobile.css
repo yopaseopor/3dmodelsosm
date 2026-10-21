@@ -7,6 +7,38 @@
 
 /* Mobile/Responsive Mode (screens < 600px) */
 @media only screen and (max-width: 599px) {
+    .geojson-panel {
+        position: fixed !important;
+        top: max(10px, env(safe-area-inset-top)) !important;
+        right: 10px !important;
+        left: 10px !important;
+        width: auto !important;
+        max-width: none !important;
+        max-height: calc(100dvh - 20px - env(safe-area-inset-top) - env(safe-area-inset-bottom)) !important;
+        padding: 12px !important;
+        z-index: 2000 !important;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    .geojson-panel .geojson-input {
+        display: block;
+        width: 100%;
+        max-width: 100%;
+        min-height: 44px;
+        margin: 6px 0;
+        color: white;
+        font-size: 16px;
+    }
+
+    .geojson-panel input[type="file"] {
+        padding: 8px 0;
+    }
+
+    .geojson-panel button {
+        min-height: 44px;
+        touch-action: manipulation;
+    }
+
     /* Mobile layout: Full screen map with bottom sliding menu */
     .flex-row {
         flex-direction: column; /* Stack map and menu vertically */
