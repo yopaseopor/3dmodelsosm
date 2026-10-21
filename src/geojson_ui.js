@@ -293,26 +293,6 @@ class GeoJSONUI {
         saveLink.style.cssText = 'display: inline-block; margin: 4px; padding: 10px 14px; background: #4CAF50; color: white; border-radius: 4px; font-weight: bold; text-decoration: none; touch-action: manipulation;';
         this.downloadResult.appendChild(saveLink);
 
-        if (navigator.share && navigator.canShare && navigator.canShare({ files: [this.downloadFile] })) {
-            const shareButton = document.createElement('button');
-            shareButton.type = 'button';
-            shareButton.textContent = 'Share GeoJSON';
-            shareButton.style.cssText = 'display: inline-block; margin: 4px; padding: 10px 14px; background: #2196F3; color: white; border: none; border-radius: 4px; font-weight: bold; touch-action: manipulation;';
-            shareButton.addEventListener('click', async () => {
-                try {
-                    await navigator.share({
-                        files: [this.downloadFile],
-                        title: filename
-                    });
-                } catch (error) {
-                    if (error.name !== 'AbortError') {
-                        console.error('📍 Error sharing GeoJSON:', error);
-                        this.setDownloadStatus(`Could not share GeoJSON: ${error.message}`);
-                    }
-                }
-            });
-            this.downloadResult.appendChild(shareButton);
-        }
     }
 
     /**
