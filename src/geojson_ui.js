@@ -159,13 +159,34 @@ class GeoJSONUI {
             return;
         }
 
+        const mobileMenu = document.querySelector('.menu.menu-visible');
+        if (mobileMenu && window.innerWidth <= 599) {
+            mobileMenu.classList.remove('menu-visible');
+            document.querySelector('.flex-row')?.classList.remove('menu-active');
+            await new Promise(resolve => window.setTimeout(resolve, 350));
+        }
+
+        if (typeof map.updateSize === 'function') {
+            map.updateSize();
+        }
+        await new Promise(resolve => window.requestAnimationFrame(resolve));
+
         const view = map.getView();
         if (view.getZoom() < 20) {
             this.setDownloadStatus('Zoom to level 20 or higher to download.');
             return;
         }
 
-        const size = map.getSize();
+        let size = map.getSize();
+        if ((!size || !size[0] || !size[1]) && map.getTargetElement) {
+            const target = map.getTargetElement();
+            if (target) {
+                const bounds = target.getBoundingClientRect();
+                if (bounds.width > 0 && bounds.height > 0) {
+                    size = [bounds.width, bounds.height];
+                }
+            }
+        }
         if (!size || !size[0] || !size[1]) {
             this.setDownloadStatus('Map extent is unavailable.');
             return;
