@@ -186,10 +186,6 @@ function areaCentroidLonLat(coordinates) {
     return n ? [lon / n, lat / n] : null;
 }
 
-/** Max canvas edge for rotated area textures (pixels); lower = less RAM / GPU upload */
-const AREA_TEXTURE_MAX_CANVAS = 2048;
-const AREA_TEXTURE_JPEG_QUALITY = 0.78;
-
 // Import centralized debug configuration
 if (typeof window !== 'undefined' && window.globalDebugConfig) {
     var debugConfig = window.globalDebugConfig.modelRenderer;
@@ -1211,7 +1207,7 @@ window.modelRenderer = {
                 this.addRepetitionModels(feature, cesiumScene);
                 // Neither model nor texture: drape the outline on the terrain
                 // instead of letting ol-cesium draw it at sea level.
-                if (!model) this.addPlainResult(feature, fidx, cesiumScene, layer);
+                if (!model && !hasAreaTextureRepetition) this.addPlainResult(feature, fidx, cesiumScene, layer);
             }
         } else {
             if (model && typeof model === 'object' && model.uri && !hasAreaTextureRepetition) {
@@ -1220,7 +1216,7 @@ window.modelRenderer = {
             this.addRepetitionModels(feature, cesiumScene);
             // No model for this result: draw it as a marker/line that follows
             // the ground (see addPlainResult).
-            if (!model) this.addPlainResult(feature, fidx, cesiumScene, layer);
+            if (!model && !hasAreaTextureRepetition) this.addPlainResult(feature, fidx, cesiumScene, layer);
         }
     },
 
@@ -1522,9 +1518,8 @@ window.modelRenderer = {
                     if (built && built.sessionId === this._session3dId) return;
                 }
 
-                // Same range gate as every other primitive. Area textures are
-                // built on a canvas up to AREA_TEXTURE_MAX_CANVAS square, so
-                // an ungated one is not cheap.
+                // Same range gate as every other primitive; repeated image
+                // textures still allocate a GPU primitive.
                 const centre = areaCentroidLonLat(polygonCoordinates);
                 if (centre) {
                     const texDistance = this.getDistanceFromCamera(centre[0], centre[1], cesiumScene);
@@ -1560,14 +1555,19 @@ window.modelRenderer = {
                     }
                 }
 
-                // Force recalculation of rotation instead of using stored value
-                const polygonCoords4326 = polygonCoordinates.map(coord => 
-                    ol.proj.transform(coord, window.map.getView().getProjection(), 'EPSG:4326')
-                );
-                const recalculatedRotation = this.calculateTextureRotation(polygonCoords4326, imageUri);
-                if (modelRendererTexLog()) console.log(`🖼️ Recalculated repetition rotation ${repIndex}: ${(recalculatedRotation * 180 / Math.PI).toFixed(1)}° ${imageUri}`);
+                // Area repetitions store polygon coordinates and their bearing
+                // in WGS84 when generated. Preserve that bearing instead of
+                // transforming the already-geographic coordinates a second time.
+                const textureRotation = Number.isFinite(repModel.rotation)
+                    ? repModel.rotation
+                    : this.calculateTextureRotation(
+                        polygonCoordinates,
+                        imageUri,
+                        feature.getProperties ? feature.getProperties() : {}
+                    );
+                if (modelRendererTexLog()) console.log(`🖼️ Using stored repetition rotation ${repIndex}: ${(textureRotation * 180 / Math.PI).toFixed(1)}° ${imageUri}`);
                 
-                if (debugConfig.enabled) console.log(`🖼️ Adding polygon texture for ${repIndex} with ${polygonCoordinates.length} coordinates and recalculated rotation: ${(recalculatedRotation * 180 / Math.PI).toFixed(1)}°`);
+                if (debugConfig.enabled) console.log(`🖼️ Adding polygon texture for ${repIndex} with ${polygonCoordinates.length} coordinates and rotation: ${(textureRotation * 180 / Math.PI).toFixed(1)}°`);
                 const created = this.addAreaTexture(
                     {
                         outer: polygonCoordinates,
@@ -1576,7 +1576,8 @@ window.modelRenderer = {
                     imageUri,
                     {
                         spacing: spacing,
-                        rotation: recalculatedRotation,
+                        rotation: textureRotation,
+                        textureRotationOffsetDegrees: repModel.textureRotationOffsetDegrees,
                         scale: repModel.scale,
                         bridgeSurfaceHeight: isTunnelFeature(feature) ? null : flatSurfaceHeight,
                         fixedSurfaceHeight: isTunnelFeature(feature) ? getTunnelElevation() : null,
@@ -2012,7 +2013,11 @@ window.modelRenderer = {
             textureRotation = repModel.rotation;
             if (modelRendererTexLog()) console.log(`🖼️ Using provided rotation from repModel: ${(textureRotation * 180 / Math.PI).toFixed(1)}°`);
         } else {
-            textureRotation = this.calculateTextureRotation(polygonCoordinates, imageUri);
+            textureRotation = this.calculateTextureRotation(
+                polygonCoordinates,
+                imageUri,
+                repModel && repModel.featureTags ? repModel.featureTags : {}
+            );
             if (modelRendererTexLog()) console.log(`🖼️ Calculated texture rotation: ${(textureRotation * 180 / Math.PI).toFixed(1)}°`);
         }
 
@@ -2035,183 +2040,97 @@ window.modelRenderer = {
                     polygonHierarchy = createPolygonHierarchy(bridgeSurfaceHeight);
                 }
             }
-            const imageWidth = img.width;
-            const imageHeight = img.height;
-            const imageAspectRatio = imageWidth / imageHeight;
-            const polygonAspectRatio = widthMeters / heightMeters;
-
-            // Calculate desired texture size in meters (how large the texture should appear in real world)
-            // For pavement/parking textures, typically 1 meter tiles
-            const baseTextureSizeMeters = repModel.spacing || 1.0; // Use spacing from config, default 1m
-            const textureScale = repModel.scale || 1.0; // Use scale from config, default 1
-            const desiredTextureSizeMeters = baseTextureSizeMeters * textureScale; // Scale affects texture size
-
-            // Calculate how many times to repeat texture to fill the polygon
-            const textureRepeatX = widthMeters / desiredTextureSizeMeters;
-            const textureRepeatY = heightMeters / desiredTextureSizeMeters;
-
-            // Texture repeat is baked into the canvas tiling (GroundPrimitive approach)
-
-            if (debugConfig.enabled) console.log(`🖼️ Fixed texture repeat: ${textureRepeatX.toFixed(2)} x ${textureRepeatY.toFixed(2)} (polygon ${widthMeters.toFixed(1)}m x ${heightMeters.toFixed(1)}m, desired tile size ${desiredTextureSizeMeters}m)`);
-
-            if (modelRendererTexLog()) console.log(`🖼️ textureRotation: ${(textureRotation * 180 / Math.PI).toFixed(1)}°`);
-            if (textureRotation !== 0) {
-                if (modelRendererTexLog()) console.log(`🖼️ Creating rotated texture canvas: ${(textureRotation * 180 / Math.PI).toFixed(1)}°`);
-                
-                const imageWidth = img.width;
-                const imageHeight = img.height;
-                // Use actual image dimensions, not minimum
-                const tileWidth = imageWidth;
-                const tileHeight = imageHeight;
-                const tileSize = Math.min(imageWidth, imageHeight); // For spacing calculation
-                
-                // Calculate canvas size based on polygon dimensions
-                const baseTextureSizeMeters = repModel.spacing || 1.0;
-                const textureScale = repModel.scale || 1.0;
-                const desiredTextureSizeMeters = baseTextureSizeMeters * textureScale;
-                const pixelsPerMeter = tileSize / desiredTextureSizeMeters;
-                let canvasWidth = Math.floor(widthMeters * pixelsPerMeter);
-                let canvasHeight = Math.floor(heightMeters * pixelsPerMeter);
-                
-                const scale = Math.min(1, AREA_TEXTURE_MAX_CANVAS / Math.max(canvasWidth, canvasHeight));
-                canvasWidth = Math.floor(canvasWidth * scale);
-                canvasHeight = Math.floor(canvasHeight * scale);
-                const scaledTileWidth = Math.floor(tileWidth * scale);
-                const scaledTileHeight = Math.floor(tileHeight * scale);
-                
-                if (modelRendererTexLog()) console.log(`🖼️ Canvas: ${canvasWidth}x${canvasHeight}px, tile: ${scaledTileWidth}x${scaledTileHeight}px`);
-                
-                const canvas = document.createElement('canvas');
-                canvas.width = canvasWidth;
-                canvas.height = canvasHeight;
-                const ctx = canvas.getContext('2d');
-                
-                // Rotate context around center - apply different offsets based on texture type and orientation
-                ctx.translate(canvasWidth / 2, canvasHeight / 2);
-                const isCrossingTexture = imageUri.toLowerCase().includes('i_crossing.png') ||
-                                        imageUri.toLowerCase().includes('crossing');
-                const isParkingTexture = imageUri.toLowerCase().includes('i_parking');
-                
-                let finalRotation;
-                if (isCrossingTexture) {
-                    finalRotation = textureRotation + (45 * Math.PI / 180); // Add 45 degrees for crossings
-                } else if (isParkingTexture) {
-                    // For parking textures, apply different offsets based on street orientation
-                    const bearingDegrees = ((textureRotation * 180 / Math.PI) + 360) % 360; // Normalize to 0-360
-                    const isNorthSouth = (bearingDegrees >= 315 || bearingDegrees < 45) || // North (0° ± 45°)
-                                       (bearingDegrees >= 135 && bearingDegrees < 225); // South (180° ± 45°)
-                    const isEastWest = (bearingDegrees >= 45 && bearingDegrees < 135) || // East (90° ± 45°)
-                                     (bearingDegrees >= 225 && bearingDegrees < 315); // West (270° ± 45°)
-                    
-                    if (isNorthSouth) {
-                        finalRotation = textureRotation + (35 * Math.PI / 180); // Add 35 degrees for north-south parking
-                        if (modelRendererTexLog()) {
-                            console.log(`🖼️ North-South parking detected (bearing: ${bearingDegrees.toFixed(1)}°), applying 35° offset`);
-                        }
-                    } else if (isEastWest) {
-                        finalRotation = textureRotation + (45 * Math.PI / 180); // Add 45 degrees for east-west parking
-                        if (modelRendererTexLog()) {
-                            console.log(`🖼️ East-West parking detected (bearing: ${bearingDegrees.toFixed(1)}°), applying 45° offset`);
-                        }
-                    } else {
-                        finalRotation = textureRotation; // Fallback: no offset
-                    }
-                } else {
-                    finalRotation = textureRotation; // Use direct rotation for other textures
-                }
-                
-                if (modelRendererTexLog()) {
-                    console.log(`🖼️ ${isCrossingTexture ? 'Crossing' : (isParkingTexture ? 'Parking' : 'Other')} texture - base: ${(textureRotation * 180 / Math.PI).toFixed(1)}°, final: ${(finalRotation * 180 / Math.PI).toFixed(1)}°`);
-                }
-                
-                ctx.rotate(finalRotation);
-                
-                // Calculate how many tiles needed to cover area when rotated
-                const diagonal = Math.sqrt(canvasWidth * canvasWidth + canvasHeight * canvasHeight);
-                const tilesX = Math.ceil(diagonal / scaledTileWidth) + 2;
-                const tilesY = Math.ceil(diagonal / scaledTileHeight) + 2;
-                
-                // Draw tiles covering entire area
-                for (let x = 0; x < tilesX; x++) {
-                    for (let y = 0; y < tilesY; y++) {
-                        ctx.drawImage(img, 
-                            -diagonal / 2 - scaledTileWidth + x * scaledTileWidth,
-                            -diagonal / 2 - scaledTileHeight + y * scaledTileHeight,
-                            scaledTileWidth,
-                            scaledTileHeight);
-                    }
-                }
-                
-                // Create data URL
-                const rotatedImageDataUrl = canvas.toDataURL('image/jpeg', AREA_TEXTURE_JPEG_QUALITY);
-                
-                // Bridge textures use explicit equal-height vertices; other
-                // textures remain terrain-clamped.
-                const _sceneRT = cesiumScene || (window.ol3d && window.ol3d.getCesiumScene ? window.ol3d.getCesiumScene() : null);
-                if (_sceneRT && polygonHierarchy) {
-                    try {
-                        const texturePrimitive = bridgeSurfaceHeight === null
-                            ? Cesium.GroundPrimitive
-                            : Cesium.Primitive;
-                        const gpRot = new texturePrimitive({
-                            geometryInstances: new Cesium.GeometryInstance({
-                                geometry: new Cesium.PolygonGeometry({
-                                    polygonHierarchy: polygonHierarchy,
-                                    vertexFormat: Cesium.MaterialAppearance.MaterialSupport.TEXTURED.vertexFormat,
-                                    perPositionHeight: bridgeSurfaceHeight !== null
-                                })
-                            }),
-                            appearance: new Cesium.MaterialAppearance({
-                                material: new Cesium.Material({ fabric: { type: 'Image', uniforms: { image: rotatedImageDataUrl } } }),
-                                translucent: true
-                            }),
-                            asynchronous: false
-                        });
-                        if (repModel && repModel.undergroundFeature) {
-                            gpRot.show = isUndergroundFeature(repModel.undergroundFeature) === isUndergroundViewEnabled();
-                        }
-                        _sceneRT.primitives.add(gpRot);
-                        created.push(gpRot);
-                        if (modelRendererTexLog()) console.log(`🖼️ Created GroundPrimitive with rotated texture`);
-                    } catch (e) { if (debugConfig.enabled) console.warn('GroundPrimitive creation error:', e); }
-                }
+            const imageWidth = img.naturalWidth || img.width;
+            const imageHeight = img.naturalHeight || img.height;
+            if (!imageWidth || !imageHeight) {
+                console.error(`🖼️ Texture ${imageUri} has invalid dimensions: ${imageWidth}x${imageHeight}`);
+                return;
             }
 
+            // Repeat the original texture on the GPU. The short image side maps
+            // to the configured tile size; the other side follows its aspect.
+            const baseTextureSizeMeters = repModel.spacing || 1.0;
+            const textureScale = repModel.scale || 1.0;
+            const desiredTileSize = baseTextureSizeMeters * textureScale;
+            if (!Number.isFinite(desiredTileSize) || desiredTileSize <= 0) {
+                throw new RangeError('Area texture tile size must be a positive number');
+            }
+            const shortImageSide = Math.min(imageWidth, imageHeight);
+            const tileWidthMeters = desiredTileSize * imageWidth / shortImageSide;
+            const tileHeightMeters = desiredTileSize * imageHeight / shortImageSide;
+            const textureRotationOffsetDegrees = Number.isFinite(repModel.textureRotationOffsetDegrees)
+                ? repModel.textureRotationOffsetDegrees
+                : 0;
+            const finalRotation = textureRotation;
 
-            // No-rotation case: create the matching terrain-clamped or flat
-            // primitive with the original image.
-            if (textureRotation === 0) {
-                const _sceneNR = cesiumScene || (window.ol3d && window.ol3d.getCesiumScene ? window.ol3d.getCesiumScene() : null);
-                if (_sceneNR && polygonHierarchy) {
-                    try {
-                        const texturePrimitive = bridgeSurfaceHeight === null
-                            ? Cesium.GroundPrimitive
-                            : Cesium.Primitive;
-                        const gpNr = new texturePrimitive({
-                            geometryInstances: new Cesium.GeometryInstance({
-                                geometry: new Cesium.PolygonGeometry({
-                                    polygonHierarchy: polygonHierarchy,
-                                    vertexFormat: Cesium.MaterialAppearance.MaterialSupport.TEXTURED.vertexFormat,
-                                    perPositionHeight: bridgeSurfaceHeight !== null
-                                })
-                            }),
-                            appearance: new Cesium.MaterialAppearance({
-                                material: new Cesium.Material({ fabric: { type: 'Image', uniforms: { image: imageUri } } }),
-                                translucent: true
-                            }),
-                            asynchronous: false
-                        });
-                        if (repModel && repModel.undergroundFeature) {
-                            gpNr.show = isUndergroundFeature(repModel.undergroundFeature) === isUndergroundViewEnabled();
-                        }
-                        _sceneNR.primitives.add(gpNr);
-                        created.push(gpNr);
-                        if (modelRendererTexLog()) console.log(`🖼️ Created GroundPrimitive with original texture`);
-                    } catch (e) { if (debugConfig.enabled) console.warn('GroundPrimitive creation error:', e); }
-                }
+            if (debugConfig.enabled) {
+                console.log(`🖼️ Native-resolution repeat: ${tileWidthMeters.toFixed(2)}m x ${tileHeightMeters.toFixed(2)}m tiles across ${widthMeters.toFixed(2)}m x ${heightMeters.toFixed(2)}m area`);
             }
 
-            if (debugConfig.enabled) console.log(`🖼️ Fixed texture repeat: ${textureRepeatX.toFixed(2)} x ${textureRepeatY.toFixed(2)} (polygon ${widthMeters.toFixed(1)}m x ${heightMeters.toFixed(1)}m, desired tile size ${desiredTextureSizeMeters}m)`);
+            const textureScene = cesiumScene ||
+                (window.ol3d && window.ol3d.getCesiumScene ? window.ol3d.getCesiumScene() : null);
+            if (textureScene && polygonHierarchy) {
+                try {
+                    const texturePrimitive = bridgeSurfaceHeight === null
+                        ? Cesium.GroundPrimitive
+                        : Cesium.Primitive;
+                    // PolygonGeometry clamps stRotation against its unrotated
+                    // bounds. Rotate in meter space in the material instead,
+                    // so angled tiles keep the same dimensions without clipping.
+                    const primitive = new texturePrimitive({
+                        geometryInstances: new Cesium.GeometryInstance({
+                            geometry: new Cesium.PolygonGeometry({
+                                polygonHierarchy,
+                                vertexFormat: Cesium.MaterialAppearance.MaterialSupport.TEXTURED.vertexFormat,
+                                perPositionHeight: bridgeSurfaceHeight !== null
+                            })
+                        }),
+                        appearance: new Cesium.MaterialAppearance({
+                            material: new Cesium.Material({
+                                fabric: {
+                                    type: 'WorldScaleImage',
+                                    uniforms: {
+                                        image: imageUri,
+                                        areaSizeMeters: new Cesium.Cartesian2(widthMeters, heightMeters),
+                                        tileSizeMeters: new Cesium.Cartesian2(tileWidthMeters, tileHeightMeters),
+                                        textureRotation: -finalRotation +
+                                            textureRotationOffsetDegrees * Math.PI / 180
+                                    },
+                                    source: `
+                                        czm_material czm_getMaterial(czm_materialInput materialInput) {
+                                            czm_material material = czm_getDefaultMaterial(materialInput);
+                                            vec2 localPosition = (materialInput.st - vec2(0.5)) * areaSizeMeters;
+                                            float cosine = cos(textureRotation);
+                                            float sine = sin(textureRotation);
+                                            vec2 rotatedPosition = vec2(
+                                                cosine * localPosition.x - sine * localPosition.y,
+                                                sine * localPosition.x + cosine * localPosition.y
+                                            );
+                                            vec2 textureSt = rotatedPosition / tileSizeMeters;
+                                            vec4 texel = texture2D(image, fract(textureSt));
+                                            material.diffuse = czm_gammaCorrect(texel.rgb);
+                                            material.alpha = texel.a;
+                                            return material;
+                                        }
+                                    `
+                                }
+                            }),
+                            translucent: true
+                        }),
+                        asynchronous: false
+                    });
+                    if (repModel && repModel.undergroundFeature) {
+                        primitive.show = isUndergroundFeature(repModel.undergroundFeature) === isUndergroundViewEnabled();
+                    }
+                    textureScene.primitives.add(primitive);
+                    created.push(primitive);
+                    if (modelRendererTexLog()) {
+                        console.log(`🖼️ Created repeated texture with rotation ${(finalRotation * 180 / Math.PI).toFixed(1)}°`);
+                    }
+                } catch (error) {
+                    console.error('🖼️ Failed to create repeated area texture:', error);
+                }
+            }
         };
 
         // Everything the onload handler needs is built BEFORE `img.src` is
@@ -2225,15 +2144,6 @@ window.modelRenderer = {
         // zone; the ReferenceError is thrown inside the handler's own
         // try/catch, so it is swallowed and the area texture silently never
         // appears. Building it first removes the ordering dependency entirely.
-
-        // Initial repeat (will be updated when image loads) - apply scale here too
-        const textureScale = repModel ? (repModel.scale || 1.0) : 1.0;
-        const initialRepeatX = widthMeters / textureScale;
-        const initialRepeatY = heightMeters / textureScale;
-
-        // Calculate polygon center for entity rotation
-        const centerLon = (minLon + maxLon) / 2;
-        const centerPosition = Cesium.Cartesian3.fromDegrees(centerLon, centerLat);
 
         // Create polygon hierarchy
         let polygonHierarchy = createPolygonHierarchy(bridgeSurfaceHeight);
@@ -2256,11 +2166,19 @@ window.modelRenderer = {
      * @param {string} textureName - Name of the texture file
      * @returns {number} Rotation angle in radians (0 if no rotation needed)
      */
-    calculateTextureRotation: function(polygonCoordinates, textureName) {
+    calculateTextureRotation: function(polygonCoordinates, textureName, tagsObj = {}) {
         if (modelRendererTexLog()) console.log(`🖼️ calculateTextureRotation: ${textureName}`);
 
+        const isFootwayTexture = textureName.toLowerCase().includes('i_llamborda.jpg');
+        const textureTags = tagsObj || {};
+        const isFootwayArea = isFootwayTexture && (
+            textureTags['area:highway'] === 'footway' ||
+            textureTags.highway === 'footway' ||
+            textureTags.footway === 'sidewalk'
+        );
         const isCrossingTexture = textureName.toLowerCase().includes('i_crossing.png') ||
                                 textureName.toLowerCase().includes('crossing');
+        const isParkingTexture = textureName.toLowerCase().includes('i_parking');
 
         if (modelRendererTexLog()) console.log(`🖼️ isCrossingTexture: ${isCrossingTexture}`);
 
@@ -2286,7 +2204,7 @@ window.modelRenderer = {
 
             if (modelRendererTexLog()) console.log(`🖼️ isLimitTexture: ${isLimitTexture}`);
 
-            if (isLimitTexture) {
+            if (isLimitTexture && !isFootwayArea && !isParkingTexture) {
                 if (modelRendererTexLog()) console.log(`🖼️ limit/adjacent texture path (polygon longest edge)`);
                 const limitRotation = this.calculateCrossingTextureRotation(polygonCoordinates, textureName);
                 if (modelRendererTexLog()) console.log(`🖼️ limit rotation: ${limitRotation}`);
@@ -2325,8 +2243,17 @@ window.modelRenderer = {
 
             if (modelRendererTexLog()) console.log(`🖼️ nearby ways: ${nearbyWays.length}`);
 
-            const isParkingTexture = textureName.toLowerCase().includes('i_parking');
             let sourceWays = nearbyWays;
+            if (isFootwayArea) {
+                const footwayWays = nearbyWays.filter(feature =>
+                    feature.get && (
+                        feature.get('highway') === 'footway' ||
+                        feature.get('footway') === 'sidewalk' ||
+                        feature.get('area:highway') === 'footway'
+                    )
+                );
+                sourceWays = footwayWays;
+            }
             if (isParkingTexture) {
                 const kerbWays = nearbyWays.filter(f => f.get && f.get('barrier') === 'kerb');
                 if (kerbWays.length > 0) {
@@ -2336,6 +2263,13 @@ window.modelRenderer = {
             }
 
             if (sourceWays.length === 0) {
+                if (isFootwayArea) {
+                    const polygonRotation = this.calculateCrossingTextureRotation(
+                        polygonCoordinates,
+                        textureName
+                    );
+                    if (polygonRotation !== null) return polygonRotation;
+                }
                 const closestFallbackSegment = this.findClosestWaySegmentToPolygon(
                     layers,
                     polygonCoordinates,

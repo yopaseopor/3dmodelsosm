@@ -252,6 +252,7 @@ function processQueryResults(allFeatures, key, value) {
         let geometryType = 'point'; // default
         let wayCoordinates = null;
         let nodeIndex = null;
+        let orientationContext = null;
 
         if (debugConfig.enabled && debugConfig.logGeometryDetection) console.log(`🎯 Geometry detection for feature ${index + 1}:`, geometry, `type:`, geometry ? (geometry.getType ? geometry.getType() : typeof geometry) : 'null');
 
@@ -316,12 +317,26 @@ function processQueryResults(allFeatures, key, value) {
                 }
             } else if (geomType === 'Point') {
                 geometryType = 'point';
+                orientationContext = {
+                    pointLonLat: ol.proj.transform(
+                        geometry.getCoordinates(),
+                        window.map.getView().getProjection(),
+                        'EPSG:4326'
+                    ),
+                    allFeatures: featuresWithTags
+                };
             }
         }
 
         if (debugConfig.enabled && debugConfig.logGeometryDetection) console.log(`🔍 Final geometry type determination for feature ${index + 1}: ${geometryType}`);
 
-        const mapping = window.models ? window.models.getModelForTags(tagsObj, wayCoordinates, nodeIndex, geometryType) : null;
+        const mapping = window.models ? window.models.getModelForTags(
+            tagsObj,
+            wayCoordinates,
+            nodeIndex,
+            geometryType,
+            orientationContext
+        ) : null;
         if (debugConfig.enabled && debugConfig.logModelAssignment) console.log('mapping:', mapping);
         if (mapping) {
             const modelFilename = mapping.model;
@@ -407,15 +422,33 @@ function processQueryResults(allFeatures, key, value) {
                         const textureRotation = window.modelRenderer ? 
                             window.modelRenderer.calculateTextureRotation(polygonCoords, modelFilename, featureTags) : 
                             0; // No rotation if modelRenderer not available
+                        const textureBounds = polygonCoords.reduce((bounds, coord) => ({
+                            minLon: Math.min(bounds.minLon, coord[0]),
+                            maxLon: Math.max(bounds.maxLon, coord[0]),
+                            minLat: Math.min(bounds.minLat, coord[1]),
+                            maxLat: Math.max(bounds.maxLat, coord[1])
+                        }), {
+                            minLon: Infinity, maxLon: -Infinity,
+                            minLat: Infinity, maxLat: -Infinity
+                        });
+                        const tileSizeMeters = mapping.config && Number.isFinite(mapping.config.scale) &&
+                            mapping.config.scale > 0 ? mapping.config.scale : 1;
+                        const centerLat = (textureBounds.minLat + textureBounds.maxLat) / 2;
+                        const textureRepeat = new Cesium.Cartesian2(
+                            (textureBounds.maxLon - textureBounds.minLon) *
+                                111320 * Math.cos(centerLat * Math.PI / 180) / tileSizeMeters,
+                            (textureBounds.maxLat - textureBounds.minLat) *
+                                111320 / tileSizeMeters
+                        );
 
                         if (debugConfig.enabled && debugConfig.logAreaProcessing) console.log(`🎨 Calculated texture rotation for value search: ${(textureRotation * 180 / Math.PI).toFixed(1)}°`);
 
                         // Create textured material
                         const material = new Cesium.ImageMaterialProperty({
                             image: `/3dmodelsosm/src/models/${modelFilename}`,
+                            repeat: textureRepeat,
                             transparent: true,
-                            color: new Cesium.Color(1.0, 1.0, 1.0, 0.8), // Slight transparency
-                            stRotation: textureRotation !== 0 ? textureRotation : undefined
+                            color: new Cesium.Color(1.0, 1.0, 1.0, 0.8) // Slight transparency
                         });
                         
                         if (debugConfig.enabled && debugConfig.logAreaProcessing) console.log(`🎨 Created material with texture: ${modelFilename}, stRotation: ${(textureRotation * 180 / Math.PI).toFixed(1)}°`);
@@ -424,6 +457,7 @@ function processQueryResults(allFeatures, key, value) {
                         const areaEntity = new Cesium.Entity({
                             polygon: {
                                 hierarchy: hierarchy,
+                                stRotation: textureRotation,
                                 heightReference: Cesium.HeightReference.CLAMP_TO_GROUND, // drape over DEM terrain
                                 material: material,
                                 outline: true, // Enable outline for debugging

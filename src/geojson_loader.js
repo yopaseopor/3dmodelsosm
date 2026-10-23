@@ -29,6 +29,24 @@ function loaderLog() {
     console.log.apply(console, arguments);
 }
 
+function applyEmptyAreaModelMapping(feature, modelMapping, tags) {
+    if (!modelMapping || modelMapping.geometryType !== 'area' || !window.areaRepetition) {
+        return false;
+    }
+
+    try {
+        window.areaRepetition.applyAreaRepetitions(
+            feature,
+            modelMapping.model,
+            modelMapping.config,
+            tags
+        );
+    } catch (error) {
+        console.error('Error applying area repetitions for an empty model mapping:', error);
+    }
+    return true;
+}
+
 class GeoJSONLoader {
     constructor() {
         this.loadedLayers = new Map(); // Store loaded GeoJSON layers
@@ -296,6 +314,7 @@ class GeoJSONLoader {
 
                                 // Skip if model filename is empty
                                 if (!modelFilename || modelFilename.trim() === '') {
+                                    if (applyEmptyAreaModelMapping(feature, modelMapping, tags)) return;
                                     loaderLog(`📍 Feature ${index}: Skipping empty model filename for tags:`, tags);
                                     return; // Skip to next feature
                                 }

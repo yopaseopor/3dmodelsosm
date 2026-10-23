@@ -169,7 +169,7 @@ function createOlLayer(overlay) {
                         
                         // Assign 3D models to features based on their properties
                         features.forEach(feature => {
-                            assignModelToFeature(feature);
+                            assignModelToFeature(feature, features);
                         });
                         
                         if (debugConfig.enabled && debugConfig.logOverlayLoading) console.log('Added ' + features.length + ' features for ' + overlay.title);
@@ -395,6 +395,24 @@ function assignModelToFeature(feature, allFeatures = null) {
                         const textureRotation = window.modelRenderer ? 
                             window.modelRenderer.calculateTextureRotation(polygonCoords, modelFilename, tagsObj) : 
                             0; // No rotation if modelRenderer not available
+                        const textureBounds = polygonCoords.reduce((bounds, coord) => ({
+                            minLon: Math.min(bounds.minLon, coord[0]),
+                            maxLon: Math.max(bounds.maxLon, coord[0]),
+                            minLat: Math.min(bounds.minLat, coord[1]),
+                            maxLat: Math.max(bounds.maxLat, coord[1])
+                        }), {
+                            minLon: Infinity, maxLon: -Infinity,
+                            minLat: Infinity, maxLat: -Infinity
+                        });
+                        const tileSizeMeters = modelConfig && Number.isFinite(modelConfig.scale) &&
+                            modelConfig.scale > 0 ? modelConfig.scale : 1;
+                        const centerLat = (textureBounds.minLat + textureBounds.maxLat) / 2;
+                        const repeat = new Cesium.Cartesian2(
+                            (textureBounds.maxLon - textureBounds.minLon) *
+                                111320 * Math.cos(centerLat * Math.PI / 180) / tileSizeMeters,
+                            (textureBounds.maxLat - textureBounds.minLat) *
+                                111320 / tileSizeMeters
+                        );
                         
                         if (debugConfig.enabled && debugConfig.logAreaProcessing) {
                             console.log(`🎨 overlay texture °: ${(textureRotation * 180 / Math.PI).toFixed(1)}`);
@@ -407,10 +425,10 @@ function assignModelToFeature(feature, allFeatures = null) {
                         const areaEntity = new Cesium.Entity({
                             polygon: {
                                 hierarchy: hierarchy,
+                                stRotation: textureRotation,
                                 material: new Cesium.ImageMaterialProperty({
                                     image: `/3dmodelsosm/src/models/${modelFilename}`,
-                                    repeat: new Cesium.Cartesian2(1, 1),
-                                    stRotation: textureRotation !== 0 ? textureRotation : undefined
+                                    repeat
                                 }),
                                 heightReference: Cesium.HeightReference.CLAMP_TO_GROUND // drape over DEM terrain (was flat at 0.001m)
                             }
@@ -475,8 +493,7 @@ function assignModelToFeature(feature, allFeatures = null) {
                                                      // mountains and z-fights at sea level
                                 material: new Cesium.ImageMaterialProperty({
                                     image: `/3dmodelsosm/src/models/${modelFilename}`,
-                                    repeat: new Cesium.Cartesian2(coordinates.length * 0.1, 1),
-                                    stRotation: textureRotation !== 0 ? textureRotation : undefined
+                                    repeat: new Cesium.Cartesian2(coordinates.length * 0.1, 1)
                                 })
                             }
                         });

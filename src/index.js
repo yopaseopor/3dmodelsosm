@@ -3249,6 +3249,9 @@ document.head.appendChild(style);
 
 	var selectedFeature = null;
 	map.on('pointermove', function (evt) {
+		if (window.ol3d && window.ol3d.getEnabled && window.ol3d.getEnabled()) {
+			return;
+		}
 		if (selectedFeature !== null) {
 			if (typeof selectedFeature.setStyle === 'function') {
                 selectedFeature.setStyle(undefined);

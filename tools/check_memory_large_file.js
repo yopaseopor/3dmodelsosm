@@ -69,6 +69,7 @@ function makeStubs() {
                 return Math.sqrt(dx * dx + dy * dy + dz * dz);
             }
         },
+        Cartesian2: function (x, y) { this.x = x; this.y = y; },
         Cartographic: {
             fromDegrees(lon, lat, h) { return { longitude: lon, latitude: lat, height: h || 0 }; },
             toCartesian(c) { return { x: c.longitude, y: c.latitude, z: c.height }; },
@@ -85,7 +86,10 @@ function makeStubs() {
         Model: { fromGltf: opts => ({ __gltf: opts.url, isDestroyed: () => false, readyPromise: Promise.resolve(opts.url) }) },
         PolygonHierarchy: function (positions, holes) { this.positions = positions; this.holes = holes; },
         GeometryInstance: function (o) { this.geometry = o.geometry; },
-        PolygonGeometry: function (o) { this.hierarchy = o.polygonHierarchy; },
+        PolygonGeometry: function (o) {
+            this.hierarchy = o.polygonHierarchy;
+            this.options = o;
+        },
         Material: function (o) { this.fabric = o.fabric; },
         GroundPrimitive: function (o) { this.__gp = o; this.isDestroyed = () => false; },
         Entity: function () {}
@@ -139,17 +143,32 @@ function makeStubs() {
         _listeners: listeners
     };
 
-    const documentStub = { createElement: () => makeCanvas() };
+    const canvases = [];
+    const documentStub = {
+        createElement: () => {
+            const canvas = makeCanvas();
+            canvases.push(canvas);
+            return canvas;
+        }
+    };
 
-    return { Cesium, ol, scene, removed, windowStub, documentStub };
+    return { Cesium, ol, scene, removed, windowStub, documentStub, canvases };
 }
 
 function makeCanvas() {
-    return {
+    const canvas = {
         width: 0, height: 0,
-        getContext: () => ({ translate() {}, rotate() {}, drawImage() {} }),
+        rotation: null,
+        getContext() {
+            return {
+                translate() {},
+                rotate(angle) { canvas.rotation = angle; },
+                drawImage() {}
+            };
+        },
         toDataURL: () => 'data:image/jpeg;base64,'
     };
+    return canvas;
 }
 
 /** Minimal OL feature/geometry pair. */
@@ -202,7 +221,14 @@ function loadRenderer() {
             const self = this;
             this.width = 8; this.height = 8;
             Object.defineProperty(this, 'src', {
-                set() { if (typeof self.onload === 'function') self.onload(); }
+                set(uri) {
+                    const textureUri = String(uri).toLowerCase();
+                    if (textureUri.includes('i_crossing.png') || textureUri.includes('i_parking.png')) {
+                        self.width = 250;
+                        self.height = 500;
+                    }
+                    if (typeof self.onload === 'function') self.onload();
+                }
             });
         },
         isFinite,
@@ -382,6 +408,316 @@ check('area-texture GroundPrimitives are tracked and released', () => {
     Array.from(renderer.loadedModels.keys()).forEach(k => renderer.unloadEntry(k, stubs.scene));
     eq(stubs.scene.primitives.length, 0, 'area texture was not removed from the scene');
     eq(renderer.liveTotal, 0, 'area texture was still counted after unload');
+});
+
+check('large footway texture repeats its native-resolution tile along the way', () => {
+    const { renderer, stubs } = loadRenderer();
+    const polygon = [
+        [-0.0005, -0.0005],
+        [0.0005, -0.0005],
+        [0.0005, 0.0005],
+        [-0.0005, 0.0005],
+        [-0.0005, -0.0005]
+    ];
+    const way = (tags, coordinates) => ({
+        get(key) { return tags[key]; },
+        getGeometry() {
+            return {
+                getType: () => 'LineString',
+                getCoordinates: () => coordinates
+            };
+        }
+    });
+    const footway = way({ highway: 'footway' }, [
+        [-0.001, -0.001],
+        [0.001, 0.001]
+    ]);
+    const crossingRoad = way({ highway: 'residential' }, [
+        [-0.001, 0],
+        [0.001, 0]
+    ]);
+    stubs.windowStub.map.getLayers = () => ({
+        getArray: () => [{
+            getSource: () => ({ getFeatures: () => [crossingRoad, footway] })
+        }]
+    });
+
+    const textureRotation = renderer.calculateTextureRotation(
+        polygon,
+        'i_llamborda.jpg',
+        { 'area:highway': 'footway' }
+    );
+    assert(Math.abs(textureRotation + Math.PI / 4) < 1e-8,
+        'texture angle did not come from the nearby diagonal footway: ' + textureRotation);
+
+    renderer.addAreaTexture(
+        polygon,
+        'i_llamborda.jpg',
+        { rotation: textureRotation, spacing: 1, scale: 0.5 },
+        stubs.scene
+    );
+
+    eq(stubs.canvases.length, 0, 'texture should not be resampled into a whole-area canvas');
+    const primitive = stubs.scene.primitives._items[0].__gp;
+    const geometry = primitive.geometryInstances.geometry;
+    const fabric = primitive.appearance.material.fabric;
+    assert(Math.abs(fabric.uniforms.textureRotation - Math.PI / 4) < 1e-8,
+        'footway texture rotation did not align with the northeast way');
+    eq(fabric.uniforms.image, 'i_llamborda.jpg', 'native source texture was not used');
+    eq(geometry.options.stRotation, undefined, 'geometry must not clamp rotated UVs');
+    eq(fabric.uniforms.tileSizeMeters.x, 0.5, 'footway tile width changed');
+    eq(fabric.uniforms.tileSizeMeters.y, 0.5, 'footway tile height changed');
+    assert(Math.abs(fabric.uniforms.textureRotation - Math.PI / 4) < 1e-8,
+        'footway texture rotation changed');
+    assert(fabric.source.includes('fract(textureSt)'),
+        'meter-based tile coordinates are not repeated in the shader');
+    assert(fabric.source.includes('czm_gammaCorrect'),
+        'source texture color correction changed');
+
+    renderer.addAreaTexture(
+        [
+            [-0.001, -0.001],
+            [0.001, -0.001],
+            [0.001, 0.001],
+            [-0.001, 0.001],
+            [-0.001, -0.001]
+        ],
+        'i_llamborda.jpg',
+        { rotation: textureRotation, spacing: 1, scale: 0.5 },
+        stubs.scene
+    );
+    const largerAreaMaterial = stubs.scene.primitives._items[1].__gp.appearance.material.fabric;
+    eq(largerAreaMaterial.uniforms.tileSizeMeters.x, fabric.uniforms.tileSizeMeters.x,
+        'larger footway polygon changed the physical tile width');
+    eq(largerAreaMaterial.uniforms.tileSizeMeters.y, fabric.uniforms.tileSizeMeters.y,
+        'larger footway polygon changed the physical tile height');
+});
+
+check('crossing texture follows its way bearing without a forced diagonal offset', () => {
+    const { renderer, stubs } = loadRenderer();
+    renderer.addAreaTexture(
+        [[0, 0], [0.001, 0], [0.001, 0.001], [0, 0.001]],
+        'i_crossing.png',
+        { rotation: Math.PI / 4, spacing: 1, scale: 1, textureRotationOffsetDegrees: 90 },
+        stubs.scene
+    );
+
+    eq(stubs.canvases.length, 0, 'crossing texture should not be baked into a canvas');
+    const primitive = stubs.scene.primitives._items[0].__gp;
+    const geometry = primitive.geometryInstances.geometry;
+    const fabric = primitive.appearance.material.fabric;
+    eq(geometry.options.stRotation, undefined, 'crossing geometry must not clamp rotated UVs');
+    assert(Math.abs(fabric.uniforms.textureRotation - Math.PI / 4) < 1e-8,
+        'crossing texture did not apply its configured perpendicular offset');
+    eq(fabric.uniforms.tileSizeMeters.x, 1, 'crossing tile width changed');
+    eq(fabric.uniforms.tileSizeMeters.y, 2, 'crossing tile aspect ratio was not preserved');
+    assert(fabric.source.includes('fract(textureSt)'), 'crossing texture is not repeated in the shader');
+});
+
+check('parking texture follows a nearby kerb and keeps its original aspect', () => {
+    const { renderer, stubs } = loadRenderer();
+    const polygon = [
+        [0, 0],
+        [0.001, 0],
+        [0.001, 0.0001],
+        [0, 0.0001],
+        [0, 0]
+    ];
+    const way = (tags, coordinates) => ({
+        get(key) { return tags[key]; },
+        getGeometry() {
+            return {
+                getType: () => 'LineString',
+                getCoordinates: () => coordinates
+            };
+        }
+    });
+    const kerb = way({ barrier: 'kerb' }, [[0, 0], [0, 0.0001]]);
+    const road = way({ highway: 'residential' }, [[0, -0.0001], [0.001, -0.0001]]);
+    stubs.windowStub.map.getLayers = () => ({
+        getArray: () => [{
+            getSource: () => ({ getFeatures: () => [road, kerb] })
+        }]
+    });
+
+    const rotation = renderer.calculateTextureRotation(polygon, 'i_parking.png', { amenity: 'parking' });
+    assert(Math.abs(rotation) < 1e-8,
+        'parking ignored the nearby north-south kerb and followed the polygon width: ' + rotation);
+
+    renderer.addAreaTexture(
+        polygon,
+        'i_parking.png',
+        { rotation, spacing: 1, scale: 1, textureRotationOffsetDegrees: 90 },
+        stubs.scene
+    );
+    const material = stubs.scene.primitives._items[0].__gp.appearance.material.fabric;
+    assert(Math.abs(material.uniforms.textureRotation - Math.PI / 2) < 1e-8,
+        'parking did not apply its configured perpendicular offset');
+    eq(material.uniforms.tileSizeMeters.x, 1, 'parking tile width changed');
+    eq(material.uniforms.tileSizeMeters.y, 2, 'parking tile aspect ratio was not preserved');
+});
+
+check('area texture orientation offsets are configurable per tag mapping', () => {
+    const { renderer, sandbox, stubs } = loadRenderer();
+    vm.runInContext(fs.readFileSync(path.join(SRC, 'area_repetition.js'), 'utf8'),
+        sandbox, { filename: 'area_repetition.js' });
+    renderer.calculateTextureRotation = () => -Math.PI / 4;
+    stubs.windowStub.modelRenderer = renderer;
+
+    const crossing = stubs.windowStub.areaRepetition.generateAreaRepetitions(
+        [[0, 0], [0.001, 0], [0.001, 0.001]],
+        { 'area:highway': 'footway', footway: 'crossing' }
+    )[0];
+    eq(crossing.textureRotationOffsetDegrees, 90,
+        'crossing mapping did not expose a per-tag texture rotation offset');
+
+    const parking = stubs.windowStub.areaRepetition.generateAreaRepetitions(
+        [[0, 0], [0.001, 0], [0.001, 0.001]],
+        { amenity: 'parking' }
+    )[0];
+    eq(parking.textureRotationOffsetDegrees, 90,
+        'parking mapping did not expose a per-tag texture rotation offset');
+
+    const parallelTags = { amenity: 'parking', orientation: 'parallel' };
+    const parallel = stubs.windowStub.areaRepetition.generateAreaRepetitions(
+        [[0, 0], [0.001, 0], [0.001, 0.001]],
+        parallelTags
+    )[0];
+    eq(parallel.model, 'i_parking_diagonal.jpg',
+        'parallel parking did not select its specific texture mapping');
+    eq(parallel.textureRotationOffsetDegrees, 20,
+        'parallel parking did not return its configured 20 degree offset');
+
+    const tags = parallelTags;
+    const properties = Object.assign({}, tags);
+    const west = offset(40, 10);
+    const east = offset(80, 10);
+    const ring = [
+        west,
+        east,
+        offset(80, 30),
+        offset(40, 30),
+        west
+    ];
+    const feature = {
+        get(key) { return properties[key]; },
+        set(key, value) { properties[key] = value; },
+        getProperties() { return properties; },
+        getGeometry() {
+            return {
+                getType: () => 'Polygon',
+                getCoordinates: () => [ring]
+            };
+        }
+    };
+    stubs.windowStub.areaRepetition.applyAreaRepetitions(feature, null, null, tags);
+    const repModel = feature.get('repetition_0');
+    eq(repModel.textureRotationOffsetDegrees, 20,
+        'per-tag parallel parking rotation was dropped when storing the repetition');
+
+    renderer._session3dId = 1;
+    renderer.addRepetitionModel(feature, 0, repModel, stubs.scene);
+    const textureMaterial = stubs.scene.primitives._items[0].__gp.appearance.material.fabric;
+    assert(Math.abs(textureMaterial.uniforms.textureRotation - (Math.PI / 4 + 20 * Math.PI / 180)) < 1e-8,
+        'parallel parking offset was dropped or its stored way bearing was recalculated');
+});
+
+check('empty-model area mappings still generate configured textures', () => {
+    const { sandbox, stubs } = loadRenderer();
+    vm.runInContext(fs.readFileSync(path.join(SRC, 'geojson_loader.js'), 'utf8'),
+        sandbox, { filename: 'geojson_loader.js' });
+
+    let applied = 0;
+    stubs.windowStub.areaRepetition = {
+        applyAreaRepetitions(feature, model, config, tags) {
+            applied++;
+            eq(model, '', 'empty area mapping model changed');
+            eq(tags.orientation, 'parallel', 'area tags were not forwarded');
+        }
+    };
+    const feature = {};
+    const handled = sandbox.applyEmptyAreaModelMapping(
+        feature,
+        { geometryType: 'area', model: '', config: {} },
+        { amenity: 'parking', orientation: 'parallel' }
+    );
+    assert(handled, 'empty-model area mapping was skipped');
+    eq(applied, 1, 'configured area repetitions were not applied');
+    eq(sandbox.applyEmptyAreaModelMapping(feature, { geometryType: 'line', model: '' }, {}),
+        false,
+        'empty non-area mapping should keep the existing skip behavior');
+});
+
+check('texture-only polygons do not add an untextured fallback surface', () => {
+    const { renderer } = loadRenderer();
+    const feature = makeFeature(0, 0, {
+        repetition_0: { type: 'polygon_texture' },
+        repetition_0_type: 'polygon_texture'
+    }, 'Polygon');
+    let repetitionCalls = 0;
+    let plainCalls = 0;
+    renderer.addRepetitionModels = () => repetitionCalls++;
+    renderer.addPlainResult = () => plainCalls++;
+    renderer.placeFeature(feature, 0, {}, null);
+    eq(repetitionCalls, 1, 'area texture repetition was not rendered');
+    eq(plainCalls, 0, 'an untextured base polygon was rendered over the texture');
+});
+
+check('an explicit zero texture rotation offset is honored', () => {
+    const { renderer, stubs } = loadRenderer();
+    renderer.addAreaTexture(
+        [[0, 0], [0.001, 0], [0.001, 0.001], [0, 0.001]],
+        'i_crossing.png',
+        { rotation: Math.PI / 4, spacing: 1, scale: 1, textureRotationOffsetDegrees: 0 },
+        stubs.scene
+    );
+    const material = stubs.scene.primitives._items[0].__gp.appearance.material.fabric;
+    assert(Math.abs(material.uniforms.textureRotation + Math.PI / 4) < 1e-8,
+        'explicit zero offset was replaced with a non-zero rotation');
+});
+
+check('sidewalk model rotation follows the way and corrects its authored yaw', () => {
+    const { stubs, sandbox } = loadRenderer();
+    vm.runInContext(fs.readFileSync(path.join(SRC, 'models.js'), 'utf8'),
+        sandbox, { filename: 'models.js' });
+    vm.runInContext(fs.readFileSync(path.join(SRC, 'line_repetition.js'), 'utf8'),
+        sandbox, { filename: 'line_repetition.js' });
+
+    const tags = { footway: 'sidewalk' };
+    const coordinates = [[0, 0], [0.001, 0.001]];
+    const mapping = sandbox.window.models.getModelForTags(
+        tags,
+        coordinates,
+        0,
+        'line'
+    );
+    assert(mapping, 'sidewalk model mapping was not found');
+    assert(Math.abs(mapping.config.rotation[1] + Math.PI / 4) < 1e-8,
+        'sidewalk asset yaw correction was lost in the mapping');
+
+    const properties = Object.assign({}, tags);
+    const feature = {
+        get(key) { return properties[key]; },
+        set(key, value) { properties[key] = value; },
+        getProperties() { return properties; },
+        getGeometry() {
+            return {
+                getType: () => 'LineString',
+                getCoordinates: () => coordinates
+            };
+        }
+    };
+    sandbox.window.lineRepetition.applyLineRepetitions(
+        feature,
+        mapping.model,
+        mapping.config,
+        tags
+    );
+
+    const rotation = feature.get('repetition_0_rotation');
+    assert(rotation, 'sidewalk repetition rotation was not stored');
+    assert(Math.abs(rotation[1] + Math.PI / 2) < 1e-8,
+        '45° way bearing and model-axis correction did not combine: ' + rotation[1]);
 });
 
 // --- 6. unloading releases what is far away ------------------------------

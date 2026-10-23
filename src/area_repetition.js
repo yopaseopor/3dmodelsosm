@@ -72,14 +72,24 @@ const areaRepetitionConfigs = [
         tags: ['area:highway=footway', 'footway=crossing'],
         model: 'i_crossing.png',
         config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] },
+        // Rotate the stripe axis perpendicular to the footway's travel direction.
+        textureRotationOffsetDegrees: 90,
         spacing: 1.0, // 1 meter spacing for area-tagged footways
         maxModels: 5000,
         description: 'Area-tagged footway areas with crossing'
+        },
+    {
+        tags: ['area:highway=footway', 'footway=sidewalk'],
+        model: 'i_llamborda.jpg',
+        config: { scale: 0.5, heightOffset: 0.0, rotation: [0, 0, 0] },
+        spacing: 1.0, // 1 meter spacing for area-tagged footways
+        maxModels: 5000,
+        description: 'Area-tagged footway areas'
     },
     {
         tags: ['area:highway=footway'],
         model: 'i_llamborda.jpg',
-        config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] },
+        config: { scale: 0.5, heightOffset: 0.0, rotation: [0, 0, 0] },
         spacing: 1.0, // 1 meter spacing for area-tagged footways
         maxModels: 5000,
         description: 'Area-tagged footway areas'
@@ -90,6 +100,7 @@ const areaRepetitionConfigs = [
         tags: ['amenity=motorcycle_parking'],
         model: 'i_motorcycle_parking.jpg',
         config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] },
+        textureRotationOffsetDegrees: 90,
         spacing: 1, // 3 meter spacing for parking
         maxModels: 3000,
         description: 'Motorcycle parking areas'
@@ -100,6 +111,18 @@ const areaRepetitionConfigs = [
         tags: ['amenity=parking', 'orientation=diagonal'],
         model: 'i_parking_diagonal.jpg',
         config: { scale: 2.0, heightOffset: 0.0, rotation: [0, 0, 0] },
+        textureRotationOffsetDegrees: 45,
+        spacing: 1, // 3 meter spacing for parking
+        maxModels: 3000,
+        description: 'Parking areas'
+      },
+
+    // Amenity areas
+    {
+        tags: ['amenity=parking', 'orientation=parallel'],
+        model: 'i_parking_diagonal.jpg',
+        config: { scale: 2.0, heightOffset: 0.0, rotation: [0, 0, 0] },
+        textureRotationOffsetDegrees: 90,
         spacing: 1, // 3 meter spacing for parking
         maxModels: 3000,
         description: 'Parking areas'
@@ -110,6 +133,7 @@ const areaRepetitionConfigs = [
         tags: ['amenity=parking_space', 'parking_space=disabled'],
         model: 'i_parking_space_disabled.jpg',
         config: { scale: 2.0, heightOffset: 0.0, rotation: [0, 0, 0] },
+        textureRotationOffsetDegrees: 90,
         spacing: 1, // 1 meter spacing for parking spaces
         maxModels: 3000,
         description: 'Disabled parking spaces with smart rotation'
@@ -118,6 +142,7 @@ const areaRepetitionConfigs = [
         tags: ['amenity=parking_space'],
         model: 'i_parking_space.jpg',
         config: { scale: 2.0, heightOffset: 0.0, rotation: [0, 0, 0] },
+        textureRotationOffsetDegrees: 90,
         spacing: 1, // 1 meter spacing for parking spaces
         maxModels: 3000,
         description: 'Regular parking spaces with smart rotation'
@@ -128,6 +153,7 @@ const areaRepetitionConfigs = [
         tags: ['amenity=parking'],
         model: 'i_parking.png',
         config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] },
+        textureRotationOffsetDegrees: 90,
         spacing: 1, // 3 meter spacing for parking
         maxModels: 3000,
         description: 'Parking areas'
@@ -289,7 +315,7 @@ function generateAreaRepetitions(coordinates, tags, holes = []) {
         // Coordinates are already in EPSG:4326 (transformed in applyAreaRepetitions)
         const polygonCoords = coordinates;
         const textureRotation = window.modelRenderer ? 
-            window.modelRenderer.calculateTextureRotation(polygonCoords, modelFilename) : 
+            window.modelRenderer.calculateTextureRotation(polygonCoords, modelFilename, tags) : 
             0; // No rotation if modelRenderer not available
         
         if (areaRepetitionDebugConfig.enabled && areaRepetitionDebugConfig.logGeneration) {
@@ -303,6 +329,9 @@ function generateAreaRepetitions(coordinates, tags, holes = []) {
             model: tags['manhole'] === 'drain' ? 'i_manhole_drain.jpg' : modelFilename,
             spacing: config.spacing,
             rotation: textureRotation,
+            textureRotationOffsetDegrees: Number.isFinite(config.textureRotationOffsetDegrees)
+                ? config.textureRotationOffsetDegrees
+                : 0,
             scale: config.config.scale
         }];
     }
@@ -460,7 +489,8 @@ function applyAreaRepetitions(feature, modelFilename, modelConfig, tags) {
                         type: 'polygon_texture',
                         polygonCoordinates: rep.polygonCoordinates,
                         spacing: rep.spacing,
-                        rotation: rep.rotation || 0
+                        rotation: rep.rotation || 0,
+                        textureRotationOffsetDegrees: rep.textureRotationOffsetDegrees
                     };
 
                     feature.set(repetitionKey, repModelOptions);

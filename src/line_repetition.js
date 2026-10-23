@@ -311,7 +311,7 @@
             feature.set(`${key}_heightOffset`, heightOffset);
             feature.set(`${key}_rotation`, [
                 baseRotation[0],
-                -repetition.bearing + (config.rotationOffset || 0),
+                -repetition.bearing + (baseRotation[1] || 0) + (config.rotationOffset || 0),
                 baseRotation[2]
             ]);
         }

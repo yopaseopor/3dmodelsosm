@@ -3,9 +3,6 @@
  * Handles 3D model operations in Cesium scene, including area textures and point models
  */
 
-const CESIUM_AREA_TEXTURE_MAX_CANVAS = 2048;
-const CESIUM_AREA_TEXTURE_JPEG_QUALITY = 0.78;
-
 function cesiumModelsVerbose() {
     return typeof window !== 'undefined' && window.globalDebugConfig &&
         window.globalDebugConfig.cesiumModels && window.globalDebugConfig.cesiumModels.verbose;
@@ -278,6 +275,22 @@ class AreaTextureManager {
                     ol.proj.transform(coord, projection, 'EPSG:4326')
                 );
                 const textureRotation = this.calculateTextureRotation(polygonCoords, imageUrl, tagsObj);
+                const textureBounds = polygonCoords.reduce((bounds, coord) => ({
+                    minLon: Math.min(bounds.minLon, coord[0]),
+                    maxLon: Math.max(bounds.maxLon, coord[0]),
+                    minLat: Math.min(bounds.minLat, coord[1]),
+                    maxLat: Math.max(bounds.maxLat, coord[1])
+                }), {
+                    minLon: Infinity, maxLon: -Infinity,
+                    minLat: Infinity, maxLat: -Infinity
+                });
+                const tileSizeMeters = modelConfig && Number.isFinite(modelConfig.scale) &&
+                    modelConfig.scale > 0 ? modelConfig.scale : 1;
+                const centerLat = (textureBounds.minLat + textureBounds.maxLat) / 2;
+                const repeatX = (textureBounds.maxLon - textureBounds.minLon) *
+                    111320 * Math.cos(centerLat * Math.PI / 180) / tileSizeMeters;
+                const repeatY = (textureBounds.maxLat - textureBounds.minLat) *
+                    111320 / tileSizeMeters;
 
                 // Use a regular primitive for bridge polygons at their fixed
                 // height; GroundPrimitive remains appropriate for terrain-draped
@@ -291,6 +304,7 @@ class AreaTextureManager {
                             geometry: new Cesium.PolygonGeometry({
                                 polygonHierarchy: hierarchy,
                                 vertexFormat: Cesium.MaterialAppearance.MaterialSupport.TEXTURED.vertexFormat,
+                                stRotation: textureRotation,
                                 perPositionHeight: bridgeSurfaceHeight !== null
                             }),
                             attributes: {
@@ -299,7 +313,13 @@ class AreaTextureManager {
                         }),
                         appearance: new Cesium.MaterialAppearance({
                             material: new Cesium.Material({
-                                fabric: { type: 'Image', uniforms: { image: imageUrl } }
+                                fabric: {
+                                    type: 'Image',
+                                    uniforms: {
+                                        image: imageUrl,
+                                        repeat: new Cesium.Cartesian2(repeatX, repeatY)
+                                    }
+                                }
                             }),
                             translucent: true
                         }),
@@ -375,8 +395,15 @@ class AreaTextureManager {
     calculateTextureRotation(polygonCoordinates, textureName, tagsObj = {}) {
         if (cesiumModelsVerbose()) console.log(`🎨 calculateTextureRotation: ${textureName}`);
 
+        const textureTags = tagsObj || {};
+        const isFootwayArea = textureName.toLowerCase().includes('i_llamborda.jpg') && (
+            textureTags['area:highway'] === 'footway' ||
+            textureTags.highway === 'footway' ||
+            textureTags.footway === 'sidewalk'
+        );
+
         // Special case: disabled parking spaces should not be rotated to maintain proper orientation
-        if (tagsObj && tagsObj['parking_space'] === 'disabled') {
+        if (textureTags['parking_space'] === 'disabled') {
             if (cesiumModelsVerbose()) console.log(`🎨 disabled parking space: no rotation`);
             return 0;
         }
@@ -417,6 +444,15 @@ class AreaTextureManager {
 
             const isParkingTexture = textureName.toLowerCase().includes('i_parking');
             let sourceWays = nearbyWays;
+            if (isFootwayArea) {
+                sourceWays = nearbyWays.filter(feature =>
+                    feature.get && (
+                        feature.get('highway') === 'footway' ||
+                        feature.get('footway') === 'sidewalk' ||
+                        feature.get('area:highway') === 'footway'
+                    )
+                );
+            }
             if (isParkingTexture) {
                 const kerbWays = nearbyWays.filter(f => f.get && f.get('barrier') === 'kerb');
                 if (kerbWays.length > 0) {
@@ -426,6 +462,10 @@ class AreaTextureManager {
             }
 
             if (sourceWays.length === 0) {
+                if (isFootwayArea) {
+                    if (cesiumModelsVerbose()) console.log(`🎨 no nearby footway → 0`);
+                    return 0;
+                }
                 const closestFallbackSegment = this.findClosestWaySegmentToPolygon(
                     layers,
                     polygonCoordinates,
