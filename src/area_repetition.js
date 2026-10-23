@@ -156,6 +156,14 @@ const areaRepetitionConfigs = [
         maxModels: 10000,
         description: 'Area-tagged residential street areas'
     },
+       {
+           tags: ['area:highway=*'],
+           model: 'i_asfalt.jpg',
+           config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] },
+           spacing: 1.0,
+           maxModels: 10000,
+           description: 'Other area-tagged highways'
+       },
 
     // Amenity areas
     {
@@ -225,7 +233,9 @@ function getAreaRepetitionConfig(tags) {
                 tagValue = tags[originalKey];
             }
             
-            const matches = tagValue === value;
+            const matches = value === '*'
+                ? tagValue !== undefined
+                : tagValue === value;
             if (areaRepetitionDebugConfig.enabled && areaRepetitionDebugConfig.logConfigMatching) console.log(`🏞️ Checking area config tag ${key}=${value}, found: ${tagValue}, matches: ${matches}`);
             return matches;
         });
@@ -495,4 +505,3 @@ window.areaRepetition = {
     isPointInPolygon: isPointInPolygon,
     getAreaRepetitionConfig: getAreaRepetitionConfig
 };
-

@@ -346,6 +346,23 @@ function assignModelToFeature(feature, allFeatures = null) {
         const mappingGeometryType = modelMapping.geometryType;
         
         if (mappingGeometryType === 'area') {
+            if (window.areaRepetition) {
+                try {
+                    window.areaRepetition.applyAreaRepetitions(feature, modelFilename, modelConfig, tagsObj);
+                } catch (error) {
+                    console.error('🎨 Error applying area repetitions:', error);
+                }
+            }
+            if (feature.get('repetition_0_type') === 'polygon_texture') {
+                feature.set(window.OSM3D_MODEL_PROPERTY || 'osm3dModel', {
+                    uri: `/3dmodelsosm/src/models/${modelFilename}`,
+                    scale: modelConfig ? modelConfig.scale : 1.0,
+                    heightReference: Cesium.HeightReference.CLAMP_TO_GROUND
+                });
+                feature.set('modelHeightOffset', modelConfig ? modelConfig.heightOffset : 0);
+                if (modelConfig) feature.set('modelRotation', modelConfig.rotation);
+                return;
+            }
             if (debugConfig.enabled && debugConfig.logAreaProcessing) console.log('🎨 Area code reached for tags:', tagsObj, 'geometryType:', mappingGeometryType);
             // Handle area textures/materials
             if (debugConfig.enabled && debugConfig.logAreaProcessing) console.log(`🎨 Applying area texture ${modelFilename} to polygon or line`);
@@ -528,10 +545,8 @@ function assignModelToFeature(feature, allFeatures = null) {
                 // paris.geojson has ~8500 way segments, so one overlay produced
                 // 170,280 of them on every load.
                 //
-                // applyLineRepetitions (model_repetition.js) is now the one place
-                // that decides how a tagged way is populated: fence -> highway ->
-                // footway -> railway -> generic metre-based fallback. It never ends
-                // in "nothing to do", which is what a railway used to hit.
+                // applyLineRepetitions (model_repetition.js) delegates all mapped
+                // line types to the same configurable line_repetition.js module.
                 if (window.modelRepetition && window.modelRepetition.applyLineRepetitions) {
                     window.modelRepetition.applyLineRepetitions(feature, tagsObj, modelFilename, modelConfig, mappingGeometryType);
                 } else if (window.modelRepetition && window.modelRepetition.applyModelRepetitions) {

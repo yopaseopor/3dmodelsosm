@@ -172,8 +172,8 @@ class GeoJSONUI {
         await new Promise(resolve => window.requestAnimationFrame(resolve));
 
         const view = map.getView();
-        if (view.getZoom() < 20) {
-            this.setDownloadStatus('Zoom to level 20 or higher to download.');
+        if (view.getZoom() < 19) {
+            this.setDownloadStatus('Zoom to level 19 or higher to download.');
             return;
         }
 
@@ -209,7 +209,7 @@ class GeoJSONUI {
         const lonLatExtent = ol.proj.transformExtent(extent, view.getProjection(), 'EPSG:4326');
         const [west, south, east, north] = lonLatExtent;
         const bbox = `${south},${west},${north},${east}`;
-        const query = `[out:xml][timeout:${timeoutSeconds}];(nwr(${bbox}););out body geom;`;
+        const query = `[out:xml][timeout:${timeoutSeconds}];way(${bbox})->.visibleWays;node(${bbox})->.visibleNodes;(.visibleWays;.visibleNodes;)->.visibleElements;.visibleElements out body geom;rel(bw.visibleWays)->.wayRelations;rel(bn.visibleNodes)->.nodeRelations;(.wayRelations;.nodeRelations;)->.visibleRelations;.visibleRelations out body;`;
         const xhr = new XMLHttpRequest();
 
         if (this.downloadButton) {
@@ -244,13 +244,7 @@ class GeoJSONUI {
                 throw new Error(`Overpass error: ${remark.textContent.trim()}`);
             }
 
-            const features = new ol.format.OSMXML().readFeatures(xmlDocument, {
-                featureProjection: view.getProjection()
-            });
-            const geoJSON = new ol.format.GeoJSON().writeFeaturesObject(features, {
-                dataProjection: 'EPSG:4326',
-                featureProjection: view.getProjection()
-            });
+            const { geoJSON, featureCount, relationWarnings } = this.convertOSMXMLToGeoJSON(xmlDocument);
             const blob = new Blob([JSON.stringify(geoJSON, null, 2)], {
                 type: 'application/geo+json'
             });
@@ -262,7 +256,10 @@ class GeoJSONUI {
             this.downloadFile = new File([blob], filename, { type: 'application/geo+json' });
             this.downloadObjectUrl = URL.createObjectURL(this.downloadFile);
             this.showDownloadActions(filename);
-            this.setDownloadStatus(`GeoJSON ready: ${features.length} feature(s). Choose Save or Share.`);
+            const warningMessage = relationWarnings > 0
+                ? ` ${relationWarnings} relation(s) had incomplete member geometry.`
+                : '';
+            this.setDownloadStatus(`GeoJSON ready: ${featureCount} on-screen feature(s).${warningMessage} Tap Save GeoJSON.`);
         } catch (error) {
             console.error('📍 Error downloading GeoJSON from Overpass:', error);
             this.setDownloadStatus(`Download failed: ${error.message}`);
@@ -271,6 +268,26 @@ class GeoJSONUI {
                 this.downloadButton.disabled = false;
             }
         }
+    }
+
+    convertOSMXMLToGeoJSON(xmlDocument) {
+        if (typeof window.osmtogeojson !== 'function') {
+            throw new Error('OSM-to-GeoJSON converter is unavailable.');
+        }
+
+        const geoJSON = window.osmtogeojson(xmlDocument, { flatProperties: true });
+        if (!geoJSON || geoJSON.type !== 'FeatureCollection' || !Array.isArray(geoJSON.features)) {
+            throw new Error('OSM-to-GeoJSON converter returned invalid data.');
+        }
+
+        const relationWarnings = geoJSON.features.filter(feature =>
+            feature.properties?.type === 'relation' && feature.properties.tainted
+        ).length;
+        return {
+            geoJSON,
+            featureCount: geoJSON.features.length,
+            relationWarnings
+        };
     }
 
     setDownloadStatus(message) {

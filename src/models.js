@@ -15,6 +15,7 @@ const availableModels = [
     'w_area_highway_footway.glb',
     'w_barrier_fence_wood.gltf',
     'w_barrier_kerb.gltf',
+	'w_barrier_wall.glb',
 	'w_highway_bus_stop.glb',
     'w_highway_cycleway.gltf',
     'w_highway_footway.glb',
@@ -150,6 +151,7 @@ const modelMappings = [
 // had i_asfalt.jpg configs for these two tags - they were unreachable.
 { tags: ['area:highway=motorway'], model: 'i_asfalt.jpg', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Motorway carriageway areas (tunnels, bridges)
 { tags: ['area:highway=motorway_link'], model: 'i_asfalt.jpg', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Motorway link areas
+{ tags: ['area:highway=*'], model: 'i_asfalt.jpg', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Other area-tagged highways
 { tags: ['amenity=motorcycle_parking'], model: '', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Motorcycle parking model for amenity=motorcycle_parking   
 { tags: ['leisure=garden'], model: '', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Garden area models
    { tags: ['leisure=playground'], model: '', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Playground area models
@@ -173,7 +175,8 @@ const modelMappings = [
   { tags: ['fence_type=chain_link'], model: 'w_barrier_fence_wood.gltf', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Chain link fence by type only
   { tags: ['fence_type=wire'], model: 'w_barrier_fence_wood.gltf', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Wire fence by type only
   { tags: ['fence_type=pole'], model: 'w_barrier_fence_wood.gltf', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Pole fence by type only
-  { tags: ['highway=cycleway'], model: 'w_highway_cycleway.gltf', geometryType: 'line', config: { scale: 4.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Residential road line models 
+  { tags: ['barrier=wall'], model: 'w_barrier_wall.glb', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Generic wall
+    { tags: ['highway=cycleway'], model: 'w_highway_cycleway.gltf', geometryType: 'line', config: { scale: 4.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Residential road line models 
   { tags: ['highway=footway'], model: 'w_highway_footway.glb', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway line models
     { tags: ['footway=sidewalk'], model: 'w_highway_footway.glb', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Sidewalk line models
    { tags: ['highway=residential'], model: 'w_highway_residential.gltf', geometryType: 'line', config: { scale: 6.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Residential road line models
@@ -475,6 +478,10 @@ function getModelForTags(tags, wayCoordinates = null, nodeIndex = null, geometry
         if (bucket) {
             for (let i = 0; i < bucket.length; i++) candidates.push(bucket[i]);
         }
+        const wildcardBucket = byValue.get('*');
+        if (wildcardBucket) {
+            for (let i = 0; i < wildcardBucket.length; i++) candidates.push(wildcardBucket[i]);
+        }
     });
     if (candidates.length === 0) return null;
     candidates.sort((a, b) => a.order - b.order);
@@ -487,7 +494,7 @@ function getModelForTags(tags, wayCoordinates = null, nodeIndex = null, geometry
         // the rule identical to the original "every tag must match".
         const allMatch = mapping.tags.every(tag => {
             const [key, value] = tag.split('=');
-            return tags[key] === value;
+            return value === '*' ? tags[key] !== undefined : tags[key] === value;
         });
         if (!allMatch) continue;
 

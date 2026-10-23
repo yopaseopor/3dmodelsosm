@@ -331,11 +331,9 @@ class GeoJSONLoader {
                                         // fences, highways, footways and drains. A railway
                                         // matched none of them, so the chain simply ended and the
                                         // feature got no model at all - even though models.js maps
-                                        // railway=rail to w_railway_rail.glb. It is now
-                                        // applyLineRepetitions() in model_repetition.js, which
-                                        // also keeps the fence/highway/footway branches and adds
-                                        // a generic metre-based fallback, so no tag can fall off
-                                        // the end again.
+                                        // railway=rail to w_railway_rail.glb. The model_repetition.js
+                                        // entry point now delegates all line types to the single,
+                                        // configurable line_repetition.js module.
                                         try {
                                             window.modelRepetition.applyLineRepetitions(feature, tags, modelFilename, modelConfig, modelMapping.geometryType);
                                         } catch (error) {

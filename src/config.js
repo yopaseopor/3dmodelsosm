@@ -585,6 +585,57 @@ geojson: './src/vng7_piscina.geojson',
 },
 /*   abrir */							{
     group: 'Geojson',
+    title: 'ES_CAT_VNG Zona Sant Joan Aigua',
+geojson: './src/sant_joan_aigua.geojson',
+    iconSrc: imgSrc + 'icones/maxspeed_empty.svg',
+    iconStyle: 'background-color:rgba(255,255,255,0.4)',
+    style: function (feature) {
+        var key_regex = /^name$/;
+        var name_key = feature.getKeys().filter(function(t){return t.match(key_regex)}).pop() || "name";
+        var name = feature.get(name_key) || '';
+        var fill = new ol.style.Fill({
+            color: 'rgba(117,63,79,0.05)'
+        });
+        var stroke = new ol.style.Stroke({
+            color: 'rgba(117,63,79,0.5)',
+            width: 1
+        });
+        // Get the geometry type
+        var geom = feature.getGeometry();
+        var isPolygon = geom.getType() === 'Polygon' || geom.getType() === 'MultiPolygon';
+        
+        var style = new ol.style.Style({
+            image: new ol.style.Icon({
+                src: imgSrc + 'icones/maxspeed_empty.svg',
+                scale: 0.001
+            }),
+            text: new ol.style.Text({
+                text: name,
+				font: 'bold 12px/1 Arial',             			
+                fill: new ol.style.Fill({
+                    color: 'rgba(0,0,0,0.9)'
+                }),
+                stroke: new ol.style.Stroke({
+                    color: 'rgba(255,255,255,0.3)',
+                    width: 2
+                }),
+                // For polygons, we'll use a different placement strategy
+                placement: isPolygon ? 'point' : 'point',
+				textAlign: 'center',
+                textBaseline: 'bottom',
+                offsetY: isPolygon ? -15 : 0, // Move text up for polygons
+                overflow: true // Allow text to be rendered outside the view
+            }),
+            fill: fill,
+            stroke: stroke
+        });
+        
+        return style;
+/*   cerrar */								}
+
+/*@@ fin-inicio de copia */			},
+/*   abrir */							{
+    group: 'Geojson',
     title: 'ES_CAT_VNG Zona Sant Joan',
 geojson: './src/vng5_area.geojson',
     iconSrc: imgSrc + 'icones/maxspeed_empty.svg',

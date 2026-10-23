@@ -45,6 +45,22 @@ const globalDebugConfig = {
         logModelAssignment: false,
         logGeometryDetection: false,
         logAreaProcessing: false
+    },
+
+    // Unified line placement. Enable with ?debug=lineRepetition.
+    lineRepetition: {
+        enabled: false,
+        logProcessing: false,
+        logStorage: false
+    },
+
+    // The GeoJSON loader's per-feature trace. Off by default because it is
+    // per-FEATURE: a city file is thousands of lines, and each one holds a live
+    // tags object, so it costs real time with the DevTools open. Use
+    // ?debug=geojsonLoader when a file comes back with fewer models than it
+    // should have.
+    geojsonLoader: {
+        enabled: false
     }
 };
 

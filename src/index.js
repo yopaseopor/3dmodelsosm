@@ -517,44 +517,25 @@ $(function () {
 
           console.log(`🎯 SUCCESS: Assigned 3D model ${modelFilename} to GeoJSON feature with tags:`, tagsObj);
 
-          // Apply model repetitions for lines and areas (skip points and buildings)
-          if (modelMapping.geometryType !== 'point' && window.modelRepetition) {
-            console.log(`🎯 Applying model repetitions for ${modelMapping.geometryType} feature`);
-            if (modelMapping.geometryType === 'line' && window.highwayRepetition) {
-              // Handle highway lines
-              const tags = feature.getProperties();
-              const highway = tags.highway;
-              
-              console.log(`🛣️ DEBUG: Checking highway feature - highway: ${highway}, tags:`, tags);
-              
-              if (highway && highway !== 'footway' && highway !== 'path' && highway !== 'pedestrian') {
-                console.log(`🛣️ Applying repetitions to highway ${highway} feature from index.js:`, tags);
-                try {
-                  window.highwayRepetition.applyHighwayRepetitions(feature, modelFilename, modelConfig, highway);
-                } catch (error) {
-                  console.error(`🛣️ Error applying repetitions to highway ${highway} feature:`, error);
-                  // Fallback to old system
-                  window.modelRepetition.applyModelRepetitions(feature, modelFilename, modelConfig, modelMapping.geometryType);
-                }
-              } else {
-                // Fallback to old system for non-highway features
-                window.modelRepetition.applyModelRepetitions(feature, modelFilename, modelConfig, modelMapping.geometryType);
-              }
-            } else if (modelMapping.geometryType === 'area' && window.areaRepetition) {
-              // Handle area repetitions
-              const tags = feature.getProperties();
-              console.log(`🏞️ Applying area repetitions to feature with tags:`, tags);
-              try {
-                window.areaRepetition.applyAreaRepetitions(feature, modelFilename, modelConfig, tags);
-              } catch (error) {
-                console.error(`🏞️ Error applying area repetitions:`, error);
-                // Fallback to old system
-                window.modelRepetition.applyModelRepetitions(feature, modelFilename, modelConfig, modelMapping.geometryType);
-              }
-            } else {
-              // Fallback to old system for unsupported geometry types
+          // Apply the shared repetition logic to every mapped line.
+          if (modelMapping.geometryType === 'line' && window.lineRepetition) {
+            try {
+              window.lineRepetition.applyLineRepetitions(
+                feature, modelFilename, modelConfig, feature.getProperties()
+              );
+            } catch (error) {
+              console.error('Error applying line repetitions:', error);
+            }
+          } else if (modelMapping.geometryType === 'area' && window.areaRepetition) {
+            const tags = feature.getProperties();
+            try {
+              window.areaRepetition.applyAreaRepetitions(feature, modelFilename, modelConfig, tags);
+            } catch (error) {
+              console.error(`🏞️ Error applying area repetitions:`, error);
               window.modelRepetition.applyModelRepetitions(feature, modelFilename, modelConfig, modelMapping.geometryType);
             }
+          } else if (modelMapping.geometryType !== 'point' && window.modelRepetition) {
+            window.modelRepetition.applyModelRepetitions(feature, modelFilename, modelConfig, modelMapping.geometryType);
           }
         }
         if (!modelMapping && window.buildings && window.buildings.isBuildingFeature(tagsObj)) {
@@ -786,70 +767,25 @@ $(function () {
 
 									console.log(`🎯 SUCCESS: Assigned 3D model ${modelFilename} to overlay feature with tags:`, tagsObj);
 
-									// Apply model repetitions for lines and areas (skip points and buildings)
-									if (modelMapping.geometryType !== 'point' && window.modelRepetition) {
-										// Special handling for highway=footway lines
-										if (modelMapping.geometryType === 'line' && modelMapping.tags.includes('highway=footway') && window.footwayRepetition) {
-											window.footwayRepetition.applyFootwayRepetitions(feature, modelFilename, modelConfig, me);
-										} else if (modelMapping.geometryType === 'line' && (modelMapping.tags.some(tag => tag.includes('barrier=fence') || tag.includes('fence_type='))) && window.fenceRepetition) {
-											// Handle fence features with the new fence repetition system
-											const tags = feature.getProperties();
-											const barrier = tags.barrier;
-											const fenceType = tags.fence_type;
-											
-											console.log(`🚜 DEBUG OSM XML: Checking fence feature - barrier: ${barrier}, fence_type: ${fenceType}, tags:`, tags);
-											
-											if (barrier === 'fence' || fenceType) {
-												const fenceTypeToUse = fenceType || 'default';
-												console.log(`🚜 Applying repetitions to fence ${fenceTypeToUse} overlay feature:`, tags);
-												try {
-													window.fenceRepetition.applyFenceRepetitions(feature, modelFilename, modelConfig, fenceTypeToUse);
-												} catch (error) {
-													console.error(`🚜 Error applying repetitions to fence ${fenceTypeToUse} overlay feature:`, error);
-													// Fallback to old system
-													window.modelRepetition.applyModelRepetitions(feature, modelFilename, modelConfig, modelMapping.geometryType);
-												}
-											} else {
-												// Fallback to old system for non-fence features
-												window.modelRepetition.applyModelRepetitions(feature, modelFilename, modelConfig, modelMapping.geometryType);
-											}
-										} else if (modelMapping.geometryType === 'line' && window.highwayRepetition) {
-											// Handle all other highway types with the new highway repetition system
-											const tags = feature.getProperties();
-											const highway = tags.highway;
-											
-											console.log(`🛣️ DEBUG OSM XML: Checking highway feature - highway: ${highway}, tags:`, tags);
-											
-											if (highway && highway !== 'footway' && highway !== 'path' && highway !== 'pedestrian') {
-												console.log(`🛣️ Applying repetitions to highway ${highway} overlay feature:`, tags);
-												try {
-													window.highwayRepetition.applyHighwayRepetitions(feature, modelFilename, modelConfig, highway);
-												} catch (error) {
-													console.error(`🛣️ Error applying repetitions to highway ${highway} overlay feature:`, error);
-													// Fallback to old system
-													window.modelRepetition.applyModelRepetitions(feature, modelFilename, modelConfig, modelMapping.geometryType);
-												}
-											} else {
-												// Fallback to old system for non-highway features
-												window.modelRepetition.applyModelRepetitions(feature, modelFilename, modelConfig, modelMapping.geometryType);
-											}
-										} else if (modelMapping.geometryType === 'area' && window.areaRepetition) {
-											// Handle area repetitions
-											const tags = feature.getProperties();
-											console.log(`🏞️ Applying area repetitions to overlay feature with tags:`, tags);
-											try {
-												// Extract area type from tags (could be highway, amenity, etc.)
-												const areaType = tags.highway || tags.amenity || tags.landuse || 'unknown';
-												window.areaRepetition.applyAreaRepetitions(feature, modelFilename, modelConfig, tags);
-											} catch (error) {
-												console.error(`🏞️ Error applying area repetitions:`, error);
-												// Fallback to old system
-												window.modelRepetition.applyModelRepetitions(feature, modelFilename, modelConfig, modelMapping.geometryType);
-											}
-										} else {
-											// Fallback to old system
+									// Use one repetition system for lines and keep areas separate.
+									if (modelMapping.geometryType === 'line' && window.lineRepetition) {
+										try {
+											window.lineRepetition.applyLineRepetitions(
+												feature, modelFilename, modelConfig, feature.getProperties()
+											);
+										} catch (error) {
+											console.error('Error applying line repetitions:', error);
+										}
+									} else if (modelMapping.geometryType === 'area' && window.areaRepetition) {
+										const tags = feature.getProperties();
+										try {
+											window.areaRepetition.applyAreaRepetitions(feature, modelFilename, modelConfig, tags);
+										} catch (error) {
+											console.error(`🏞️ Error applying area repetitions:`, error);
 											window.modelRepetition.applyModelRepetitions(feature, modelFilename, modelConfig, modelMapping.geometryType);
 										}
+									} else if (modelMapping.geometryType !== 'point' && window.modelRepetition) {
+										window.modelRepetition.applyModelRepetitions(feature, modelFilename, modelConfig, modelMapping.geometryType);
 									}
 								} else {
 									if (osmTags.length > 0) {

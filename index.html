@@ -62,7 +62,7 @@
 			  <button id="geojson-download-btn" type="button" style="width: 100%; padding: 8px; background: #673AB7; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">
 				⬇️ GeoJSON Downloader
 			  </button>
-			  <small id="geojson-download-status" role="status" aria-live="polite" style="color: #ccc; display: block; margin-top: 5px; text-align: center;">Available from zoom 20</small>
+			  <small id="geojson-download-status" role="status" aria-live="polite" style="color: #ccc; display: block; margin-top: 5px; text-align: center;">Available from zoom 19</small>
 			  <div id="geojson-download-result" style="margin-top: 6px; text-align: center;"></div>
 			</div>
 			
@@ -200,16 +200,7 @@
 	<script src="src/precharge.js"></script>
 	<script src="src/model_renderer.js"></script>
 	<script src="src/model_repetition.js"></script>
-	<script src="src/highway_repetition.js"></script>
-	<!-- Railway: repeats the rail model along each way, using the BEARING of the
-	     segment it sits on, so a rail follows a curving track instead of all
-	     pointing the same way. Must load before model_renderer.js runs a sweep,
-	     and before geojson_loader.js / overlay_integration.js call into it:
-	     window.railwayRepetition is what those two look for, and without this
-	     tag it is undefined, so a railway matched no branch and got no model. -->
-	<script src="src/railway_repetition.js"></script>
-	<script src="src/footway_repetition.js"></script>
-	<script src="src/fence_repetition.js"></script>
+	<script src="src/line_repetition.js"></script>
 	<script src="src/area_repetition.js"></script>
 	<script src="src/buildings.js"></script>
 	<script src="src/indoor.js"></script>

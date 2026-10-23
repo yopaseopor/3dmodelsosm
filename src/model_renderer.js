@@ -1196,14 +1196,16 @@ window.modelRenderer = {
     placeFeature: function(feature, fidx, cesiumScene, layer) {
         const model = getFeatureModelOptions(feature);
         const hasRepetitions = feature.get('repetition_0');
+        const hasAreaTextureRepetition = feature.get('repetition_0_type') === 'polygon_texture';
         const geometry = feature.getGeometry();
 
         if (geometry && geometry.getType && (geometry.getType() === 'Polygon' || geometry.getType() === 'MultiPolygon')) {
-            if (model && model.uri && /\.(jpg|jpeg|png|gif|bmp|tiff|tif)$/i.test(model.uri)) {
+            const hasImageModel = model && model.uri && /\.(jpg|jpeg|png|gif|bmp|tiff|tif)$/i.test(model.uri);
+            if (hasImageModel && !hasAreaTextureRepetition) {
                 if (debugConfig.enabled) console.log(`🎯 Feature ${fidx} has area texture: ${model.uri}`);
                 this.addAreaTextureForFeature(feature, model, fidx, cesiumScene);
             } else {
-                if (model && typeof model === 'object' && model.uri) {
+                if (model && typeof model === 'object' && model.uri && !hasImageModel && !hasAreaTextureRepetition) {
                     this.addModelForFeature(feature, fidx, cesiumScene, layer);
                 }
                 this.addRepetitionModels(feature, cesiumScene);
@@ -1212,7 +1214,7 @@ window.modelRenderer = {
                 if (!model) this.addPlainResult(feature, fidx, cesiumScene, layer);
             }
         } else {
-            if (model && typeof model === 'object' && model.uri) {
+            if (model && typeof model === 'object' && model.uri && !hasAreaTextureRepetition) {
                 this.addModelForFeature(feature, fidx, cesiumScene, layer);
             }
             this.addRepetitionModels(feature, cesiumScene);
@@ -1628,7 +1630,7 @@ window.modelRenderer = {
             return;
         }
         
-        // The repPosition is already in lon/lat format (from footway_repetition.js)
+        // The repPosition is already in lon/lat format (from line_repetition.js)
         // No need to convert again
         const repLonLat = repPosition;
 

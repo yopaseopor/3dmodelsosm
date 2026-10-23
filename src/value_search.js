@@ -329,52 +329,12 @@ function processQueryResults(allFeatures, key, value) {
             const mappingGeometryType = mapping.geometryType;
             if (debugConfig.enabled && debugConfig.logModelAssignment) console.log('mappingGeometryType:', mappingGeometryType);
 
-            // Apply footway repetitions if this is a footway feature
-            if (window.footwayRepetition && typeof window.footwayRepetition.applyFootwayRepetitions === 'function') {
+            if (mappingGeometryType === 'line' && window.lineRepetition) {
                 const tags = feature.getProperties();
-                const highway = tags.highway;
-                
-                if (highway === 'footway' || highway === 'path' || highway === 'pedestrian') {
-                    if (debugConfig.enabled && debugConfig.logModelAssignment) console.log('🚶 Applying repetitions to footway feature from query:', tags);
-                    try {
-                        window.footwayRepetition.applyFootwayRepetitions(feature, modelFilename, modelConfig);
-                    } catch (error) {
-                        console.error('🚶 Error applying repetitions to footway query result:', error);
-                    }
-                }
-            }
-
-            // Apply highway repetitions if this is a highway feature
-            if (window.highwayRepetition && typeof window.highwayRepetition.applyHighwayRepetitions === 'function') {
-                const tags = feature.getProperties();
-                const highway = tags.highway;
-                
-                if (highway && highway !== 'footway' && highway !== 'path' && highway !== 'pedestrian') {
-                    if (debugConfig.enabled && debugConfig.logModelAssignment) console.log(`🛣️ Applying repetitions to highway ${highway} feature from query:`, tags);
-                    try {
-                        window.highwayRepetition.applyHighwayRepetitions(feature, modelFilename, modelConfig, highway);
-                    } catch (error) {
-                        console.error(`🛣️ Error applying repetitions to highway ${highway} query result:`, error);
-                    }
-                }
-            }
-
-            // Apply fence repetitions if this is a fence feature
-            if (window.fenceRepetition && typeof window.fenceRepetition.applyFenceRepetitions === 'function') {
-                const tags = feature.getProperties();
-                const barrier = tags.barrier;
-                const fenceType = tags.fence_type;
-                
-                console.log(`🚜 SEARCH DEBUG: Checking fence feature - barrier: ${barrier}, fence_type: ${fenceType}`);
-                
-                if (barrier === 'fence' || fenceType) {
-                    const fenceTypeToUse = fenceType || 'default';
-                    console.log(`🚜 SEARCH DEBUG: Applying repetitions to fence ${fenceTypeToUse} feature from query:`, tags);
-                    try {
-                        window.fenceRepetition.applyFenceRepetitions(feature, modelFilename, modelConfig, fenceTypeToUse);
-                    } catch (error) {
-                        console.error(`🚜 Error applying repetitions to fence ${fenceTypeToUse} query result:`, error);
-                    }
+                try {
+                    window.lineRepetition.applyLineRepetitions(feature, modelFilename, modelConfig, tags);
+                } catch (error) {
+                    console.error('Error applying line repetitions to query result:', error);
                 }
             }
 
