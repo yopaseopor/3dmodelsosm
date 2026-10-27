@@ -62,12 +62,16 @@
                 interval: 0.2, sideOffset: 0, maxModels: 5000, postHeight: 1.0,
                 postWidth: 0.1, heightOffset: 0
             },
+			guard_rail: {
+                interval: 3, sideOffset: 0, maxModels: 5000, postHeight: 1.0,
+                postWidth: 0.1, heightOffset: 0
+            },
 			kerb: {
                 interval: 0.1, sideOffset: 0, maxModels: 5000, postHeight: 1.0,
                 postWidth: 0.1, heightOffset: 0
             },
             wall: {
-                interval: 0.2, sideOffset: 0, maxModels: 5000, postHeight: 1.0,
+                interval: 1, sideOffset: 0, maxModels: 5000, postHeight: 1.0,
                 postWidth: 0.1, heightOffset: 0
             }
         },

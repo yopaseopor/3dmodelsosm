@@ -180,19 +180,23 @@ class AreaTextureManager {
                     if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
                         window.mapterhornTerrain.warmUp(referencePosition[0], referencePosition[1]);
                     }
-                    const localHeight = window.terrainManager && window.terrainManager.getElevation
-                        ? window.terrainManager.getElevation(referencePosition[0], referencePosition[1])
-                        : null;
-                    const terrainHeight = window.mapterhornTerrain && window.mapterhornTerrain.getElevation
-                        ? window.mapterhornTerrain.getElevation(referencePosition[0], referencePosition[1])
-                        : null;
-                    bridgeSurfaceHeight = localHeight !== null && localHeight !== undefined && isFinite(localHeight)
-                        ? localHeight
-                        : (terrainHeight !== null && terrainHeight !== undefined && isFinite(terrainHeight)
-                            ? terrainHeight
-                            : 0);
-                    feature.set('bridgeRefHeight', bridgeSurfaceHeight);
-                    feature.set('bridgeRefPosition', referencePosition);
+                    if (typeof window.getBridgeReferenceHeight === 'function') {
+                        bridgeSurfaceHeight = window.getBridgeReferenceHeight(feature, referencePosition);
+                    } else {
+                        const localHeight = window.terrainManager && window.terrainManager.getElevation
+                            ? window.terrainManager.getElevation(referencePosition[0], referencePosition[1])
+                            : null;
+                        const terrainHeight = window.mapterhornTerrain && window.mapterhornTerrain.getElevation
+                            ? window.mapterhornTerrain.getElevation(referencePosition[0], referencePosition[1])
+                            : null;
+                        bridgeSurfaceHeight = localHeight !== null && localHeight !== undefined && isFinite(localHeight)
+                            ? localHeight
+                            : (terrainHeight !== null && terrainHeight !== undefined && isFinite(terrainHeight)
+                                ? terrainHeight
+                                : 0);
+                        feature.set('bridgeRefHeight', bridgeSurfaceHeight);
+                        feature.set('bridgeRefPosition', referencePosition);
+                    }
                 }
             } else if (modelConfig &&
                 typeof modelConfig.underBridgeSurfaceHeight === 'number' &&

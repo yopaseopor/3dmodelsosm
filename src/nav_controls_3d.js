@@ -491,6 +491,14 @@
                 #nav3d-controls .nav3d-title {
                     text-align: center; font-size: 11px; color: #555; margin-bottom: 4px;
                 }
+                #nav3d-controls .nav3d-level-select {
+                    display: flex; align-items: center; gap: 6px; margin-top: 6px;
+                    font: 11px sans-serif; color: #444;
+                }
+                #nav3d-controls .nav3d-level-select select {
+                    min-width: 100px; max-width: 150px; height: 28px;
+                    border: 1px solid #bbb; border-radius: 5px; background: #fff;
+                }
             </style>
             <div class="nav3d-title">3D navigation</div>
             <div class="nav3d-grid">
@@ -512,9 +520,25 @@
                 <button data-act="level-down" title="Descend one level (first press enters the underground view)">&#9660;L</button>
                 <button data-act="level-up"   title="Ascend one level (exits the underground view at the surface)">&#9650;L</button>
             </div>
+            <label class="nav3d-level-select" style="display:none">
+                Level
+                <select id="nav3d-level-select" aria-label="Select indoor level"></select>
+            </label>
         `;
         document.body.appendChild(panel);
+        if (window.indoor && typeof window.indoor.refreshLevelSelector === 'function') {
+            window.indoor.refreshLevelSelector();
+        }
 
+        const levelSelect = panel.querySelector('#nav3d-level-select');
+        if (levelSelect) {
+            levelSelect.addEventListener('change', function (ev) {
+                ev.stopPropagation();
+                if (window.indoor && typeof window.indoor.setActiveLevel === 'function') {
+                    window.indoor.setActiveLevel(levelSelect.value || null);
+                }
+            });
+        }
         // Indoor view toggle: plain click — excluded from nav gestures below
         // (the button carries no data-act, and the handler ignores it too)
         const indoorBtn = panel.querySelector('#nav3d-indoor-btn');

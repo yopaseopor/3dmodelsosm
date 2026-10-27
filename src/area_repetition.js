@@ -120,7 +120,7 @@ const areaRepetitionConfigs = [
     // Amenity areas
     {
         tags: ['amenity=parking', 'orientation=parallel'],
-        model: 'i_parking_diagonal.jpg',
+        model: 'i_parking.jpg',
         config: { scale: 2.0, heightOffset: 0.0, rotation: [0, 0, 0] },
         textureRotationOffsetDegrees: 90,
         spacing: 1, // 3 meter spacing for parking

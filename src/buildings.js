@@ -634,7 +634,7 @@ function resolveEntityColor(prop) {
  * @param {boolean} translucent true = make see-through, false = restore saved
  * @returns {boolean} true when the entity was touched
  */
-function applyWallTranslucency(entity, translucent) {
+function applyWallTranslucency(entity, translucent, opacity) {
     if (!entity || !entity.polygon) return false;
     if (translucent) {
         if (!savedBuildingMaterials.has(entity)) {
@@ -653,7 +653,8 @@ function applyWallTranslucency(entity, translucent) {
         if (!c) c = Cesium.Color.WHITE;
         // Assigning a raw Color re-wraps it in a ColorMaterialProperty —
         // the one assignment that reliably changes the rendered alpha.
-        entity.polygon.material = c.withAlpha(0.30);
+        const alpha = opacity === undefined ? 0.30 : Math.max(0, Math.min(1, opacity));
+        entity.polygon.material = c.withAlpha(alpha);
         return true;
     }
     const saved = savedBuildingMaterials.get(entity);
@@ -666,12 +667,13 @@ function applyWallTranslucency(entity, translucent) {
     return true;
 }
 
-function setBuildingsTranslucent(enabled) {
+function setBuildingsTranslucent(enabled, opacity) {
     translucentBuildings = !!enabled;
+    const alpha = opacity === undefined ? 0.30 : Math.max(0, Math.min(1, opacity));
     let count = 0;
     forEachBuildingWallEntity((entity) => {
         if (!entity || !entity.polygon) return;
-        if (applyWallTranslucency(entity, translucentBuildings)) count++;
+        if (applyWallTranslucency(entity, translucentBuildings, alpha)) count++;
     });
     // Roof primitives (pitched roofs / caps / domes) are Cesium Primitives,
     // not Entities: toggle per-instance alpha so they match the walls.
@@ -683,7 +685,7 @@ function setBuildingsTranslucent(enabled) {
             if (attrs && attrs.color) {
                 if (!v._savedColor) v._savedColor = attrs.color.slice();
                 const c = Cesium.Color.fromBytes(attrs.color[0], attrs.color[1], attrs.color[2]);
-                const withA = c.withAlpha(translucentBuildings ? 0.30 : (v._savedAlpha || 1.0));
+                const withA = c.withAlpha(translucentBuildings ? alpha : (v._savedAlpha || 1.0));
                 v.ref.getGeometryInstanceAttributes('color').color =
                     Cesium.ColorGeometryInstanceAttribute.toValue(withA);
             }
@@ -1793,6 +1795,89 @@ function setUndergroundView(enabled) {
     console.log(`🏗️ Underground view ${enabled ? 'ON (surface hidden)' : 'OFF (surface restored)'}`);
 }
 
+function getBuildingEntityTags(entity, feature) {
+    const featureData = feature && feature.get ? feature.get('extrudedBuilding') : null;
+    if (featureData && featureData.tags) return featureData.tags;
+    if (feature && feature.get) {
+        const tags = feature.get('buildingTags');
+        if (tags) return tags;
+    }
+    if (entity && entity.properties) {
+        try {
+            const properties = typeof entity.properties.getValue === 'function'
+                ? entity.properties.getValue(Cesium.JulianDate.now())
+                : entity.properties;
+            if (properties && properties.buildingTags) return properties.buildingTags;
+        } catch (error) {
+            console.warn('Could not read building tags for level visibility:', error);
+        }
+    }
+    return null;
+}
+
+function canonicalBuildingLevel(value) {
+    const level = String(value).trim().toLowerCase();
+    const basement = level.match(/^b(\d+)$/);
+    if (basement) return String(-parseInt(basement[1], 10));
+    if (/^(g|ground|street)$/i.test(level)) return '0';
+    if (/^(m|mezzanine)$/i.test(level)) return '0.5';
+    const direct = level.match(/^-?\d+(?:\.\d+)?$/);
+    if (direct) return String(parseFloat(level));
+    const prefixed = level.match(/^[a-z]+(-?\d+(?:\.\d+)?)$/);
+    if (prefixed) return String(parseFloat(prefixed[1]));
+    const suffixed = level.match(/^(-?\d+(?:\.\d+)?)[a-z]$/);
+    if (suffixed) return String(parseFloat(suffixed[1]));
+    return level;
+}
+
+function buildingEntityMatchesLevel(tags, level) {
+    if (!tags) return false;
+    const selected = canonicalBuildingLevel(level);
+    const levelValues = [tags.level, tags.repeat_on].filter(value => value !== undefined)
+        .join(';').split(/[;,]/).map(value => value.trim()).filter(Boolean);
+    if (levelValues.some(value => canonicalBuildingLevel(value) === selected)) return true;
+
+    const selectedNumber = parseNumber(selected);
+    if (!isFinite(selectedNumber)) return false;
+    for (const value of levelValues) {
+        const range = value.match(/^(-?\d+(?:\.\d+)?)\s*-\s*(-?\d+(?:\.\d+)?)$/);
+        if (range) {
+            const from = parseFloat(range[1]);
+            const to = parseFloat(range[2]);
+            if (selectedNumber >= Math.min(from, to) && selectedNumber <= Math.max(from, to)) return true;
+        } else if (parseNumber(value) === selectedNumber) {
+            return true;
+        }
+    }
+    const minimum = parseNumber(canonicalBuildingLevel(tags.min_level));
+    const maximum = parseNumber(canonicalBuildingLevel(tags.max_level));
+    return isFinite(minimum) && isFinite(maximum) &&
+        selectedNumber >= Math.min(minimum, maximum) && selectedNumber <= Math.max(minimum, maximum);
+}
+
+function isBuildingEntityVisibleAtLevel(entity, level, undergroundEnabled, feature) {
+    if (level === null || level === undefined || level === '') return true;
+    const underground = entityIsUnderground(entity, feature);
+    const tags = getBuildingEntityTags(entity, feature);
+    return (!undergroundEnabled || underground) && buildingEntityMatchesLevel(tags, level);
+}
+
+function setBuildingLevelVisibility(level, undergroundEnabled) {
+    if (level === null || level === undefined || level === '') return;
+    forEachBuildingWallEntity((entity, feature) => {
+        entity.show = isBuildingEntityVisibleAtLevel(entity, level, undergroundEnabled, feature);
+    });
+    roofVisuals.forEach((visuals, feature) => {
+        const data = feature && feature.get ? feature.get('extrudedBuilding') : null;
+        const tags = (data && data.tags) || (feature && feature.get ? feature.get('buildingTags') : null);
+        const underground = !!(data && data.layerOffset < 0);
+        const visible = (!undergroundEnabled || underground) && buildingEntityMatchesLevel(tags, level);
+        visuals.forEach(v => {
+            if (v && v.ref && v.ref.show !== undefined) v.ref.show = visible;
+        });
+    });
+}
+
 /**
  * Process features and create extruded buildings where applicable
  * @param {Array<ol.Feature>} features - Array of OpenLayers features
@@ -1982,6 +2067,8 @@ window.buildings = {
     setBuildingsTranslucent,
     applyWallTranslucency,
     setUndergroundView,
+    setBuildingLevelVisibility,
+    isBuildingEntityVisibleAtLevel,
     setBuildingOpacity,
     processBuildingFeatures,
     updateBuildingExtrusion,

@@ -16,8 +16,10 @@ const availableModels = [
     'w_barrier_fence_wood.gltf',
     'w_barrier_kerb.gltf',
 	'w_barrier_wall.glb',
+	'w_barrier_guard_rail.glb',
+	'w_barrier_guard_rail_bridge.glb',
 	'w_highway_bus_stop.glb',
-    'w_highway_cycleway.gltf',
+    'w_highway_cycleway.glb',
     'w_highway_footway.glb',
     'w_highway_residential.glb',
     'w_highway_residential.gltf',
@@ -74,6 +76,7 @@ const modelMappings = [
     // Point models (existing functionality)
     { tags: ['amenity=bench'], model: 'w_amenity_bench.gltf', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Bicycle parking model for amenity=bicycle_parking
     { tags: ['amenity=bicycle_parking'], model: 'w_amenity_bicycle_parking.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Bicycle parking model for amenity=bicycle_parking
+    { tags: ['amenity=charging_station'], model: 'w_amenity_charging_station.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Charging_station
     { tags: ['amenity=drinking_water'], model: 'w_amenity_drinking_water.gltf', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Bicycle parking model for amenity=bicycle_parking
     { tags: ['amenity=post_box'], model: 'w_amenity_post_box.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Street lamp model for highway=street_lamp
     { tags: ['amenity=waste_basket'], model: 'w_amenity_waste_basket.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Bicycle parking model for amenity=bicycle_parking 
@@ -136,7 +139,7 @@ const modelMappings = [
       // { tags: ['building=residential'], model: 'w_highway_residential.glb', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Residential building areas
   // { tags: ['building'], model: 'w_highway_residential.glb', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Generic building areas
   { tags: ['amenity=parking', 'orientation=diagonal'], model: '', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Parking area models  
-  { tags: ['amenity=parking', 'orientation=parallel'], model: 'i_parking_diagonal.jpg', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Parking area models 
+  { tags: ['amenity=parking', 'orientation=parallel'], model: '', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Parking area models 
    { tags: ['amenity=parking_space'], model: '', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Parking area models  
     { tags: ['amenity=parking'], model: '', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Parking area models
   { tags: ['area:barrier=kerb'], model: 'noimage.png', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway area texture
@@ -165,6 +168,9 @@ const modelMappings = [
   { tags: ['barrier=kerb'], model: 'w_barrier_kerb.gltf', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Kerb
   
   // Fence models for way repetition - comprehensive fence type support
+   { tags: ['road_markings=edge_line', 'stroke=solid'], model: 'w_stroke_solid.glb', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Kerb
+   { tags: ['road_markings=lane_divider', 'stroke=dashed'], model: 'w_stroke_dashed.glb', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Kerb
+ { tags: ['barrier=fence', 'fence_type=railing'], model: 'w_barrier_fence_type_railing.glb', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Wood fence
   { tags: ['barrier=fence', 'fence_type=wood'], model: 'w_barrier_fence_wood.gltf', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Wood fence
   { tags: ['barrier=fence', 'fence_type=metal'], model: 'w_barrier_fence_wood.gltf', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Metal fence
   { tags: ['barrier=fence', 'fence_type=chain_link'], model: 'w_barrier_fence_wood.gltf', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Chain link fence
@@ -177,7 +183,7 @@ const modelMappings = [
   { tags: ['fence_type=wire'], model: 'w_barrier_fence_wood.gltf', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Wire fence by type only
   { tags: ['fence_type=pole'], model: 'w_barrier_fence_wood.gltf', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Pole fence by type only
   { tags: ['barrier=wall'], model: 'w_barrier_wall.glb', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Generic wall
-    { tags: ['highway=cycleway'], model: 'w_highway_cycleway.gltf', geometryType: 'line', config: { scale: 4.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Residential road line models 
+    { tags: ['highway=cycleway'], model: 'w_highway_cycleway.glb', geometryType: 'line', config: { scale: 4.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Residential road line models 
   { tags: ['highway=footway'], model: 'w_highway_footway.glb', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, -Math.PI / 4, 0] } }, // Asset mesh has an authored 45° yaw
     { tags: ['footway=sidewalk'], model: 'w_highway_footway.glb', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, -Math.PI / 4, 0] } }, // Asset mesh has an authored 45° yaw
    { tags: ['highway=residential'], model: 'w_highway_residential.gltf', geometryType: 'line', config: { scale: 3.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Residential road line models
@@ -188,8 +194,10 @@ const modelMappings = [
    { tags: ['natural=beach'], model: 'w_natural_beach.gltf', geometryType: 'line', config: { scale: 12.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Residential road line models
    { tags: ['natural=coastline'], model: 'w_natural_beach.gltf', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Residential road line models
    { tags: ['railway=rail'], model: 'w_railway_rail.glb', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Railway rail
-   { tags: ['barrier=kerb'], model: 'w_barrier_kerb.gltf', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Kerb
-    { tags: ['waterway=drain'], model: 'w_waterway_stream.gltf', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Drain area models (closed drains)
+      { tags: ['barrier=kerb'], model: 'w_barrier_kerb.gltf', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Kerb
+{ tags: ['barrier=guard_rail', 'bridge=yes'], model: 'w_barrier_guard_rail_bridge.glb', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // guard_rail   
+   { tags: ['barrier=guard_rail'], model: 'w_barrier_guard_rail.glb', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // guard_rail 
+   { tags: ['waterway=drain'], model: 'w_waterway_stream.gltf', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Drain area models (closed drains)
    
     //{ tags: ['area:highway=footway'], model: 'w_highway_footway.glb', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway line models
    

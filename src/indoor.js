@@ -39,6 +39,9 @@
     var DOOR_HEIGHT = 2.1;
     var DOOR_WIDTH = 1.0;
     var MAX_INDENT = 12;         // max inset applied per level
+    var LEVEL_VIEW_OPACITY = 0.01;
+    var ACTIVE_LEVEL_COLOR = Cesium.Color.fromCssColorString('#ffb000');
+    var ACTIVE_LEVEL_OPACITY = 0.85; // Active level opacity (0-1; keep below 1 for transparency)
 
     var colorCache = null;
     function colorFor(kind) {
@@ -64,6 +67,7 @@
     // ------------------------------------------------------------------
     var indoorEnabled = false;             // UI toggle (3D nav panel 🏢 button) — OFF by default: first click ENABLES translucent walls
     var undergroundEnabled = false;        // UI toggle (3D nav panel L-1 button)
+    var activeLevel = null;
     var indoorOl3d = null;                 // active OLCesium instance
 
     function deg(rad) { return rad * 180 / Math.PI; }
@@ -99,13 +103,13 @@
         return tags;
     }
 
-    /** level=* / repeat_on=* list parser: "1;2", "0-3", "-1-2", "-4--2" */
-    function parseLevelList(value) {
+    /** Split level values and expand numeric ranges while preserving label values. */
+    function parseLevelValues(value) {
         if (value === undefined || value === null) return null;
         var s = String(value).trim();
         if (!s) return null;
         var out = [];
-        var parts = s.split(';');
+        var parts = s.split(/[;,]/);
         for (var i = 0; i < parts.length; i++) {
             var p = parts[i].trim();
             if (!p) continue;
@@ -116,11 +120,190 @@
                 if (a > b) { var t = a; a = b; b = t; }
                 for (var l = a; l <= b; l++) out.push(l);
             } else {
-                var n = parseInt(p, 10);
-                if (isFinite(n)) out.push(n);
+                out.push(p);
             }
         }
-        return out.length ? out : null;
+
+        return out.length ? out.map(String).filter(function (level, index, values) {
+            return values.indexOf(level) === index;
+        }) : null;
+    }
+
+    function levelNumber(value) {
+        var label = String(value).trim();
+        if (/^-?\d+(?:\.\d+)?$/.test(label)) return parseFloat(label);
+        var basement = label.match(/^b(\d+)$/i);
+        if (basement) return -parseInt(basement[1], 10);
+        if (/^(basement|lower ground)$/i.test(label)) return -1;
+        if (/^(g|ground|street)$/i.test(label)) return 0;
+        if (/^(m|mezzanine)$/i.test(label)) return 0.5;
+        var prefixedNumber = label.match(/^[a-z]+(-?\d+(?:\.\d+)?)$/i);
+        if (prefixedNumber) return parseFloat(prefixedNumber[1]);
+        var suffixedNumber = label.match(/^(-?\d+(?:\.\d+)?)[a-z]$/i);
+        if (suffixedNumber) return parseFloat(suffixedNumber[1]);
+        if (/^[a-z]$/i.test(label)) return label.toUpperCase().charCodeAt(0) - 64;
+        return NaN;
+    }
+
+    /** level=* / repeat_on=* list parser; numeric geometry still uses meters. */
+    function parseLevelList(value) {
+        var values = parseLevelValues(value);
+        if (!values) return null;
+        var numbers = values.map(levelNumber).filter(function (level, index, list) {
+            return isFinite(level) && list.indexOf(level) === index;
+        });
+        return numbers.length ? numbers : null;
+    }
+
+    function normalizeLevel(level) {
+        return String(level).trim().toLowerCase();
+    }
+
+    function levelIsSelected(level) {
+        if (activeLevel === null || normalizeLevel(level) === normalizeLevel(activeLevel)) return true;
+        var candidate = levelNumber(level);
+        var selected = levelNumber(activeLevel);
+        return isFinite(candidate) && isFinite(selected) && candidate === selected;
+    }
+
+    function styleForLevel(level, color, defaultAlpha) {
+        if (activeLevel === null) return { color: color, alpha: defaultAlpha };
+        if (levelIsActive(level)) return { color: ACTIVE_LEVEL_COLOR, alpha: ACTIVE_LEVEL_OPACITY };
+        return { color: color, alpha: 0 };
+    }
+
+    function levelIsActive(level) {
+        if (activeLevel === null) return false;
+        if (normalizeLevel(level) === normalizeLevel(activeLevel)) return true;
+        var candidate = levelNumber(level);
+        var selected = levelNumber(activeLevel);
+        return isFinite(candidate) && isFinite(selected) && candidate === selected;
+    }
+
+    function canRenderUndergroundLevel() {
+        return undergroundEnabled || (indoorEnabled && activeLevel !== null && levelNumber(activeLevel) < 0);
+    }
+
+    function tagsMatchActiveLevel(tags) {
+        if (activeLevel === null) return true;
+        var values = (parseLevelValues(tags.level) || []).concat(parseLevelValues(tags.repeat_on) || []);
+        if (values.some(levelIsSelected)) return true;
+
+        var minimum = levelNumber(tags.min_level);
+        var maximum = levelNumber(tags.max_level);
+        var selected = levelNumber(activeLevel);
+        if (isFinite(minimum) && isFinite(maximum) && isFinite(selected)) {
+            return selected >= minimum && selected <= maximum;
+        }
+        if (!values.length &&
+            (getIndoorKind(tags) || getVerticalTags(tags) || getWayNodeKind(tags))) {
+            return levelIsSelected('0');
+        }
+        return false;
+    }
+
+    function forEachLayer(layer, callback) {
+        if (!layer) return;
+        if (typeof layer.getLayers === 'function') {
+            layer.getLayers().forEach(function (child) { forEachLayer(child, callback); });
+        } else if (typeof layer.getSource === 'function') {
+            callback(layer);
+        }
+    }
+
+    function getAvailableLevels() {
+        var levels = new Set();
+        function addValues(value) {
+            (parseLevelValues(value) || []).forEach(function (level) { levels.add(String(level)); });
+        }
+        function inspectLayer(layer) {
+            var source = layer.getSource();
+            if (!source || typeof source.getFeatures !== 'function') return;
+            source.getFeatures().forEach(function (feature) {
+                ['level', 'repeat_on', 'min_level', 'max_level'].forEach(function (key) {
+                    addValues(feature.get(key));
+                });
+                var minimum = levelNumber(feature.get('min_level'));
+                var maximum = levelNumber(feature.get('max_level'));
+                if (isFinite(minimum) && isFinite(maximum) && maximum >= minimum &&
+                    maximum - minimum <= 99) {
+                    for (var level = Math.ceil(minimum); level <= Math.floor(maximum); level++) {
+                        levels.add(String(level));
+                    }
+                }
+                var count = parseInt(feature.get('building:levels'), 10);
+                if (isFinite(count) && count > 0) {
+                    for (var level = 0; level < Math.min(count, 100); level++) levels.add(String(level));
+                }
+            });
+        }
+        if (window.map && window.map.getLayers) {
+            window.map.getLayers().forEach(function (layer) { forEachLayer(layer, inspectLayer); });
+        }
+        if (activeLevel !== null) levels.add(String(activeLevel));
+        return Array.from(levels).sort(function (a, b) {
+            var an = levelNumber(a), bn = levelNumber(b);
+            if (isFinite(an) && isFinite(bn)) return an - bn || a.localeCompare(b);
+            if (isFinite(an)) return -1;
+            if (isFinite(bn)) return 1;
+            return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
+        });
+    }
+
+    function refreshLevelSelector() {
+        var selector = document.getElementById('nav3d-level-select');
+        if (!selector) return getAvailableLevels();
+        var levels = getAvailableLevels();
+        var selected = activeLevel;
+        selector.innerHTML = '';
+        var all = document.createElement('option');
+        all.value = '';
+        all.textContent = 'All levels';
+        selector.appendChild(all);
+        levels.forEach(function (level) {
+            var option = document.createElement('option');
+            option.value = level;
+            option.textContent = 'Level ' + level;
+            selector.appendChild(option);
+        });
+        selector.value = selected === null ? '' : String(selected);
+        selector.disabled = levels.length === 0;
+        selector.parentElement.style.display = levels.length ? '' : 'none';
+        return levels;
+    }
+
+    function setActiveLevel(level) {
+        setIndoorVisible(false);
+        activeLevel = level === undefined || level === null || String(level) === ''
+            ? null : String(level);
+        if (activeLevel !== null && undergroundEnabled) undergroundEnabled = false;
+        if (activeLevel !== null && !indoorEnabled) {
+            setEnabled(true);
+        } else {
+            rebuildIndoor();
+            applyModeVisuals();
+        }
+        applyGlobeTranslucency();
+        syncModeButtons();
+        refreshLevelSelector();
+        return activeLevel;
+    }
+
+    function setLevelOpacity(opacity) {
+        var value = Number(opacity);
+        if (!isFinite(value)) throw new TypeError('Level opacity must be a finite number');
+        LEVEL_VIEW_OPACITY = clamp(value, 0, 1);
+        applyModeVisuals();
+        rebuildIndoor();
+        return LEVEL_VIEW_OPACITY;
+    }
+
+    function setActiveLevelOpacity(opacity) {
+        var value = Number(opacity);
+        if (!isFinite(value)) throw new TypeError('Active-level opacity must be a finite number');
+        ACTIVE_LEVEL_OPACITY = clamp(value, 0, 1);
+        if (indoorEnabled) rebuildIndoor();
+        return ACTIVE_LEVEL_OPACITY;
     }
 
     function isBuildingTags(tags) {
@@ -367,6 +550,8 @@
      */
     function renderVolume(feature, rings, groundHeights, baseLift, wallHeight, color, options) {
         options = options || {};
+        var style = styleForLevel(options.level, color,
+            options.alpha !== undefined ? options.alpha : 0.55);
         var outer = lonLatHeightsToCartesian(rings[0], groundHeights, baseLift);
         var holes = [];
         for (var h = 1; h < rings.length; h++) {
@@ -377,9 +562,9 @@
                 hierarchy: new Cesium.PolygonHierarchy(outer, holes),
                 perPositionHeight: true,
                 extrudedHeight: meanGround(groundHeights) + baseLift + wallHeight,
-                material: color.withAlpha(options.alpha !== undefined ? options.alpha : 0.55),
+                material: style.color.withAlpha(style.alpha),
                 outline: true,
-                outlineColor: color.withAlpha(0.9),
+                outlineColor: style.color.withAlpha(style.alpha),
                 closeSurface: true
             }
         };
@@ -387,7 +572,8 @@
     }
 
     /** Thin horizontal plate (floor slabs, level plates) */
-    function renderPlate(feature, rings, groundHeights, topLift, thickness, color, alpha) {
+    function renderPlate(feature, rings, groundHeights, topLift, thickness, color, alpha, level) {
+        var style = styleForLevel(level, color, alpha !== undefined ? alpha : 0.35);
         var outer = lonLatHeightsToCartesian(rings[0], groundHeights, 0);
         var holes = [];
         for (var h = 1; h < rings.length; h++) {
@@ -398,9 +584,9 @@
                 hierarchy: new Cesium.PolygonHierarchy(outer, holes),
                 perPositionHeight: true,
                 extrudedHeight: meanGround(groundHeights) + topLift + thickness,
-                material: color.withAlpha(alpha !== undefined ? alpha : 0.35),
+                material: style.color.withAlpha(style.alpha),
                 outline: true,
-                outlineColor: color.withAlpha(0.8),
+                outlineColor: style.color.withAlpha(style.alpha),
                 closeSurface: true
             }
         };
@@ -408,7 +594,8 @@
     }
 
     /** Vertical ribbon from a closed lon/lat ring following terrain (walls) */
-    function renderRibbon(feature, ring, groundHeights, baseLift, wallHeight, color, alpha) {
+    function renderRibbon(feature, ring, groundHeights, baseLift, wallHeight, color, alpha, level) {
+        var style = styleForLevel(level, color, alpha !== undefined ? alpha : 0.85);
         var bottom = lonLatHeightsToCartesian(ring, groundHeights, baseLift);
         var top = lonLatHeightsToCartesian(ring, groundHeights, baseLift + wallHeight);
         var positions = bottom.concat(top.slice().reverse());
@@ -421,7 +608,7 @@
                     perPositionHeight: true
                 }),
                 attributes: {
-                    color: Cesium.ColorGeometryInstanceAttribute.fromColor(color.withAlpha(alpha !== undefined ? alpha : 0.85))
+                    color: Cesium.ColorGeometryInstanceAttribute.fromColor(style.color.withAlpha(style.alpha))
                 }
             }),
             appearance: new Cesium.PerInstanceColorAppearance({
@@ -481,8 +668,8 @@
             return;
         }
         var building = findBuildingFor(rings[0]);
-        var levels = parseLevelList(tags.level) || [0];
-        var repeatOn = parseLevelList(tags.repeat_on) || [];
+        var levels = parseLevelValues(tags.level) || ['0'];
+        var repeatOn = parseLevelValues(tags.repeat_on) || [];
         var allLevels = levels.concat(repeatOn);
         var height = elementHeight(tags, kind === 'room' ? ROOM_HEIGHT : LEVEL_HEIGHT);
         var color = colorFor(kind);
@@ -491,14 +678,19 @@
         var groundHeights = sampleRingHeights(rings[0]);
         if (!groundHeights) return;
         for (var i = 0; i < allLevels.length; i++) {
-            var level = allLevels[i];
+            if (!levelIsSelected(allLevels[i])) continue;
+            var level = levelNumber(allLevels[i]);
+            if (!isFinite(level)) continue;
             if (building && building.minLevel !== null && building.maxLevel !== null &&
                 (level < building.minLevel - 1 || level > building.maxLevel)) continue;
             var base = levelBaseMeters(building, level, tags);
             // Underground levels render at their true depth — visible only
             // while the underground view (L-1 button) is enabled.
-            if (base < 0 && !undergroundEnabled) continue;
-            renderVolume(feature, rings, groundHeights, base, height, color, { alpha: alpha });
+            if (base < 0 && !canRenderUndergroundLevel()) continue;
+            renderVolume(feature, rings, groundHeights, base, height, color, {
+                alpha: alpha,
+                level: allLevels[i]
+            });
         }
     }
 
@@ -507,10 +699,16 @@
         if (rings) { // wall mapped as area (irregular wall, SIT §Walls)
             var groundHeights = sampleRingHeights(rings[0]);
             if (!groundHeights) return;
-            var levels = parseLevelList(tags.level) || [0];
-            var base = levels[0] * LEVEL_HEIGHT;
-            if (base < 0 && !undergroundEnabled) return;
-            renderVolume(feature, rings, groundHeights, base, elementHeight(tags, ROOM_HEIGHT), colorFor('wall'), { alpha: 0.9 });
+            var levels = parseLevelValues(tags.level) || ['0'];
+            for (var i = 0; i < levels.length; i++) {
+                if (!levelIsSelected(levels[i])) continue;
+                var base = levelNumber(levels[i]) * LEVEL_HEIGHT;
+                if (!isFinite(base) || (base < 0 && !canRenderUndergroundLevel())) continue;
+                renderVolume(feature, rings, groundHeights, base, elementHeight(tags, ROOM_HEIGHT), colorFor('wall'), {
+                    alpha: 0.9,
+                    level: levels[i]
+                });
+            }
             return;
         }
         var line = getFeatureLonLatLine(feature);
@@ -519,10 +717,14 @@
         var ribbon = lineToRibbon(line, Math.max(0.05, width));
         var ribbonHeights = sampleRingHeights(ribbon);
         if (!ribbonHeights) return;
-        var lvl = parseLevelList(tags.level) || [0];
-        var baseLift = lvl[0] * LEVEL_HEIGHT;
-        if (baseLift < 0 && !undergroundEnabled) return;
-        renderRibbon(feature, ribbon, ribbonHeights, baseLift, elementHeight(tags, ROOM_HEIGHT), colorFor('wall'), 0.9);
+        var lvl = parseLevelValues(tags.level) || ['0'];
+        for (var j = 0; j < lvl.length; j++) {
+            if (!levelIsSelected(lvl[j])) continue;
+            var baseLift = levelNumber(lvl[j]) * LEVEL_HEIGHT;
+            if (!isFinite(baseLift) || (baseLift < 0 && !canRenderUndergroundLevel())) continue;
+            renderRibbon(feature, ribbon, ribbonHeights, baseLift,
+                elementHeight(tags, ROOM_HEIGHT), colorFor('wall'), 0.9, lvl[j]);
+        }
     }
 
     function renderIndoorLevel(feature, tags) {
@@ -530,18 +732,26 @@
         if (!rings) return;
         var groundHeights = sampleRingHeights(rings[0]);
         if (!groundHeights) return;
-        var level = parseLevelList(tags.level);
-        var lvl = (level && level.length) ? level[0] : 0;
+        var levels = parseLevelValues(tags.level) || ['0'];
         var building = findBuildingFor(rings[0]);
-        var base = levelBaseMeters(building, lvl, null);
-        if (base < 0 && !undergroundEnabled) return;
-        var plate = renderPlate(feature, rings, groundHeights, base, 0.12, colorFor('level'), 0.30);
+        var plate = null;
+        var renderedLevel = null;
+        for (var i = 0; i < levels.length; i++) {
+            if (!levelIsSelected(levels[i])) continue;
+            var lvl = levelNumber(levels[i]);
+            if (!isFinite(lvl)) continue;
+            var base = levelBaseMeters(building, lvl, null);
+            if (base < 0 && !canRenderUndergroundLevel()) continue;
+            plate = renderPlate(feature, rings, groundHeights, base, 0.12,
+                colorFor('level'), 0.30, levels[i]);
+            renderedLevel = lvl;
+        }
         var name = tags.name || tags['level:ref'];
         if (plate && name) {
             var c = ringCentroid(rings[0]);
             var g = sampleGroundHeight(c[0], c[1]) || 0;
             addEntity(feature, new Cesium.Entity({
-                position: Cesium.Cartesian3.fromDegrees(c[0], c[1], g + base + 1.2),
+                position: Cesium.Cartesian3.fromDegrees(c[0], c[1], g + levelBaseMeters(building, renderedLevel, null) + 1.2),
                 label: {
                     text: String(name),
                     font: '12px sans-serif',
@@ -559,7 +769,11 @@
 
     /** SIT §Vertical connections — one volume spanning the level range */
     function renderVerticalConnection(feature, tags, kind) {
-        var levels = parseLevelList(tags.level) || [0];
+        var levelValues = parseLevelValues(tags.level) || ['0'];
+        if (activeLevel !== null && !levelValues.some(levelIsSelected)) return;
+        var levels = (activeLevel !== null ? [levelNumber(activeLevel)] : levelValues.map(levelNumber))
+            .filter(function (level) { return isFinite(level); });
+        if (!levels.length) return;
         var minLevel = Math.min.apply(null, levels);
         var maxLevel = Math.max.apply(null, levels);
         var color = colorFor('steps');
@@ -569,7 +783,7 @@
             ' · ' + levelCount + (levelCount === 1 ? ' level' : ' levels') + ' · ' + heightMeters + ' m';
 
         // Fully buried connections are only visible in underground view
-        if (!undergroundEnabled && maxLevel < 0) return;
+        if (!canRenderUndergroundLevel() && maxLevel < 0) return;
 
         /** Label stating the span and height in levels (e.g. "L-1→L0 · 2 levels · 6 m") */
         function addSpanLabel(ringLike, topLift) {
@@ -579,7 +793,8 @@
             addEntity(feature, new Cesium.Entity({
                 position: Cesium.Cartesian3.fromDegrees(c[0], c[1], g + Math.max(0, topLift) + 2),
                 label: {
-                    text: (kind === 'elevator' ? '⇅ elevator ' : kind === 'escalator' ? '⇅ escalator ' : '⇅ steps ') + spanText,
+                    text: (activeLevel !== null && tags.name ? String(tags.name) + ' · ' : '') +
+                        (kind === 'elevator' ? '⇅ elevator ' : kind === 'escalator' ? '⇅ escalator ' : '⇅ steps ') + spanText,
                     font: '11px sans-serif',
                     fillColor: Cesium.Color.WHITE,
                     outlineColor: Cesium.Color.BLACK,
@@ -600,9 +815,14 @@
                 if (!groundHeights) return;
                 var building = findBuildingFor(rings[0]);
                 var base = levelBaseMeters(building, minLevel, tags);
-                if (base < 0 && !undergroundEnabled) base = 0;
+                if (base < 0 && !canRenderUndergroundLevel()) base = 0;
                 var top = levelBaseMeters(building, maxLevel, null) + LEVEL_HEIGHT;
-                renderVolume(feature, rings, groundHeights, base, Math.max(LEVEL_HEIGHT, top - base), colorFor('area'), { alpha: kind === 'elevator' ? 0.35 : 0.5 });
+                var connectionLevel = levelIsActive(activeLevel) ? activeLevel : minLevel;
+                renderVolume(feature, rings, groundHeights, base,
+                    Math.max(LEVEL_HEIGHT, top - base), colorFor('area'), {
+                        alpha: kind === 'elevator' ? 0.35 : 0.5,
+                        level: connectionLevel
+                    });
                 addSpanLabel(rings[0], top);
             }
             return;
@@ -616,9 +836,12 @@
         var heights = sampleRingHeights(ribbon);
         if (!heights) return;
         var baseLift = minLevel * LEVEL_HEIGHT;
-        if (baseLift < 0 && !undergroundEnabled) baseLift = 0;
+        if (baseLift < 0 && !canRenderUndergroundLevel()) baseLift = 0;
         var topLift = maxLevel * LEVEL_HEIGHT + ROOM_HEIGHT;
-        renderRibbon(feature, ribbon, heights, baseLift, Math.max(LEVEL_HEIGHT, topLift - baseLift), color, kind === 'escalator' ? 0.5 : 0.85);
+        var stairsLevel = levelIsActive(activeLevel) ? activeLevel : minLevel;
+        renderRibbon(feature, ribbon, heights, baseLift,
+            Math.max(LEVEL_HEIGHT, topLift - baseLift), color,
+            kind === 'escalator' ? 0.5 : 0.85, stairsLevel);
         addSpanLabel(line, topLift);
     }
 
@@ -628,20 +851,24 @@
         if (!lonLat) return;
         var ground = sampleGroundHeight(lonLat[0], lonLat[1]);
         if (ground === null) return;
-        var levels = parseLevelList(tags.level) || [0];
-        var repeatOn = parseLevelList(tags.repeat_on) || [];
+        var levels = parseLevelValues(tags.level) || ['0'];
+        var repeatOn = parseLevelValues(tags.repeat_on) || [];
         var allLevels = levels.concat(repeatOn);
         var building = findBuildingFor([[lonLat[0], lonLat[1]]]);
         var color = colorFor(kind);
         var height = kind === 'door' ? parseLengthMeters(tags.height, DOOR_HEIGHT) : 1.2;
 
         for (var i = 0; i < allLevels.length; i++) {
-            var base = levelBaseMeters(building, allLevels[i], null);
-            if (base < 0 && !undergroundEnabled) continue; // basement openings: only in underground view
+            if (!levelIsSelected(allLevels[i])) continue;
+            var numericLevel = levelNumber(allLevels[i]);
+            if (!isFinite(numericLevel)) continue;
+            var base = levelBaseMeters(building, numericLevel, null);
+            if (base < 0 && !canRenderUndergroundLevel()) continue; // basement openings: only in underground view
             // Wall slab tilted to match the actual door wall orientation
+            var doorStyle = styleForLevel(allLevels[i], color, 0.85);
             addVerticalPanel(feature, [lonLat[0], lonLat[1]], bearingOfDoorWall(lonLat, building),
                 { base: base, height: height, width: parseLengthMeters(tags.width, DOOR_WIDTH),
-                  color: color, alpha: 0.85, ground: ground });
+                  color: doorStyle.color, alpha: doorStyle.alpha, ground: ground });
         }
     }
 
@@ -651,19 +878,23 @@
         if (!lonLat) return;
         var ground = sampleGroundHeight(lonLat[0], lonLat[1]);
         if (ground === null) return;
-        var levels = parseLevelList(tags.level) || [0];
-        var repeatOn = parseLevelList(tags.repeat_on) || [];
+        var levels = parseLevelValues(tags.level) || ['0'];
+        var repeatOn = parseLevelValues(tags.repeat_on) || [];
         var allLevels = levels.concat(repeatOn);
         var building = findBuildingFor([[lonLat[0], lonLat[1]]]);
         var text = tags.name || tags.ref || tags['level:ref'] || '';
         for (var i = 0; i < allLevels.length; i++) {
-            var base = levelBaseMeters(building, allLevels[i], null);
-            if (base < 0 && !undergroundEnabled) continue;
+            if (!levelIsSelected(allLevels[i])) continue;
+            var numericLevel = levelNumber(allLevels[i]);
+            if (!isFinite(numericLevel)) continue;
+            var base = levelBaseMeters(building, numericLevel, null);
+            if (base < 0 && !canRenderUndergroundLevel()) continue;
+            var poiStyle = styleForLevel(allLevels[i], colorFor('poi'), 0.95);
             addEntity(feature, new Cesium.Entity({
                 position: Cesium.Cartesian3.fromDegrees(lonLat[0], lonLat[1], ground + base + 1.4),
                 point: {
                     pixelSize: 7,
-                    color: colorFor('poi').withAlpha(0.95),
+                    color: poiStyle.color.withAlpha(poiStyle.alpha),
                     outlineColor: Cesium.Color.BLACK.withAlpha(0.6),
                     outlineWidth: 1,
                     disableDepthTestDistance: Number.POSITIVE_INFINITY
@@ -682,6 +913,38 @@
         }
     }
 
+    function renderPlaceName(feature, tags) {
+        if (activeLevel === null || !tags.name || !tagsMatchActiveLevel(tags)) return;
+        if (getFeatureLonLatPoint(feature)) return;
+        var rings = getFeatureLonLatRings(feature);
+        var line = rings ? null : getFeatureLonLatLine(feature);
+        var center = rings ? ringCentroid(rings[0]) :
+            (line && line.length ? line[Math.floor((line.length - 1) / 2)] : null);
+        if (!center) return;
+        var ground = sampleGroundHeight(center[0], center[1]);
+        if (ground === null) return;
+        var level = levelNumber(activeLevel);
+        if (!isFinite(level)) return;
+        var building = findBuildingFor([[center[0], center[1]]]);
+        var base = levelBaseMeters(building, level, null);
+        addEntity(feature, new Cesium.Entity({
+            position: Cesium.Cartesian3.fromDegrees(center[0], center[1],
+                ground + base + ROOM_HEIGHT + 0.6),
+            label: {
+                text: String(tags.name),
+                font: 'bold 13px sans-serif',
+                fillColor: Cesium.Color.WHITE,
+                outlineColor: ACTIVE_LEVEL_COLOR,
+                outlineWidth: 3,
+                style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+                showBackground: true,
+                backgroundColor: ACTIVE_LEVEL_COLOR.withAlpha(0.9),
+                pixelOffset: new Cesium.Cartesian2(0, -12),
+                disableDepthTestDistance: Number.POSITIVE_INFINITY
+            }
+        }));
+    }
+
     // ------------------------------------------------------------------
     // Building-level visuals: translucent shell + one plate per level
     // (SIT §Building: min_level/max_level make simple POI visualisation work)
@@ -691,6 +954,10 @@
         var minLevel = building && building.minLevel !== null ? building.minLevel : (parseLevelList(tags.min_level) ? Math.min.apply(null, parseLevelList(tags.min_level)) : 0);
         var maxLevel = building && building.maxLevel !== null ? building.maxLevel : (parseLevelList(tags.max_level) ? Math.max.apply(null, parseLevelList(tags.max_level)) : null);
         if (maxLevel === null) return; // no level range declared → nothing to draw
+        if (activeLevel !== null) {
+            var selected = levelNumber(activeLevel);
+            if (!isFinite(selected) || selected < minLevel || selected > maxLevel) return;
+        }
 
         var groundHeights = sampleRingHeights(rings[0]);
         if (!groundHeights) return;
@@ -699,7 +966,9 @@
         // read as "inside a building" instead of floating boxes. The shell
         // belongs to INDOOR mode only — never drawn while the button is off
         // (it would ghost-haze buildings that must stay opaque).
-        if (indoorEnabled) {
+        var selectedLevelNumber = activeLevel === null ? NaN : levelNumber(activeLevel);
+        if (indoorEnabled && activeLevel === null &&
+            !(isFinite(selectedLevelNumber) && selectedLevelNumber < 0)) {
             var shellTop = Math.max(0, maxLevel - Math.min(0, minLevel) + 1) * LEVEL_HEIGHT;
             if (tags.height !== undefined) {
                 shellTop = Math.min(parseLengthMeters(tags.height, shellTop), 30 * LEVEL_HEIGHT);
@@ -709,10 +978,15 @@
 
         // One thin plate per level (skip underground; cap storeys rendered)
         var plateCount = 0;
-        for (var lvl = Math.max(0, minLevel); lvl <= maxLevel && plateCount <= 15; lvl++, plateCount++) {
+        var firstPlateLevel = activeLevel !== null && levelNumber(activeLevel) < 0
+            ? minLevel : Math.max(0, minLevel);
+        for (var lvl = firstPlateLevel; lvl <= maxLevel && plateCount <= 15; lvl++, plateCount++) {
+            if (!levelIsSelected(String(lvl))) continue;
             var base = levelBaseMeters(building, lvl, null);
-            renderPlate(feature, rings, groundHeights, base, 0.1, colorFor('level'), 0.18);
+            renderPlate(feature, rings, groundHeights, base, 0.1,
+                colorFor('level'), 0.18, String(lvl));
         }
+        if (activeLevel !== null && tags.name) renderPlaceName(feature, tags);
     }
 
     function hasIndoorData(tags) {
@@ -805,15 +1079,23 @@
     function renderIndoorFeature(feature, tags) {
         try {
             var kind = getIndoorKind(tags);
-            if (kind === 'room' || kind === 'area' || kind === 'corridor') { renderIndoorSpace(feature, tags, kind); return; }
-            if (kind === 'wall') { renderIndoorWall(feature, tags); return; }
-            if (kind === 'level') { renderIndoorLevel(feature, tags); return; }
             var vertical = getVerticalTags(tags);
-            if (vertical) { renderVerticalConnection(feature, tags, vertical); return; }
             var nodeKind = getWayNodeKind(tags);
-            if (nodeKind) { renderWayNode(feature, tags, nodeKind); return; }
-            if (tags.level !== undefined && (tags.name !== undefined || tags.ref !== undefined)) {
+            if (kind === 'room' || kind === 'area' || kind === 'corridor') {
+                renderIndoorSpace(feature, tags, kind);
+            } else if (kind === 'wall') {
+                renderIndoorWall(feature, tags);
+            } else if (kind === 'level') {
+                renderIndoorLevel(feature, tags);
+            } else if (vertical) {
+                renderVerticalConnection(feature, tags, vertical);
+            } else if (nodeKind) {
+                renderWayNode(feature, tags, nodeKind);
+            } else if (tags.level !== undefined && (tags.name !== undefined || tags.ref !== undefined)) {
                 renderIndoorPoi(feature, tags);
+            }
+            if (kind !== 'level' && !vertical && !nodeKind && !isBuildingTags(tags)) {
+                renderPlaceName(feature, tags);
             }
         } catch (e) {
             console.warn('🏢 indoor: failed to render feature', e);
@@ -852,6 +1134,7 @@
             var tj = collectTags(fj);
             if (getIndoorKind(tj) || getVerticalTags(tj) || getWayNodeKind(tj) ||
                 (tj.level !== undefined && (tj.name !== undefined || tj.ref !== undefined))) {
+                if (!tagsMatchActiveLevel(tj)) continue;
                 if (undergroundEnabled && !isFullyUndergroundTags(tj)) continue;
                 renderIndoorFeature(fj, tj);
                 drawn++;
@@ -908,10 +1191,17 @@
      */
     function applyModeVisuals() {
         if (window.buildings && typeof window.buildings.setBuildingsTranslucent === 'function') {
-            try { window.buildings.setBuildingsTranslucent(indoorEnabled); } catch (e) { /* noop */ }
+            var opacity = activeLevel !== null ? LEVEL_VIEW_OPACITY : 0.30;
+            try { window.buildings.setBuildingsTranslucent(indoorEnabled, opacity); } catch (e) { /* noop */ }
         }
         if (window.buildings && typeof window.buildings.setUndergroundView === 'function') {
             try { window.buildings.setUndergroundView(undergroundEnabled); } catch (e) { /* noop */ }
+        }
+        if (window.buildings && typeof window.buildings.setBuildingLevelVisibility === 'function') {
+            try { window.buildings.setBuildingLevelVisibility(
+                indoorEnabled ? activeLevel : null,
+                undergroundEnabled
+            ); } catch (e) { /* noop */ }
         }
         // L-1 = CLEAN ground: no surface clutter. Area textures (parkings,
         // asphalt, sidewalks...) are 'AreaTextures' dataSource entities —
@@ -931,6 +1221,9 @@
         if (window.modelRenderer && typeof window.modelRenderer.setUndergroundVisibility === 'function') {
             window.modelRenderer.setUndergroundVisibility(undergroundEnabled);
         }
+        if (window.modelRenderer && typeof window.modelRenderer.setActiveLevelVisibility === 'function') {
+            window.modelRenderer.setActiveLevelVisibility(indoorEnabled ? activeLevel : null);
+        }
     }
 
     /**
@@ -941,17 +1234,30 @@
      */
     function syncBuildingEntity(entity, isUndergroundPart) {
         if (!entity) return;
+        if (activeLevel !== null && window.buildings &&
+            typeof window.buildings.isBuildingEntityVisibleAtLevel === 'function') {
+            try {
+                entity.show = window.buildings.isBuildingEntityVisibleAtLevel(
+                    entity, activeLevel, undergroundEnabled);
+            } catch (e) {
+                console.warn('🏢 indoor: could not apply selected-level visibility to building', e);
+            }
+            if (!entity.show) return;
+        }
         if (undergroundEnabled) {
             if (!isUndergroundPart) entity.show = false; // surface building: hidden
             return;
         }
-        if (isUndergroundPart) entity.show = false;  // layer<0: underground only
+        if (isUndergroundPart && !canRenderUndergroundLevel()) {
+            entity.show = false;  // layer<0: underground only
+        }
         // 🏢 active: walls of EVERY new/rebuilt entity must be translucent —
         // layer loads and DEM re-seats recreate entities opaque, so re-apply
         // the alpha here (was skipped before → 100% opaque grey walls).
         if (indoorEnabled) {
             if (window.buildings && typeof window.buildings.applyWallTranslucency === 'function') {
-                try { window.buildings.applyWallTranslucency(entity, true); } catch (e) { /* noop */ }
+                var opacity = activeLevel !== null ? LEVEL_VIEW_OPACITY : 0.30;
+                try { window.buildings.applyWallTranslucency(entity, true, opacity); } catch (e) { /* noop */ }
             }
             if (entity.polygon) entity.show = true;
             return;
@@ -971,8 +1277,10 @@
         if (indoorOl3d) {
             var sources = indoorOl3d.getDataSources();
             for (var i = sources.length - 1; i >= 0; i--) {
-                if (sources.get(i).name === 'Indoor') { sources.remove(sources.get(i), true); break; }
+                if (sources.get(i).name === 'Indoor') sources.remove(sources.get(i), true);
             }
+            var scene = indoorOl3d.getCesiumScene();
+            if (scene && scene.requestRender) scene.requestRender();
         }
         indoorEntities.clear();
         registeredBuildings = [];
@@ -1026,6 +1334,7 @@
             applyGlobeTranslucency();
         }
         applyModeVisuals();
+        applyGlobeTranslucency();
         if (indoorEnabled) {
             rebuildIndoor();
         } else {
@@ -1071,19 +1380,42 @@
         var scene = o ? o.getCesiumScene() : null;
         if (!scene || !scene.globe || !scene.globe.translucency) return;
         try {
-            scene.globe.translucency.enabled = undergroundEnabled;
-            if (undergroundEnabled) scene.globe.translucency.frontFaceAlpha = 0.45;
+            var selectedLevelNumber = activeLevel === null ? NaN : levelNumber(activeLevel);
+            var translucent = undergroundEnabled ||
+                (indoorEnabled && isFinite(selectedLevelNumber) && selectedLevelNumber < 0);
+            scene.globe.translucency.enabled = translucent;
+            if (translucent) scene.globe.translucency.frontFaceAlpha = 0.45;
         } catch (e) { /* older Cesium without globe translucency */ }
     }
 
     window.addEventListener('ol3dInitialized', function (event) {
         try {
+            watchMapLayers();
             applyGlobeTranslucency();   // keep the underground view across 3D sessions
             addIndoorVisuals(event.detail && event.detail.ol3d);
+            refreshLevelSelector();
         } catch (e) {
             console.warn('🏢 indoor: init failed', e);
         }
     });
+
+    function onMapFeaturesChanged() {
+        refreshLevelSelector();
+        if (indoorEnabled && window.ol3d && (!window.ol3d.getEnabled || window.ol3d.getEnabled())) {
+            rebuildIndoor();
+        }
+    }
+
+    var watchedMap = null;
+    function watchMapLayers() {
+        if (!window.map || typeof window.map.on !== 'function' || watchedMap === window.map) return;
+        watchedMap = window.map;
+        watchedMap.on('addlayer', onMapFeaturesChanged);
+    }
+
+    window.addEventListener('overlayFeaturesLoaded', onMapFeaturesChanged);
+    window.addEventListener('tagQueryAdded', onMapFeaturesChanged);
+    window.addEventListener('tagQueryRemoved', onMapFeaturesChanged);
 
     window.addEventListener('ol3dDestroyed', function () {
         clearIndoorVisuals();
@@ -1103,6 +1435,14 @@
         isUndergroundEnabled: isUndergroundEnabled,
         processFeatureList: processFeatureList,
         processLayer: processLayer,
-        parseLevelList: parseLevelList
+        parseLevelList: parseLevelList,
+        getAvailableLevels: getAvailableLevels,
+        refreshLevelSelector: refreshLevelSelector,
+        setActiveLevel: setActiveLevel,
+        getActiveLevel: function () { return activeLevel; },
+        setLevelOpacity: setLevelOpacity,
+        getLevelOpacity: function () { return LEVEL_VIEW_OPACITY; },
+        setActiveLevelOpacity: setActiveLevelOpacity,
+        getActiveLevelOpacity: function () { return ACTIVE_LEVEL_OPACITY; }
     };
 })();
