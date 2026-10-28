@@ -459,188 +459,6 @@ function geometriesIntersect(first, second) {
 }
 
 const underBridgeCandidateCache = new WeakMap();
-const nearbyUnderBridgeContextCache = new WeakMap();
-let underBridgeRoadBridgeCache = { revision: null, contexts: [] };
-
-function getFeatureRoadClass(feature) {
-    if (!feature || typeof feature.get !== 'function') return null;
-    const value = feature.get('highway') || feature.get('area:highway');
-    return typeof value === 'string' && value.trim() ? value.trim().toLowerCase() : null;
-}
-
-function getWayLayer(feature, defaultValue = 0) {
-    const layer = parseOsNumber(feature && feature.get && feature.get('layer'));
-    return isFinite(layer) ? layer : defaultValue;
-}
-
-function getGeometryDistanceMeters(first, second) {
-    if (!first || !second) return Infinity;
-    if (geometriesIntersect(first, second)) return 0;
-    const projection = window.map.getView().getProjection();
-    const linesFor = geometry => geometry.getType() === 'Point'
-        ? [[geometry.getCoordinates()]]
-        : getGeometryLines(geometry);
-    const firstLines = linesFor(first);
-    const secondLines = linesFor(second);
-    let distance = Infinity;
-    for (const [sourceLines, targetLines] of [[firstLines, secondLines], [secondLines, firstLines]]) {
-        for (const sourceLine of sourceLines) {
-            for (const coordinate of sourceLine) {
-                const position = ol.proj.transform(coordinate, projection, 'EPSG:4326');
-                for (const targetLine of targetLines) {
-                    for (let i = 0; i < targetLine.length - 1; i++) {
-                        const start = ol.proj.transform(targetLine[i], projection, 'EPSG:4326');
-                        const end = ol.proj.transform(targetLine[i + 1], projection, 'EPSG:4326');
-                        distance = Math.min(
-                            distance,
-                            window.modelRenderer.pointToSegmentDistanceMeters(position, start, end)
-                        );
-                    }
-                }
-            }
-        }
-    }
-    return distance;
-}
-
-function getGeometryAlignment(first, second) {
-    let bestAlignment = 0;
-    for (const firstLine of getGeometryLines(first)) {
-        for (let i = 0; i < firstLine.length - 1; i++) {
-            const firstDx = firstLine[i + 1][0] - firstLine[i][0];
-            const firstDy = firstLine[i + 1][1] - firstLine[i][1];
-            const firstLength = Math.hypot(firstDx, firstDy);
-            if (firstLength === 0) continue;
-            for (const secondLine of getGeometryLines(second)) {
-                for (let j = 0; j < secondLine.length - 1; j++) {
-                    const secondDx = secondLine[j + 1][0] - secondLine[j][0];
-                    const secondDy = secondLine[j + 1][1] - secondLine[j][1];
-                    const secondLength = Math.hypot(secondDx, secondDy);
-                    if (secondLength === 0) continue;
-                    bestAlignment = Math.max(bestAlignment, Math.abs(
-                        (firstDx * secondDx + firstDy * secondDy) / (firstLength * secondLength)
-                    ));
-                }
-            }
-        }
-    }
-    return bestAlignment;
-}
-
-function isNearUnderBridgeRoad(feature, road, bridge) {
-    const featureGeometry = feature && feature.getGeometry && feature.getGeometry();
-    const roadGeometry = road && road.getGeometry && road.getGeometry();
-    const bridgeGeometry = bridge && bridge.getGeometry && bridge.getGeometry();
-    if (!featureGeometry || !roadGeometry || !bridgeGeometry || isBridgeFeature(feature)) return false;
-
-    const bridgeLayer = getWayLayer(bridge, 1);
-    const featureLayer = getWayLayer(feature, 0);
-    const hasFeatureLayer = isFinite(parseOsNumber(feature.get('layer')));
-    if (hasFeatureLayer && featureLayer >= bridgeLayer) return false;
-
-    const type = featureGeometry.getType();
-    if (type === 'Point') {
-        return hasFeatureLayer &&
-            getGeometryDistanceMeters(featureGeometry, roadGeometry) <= 12;
-    }
-    if (!['LineString', 'MultiLineString', 'Polygon', 'MultiPolygon'].includes(type)) return false;
-    if (getGeometryDistanceMeters(featureGeometry, roadGeometry) > 12) return false;
-
-    const roadAlignment = getGeometryAlignment(featureGeometry, roadGeometry);
-    if (roadAlignment < 0.75 && !geometriesIntersect(featureGeometry, roadGeometry)) return false;
-
-    // A feature running along the bridge itself belongs to its deck, not the
-    // road below it. Explicit lower layers above are sufficient for safe matching.
-    const bridgeAlignment = getGeometryAlignment(featureGeometry, bridgeGeometry);
-    if (!hasFeatureLayer && bridgeAlignment >= 0.75 &&
-        getGeometryDistanceMeters(featureGeometry, bridgeGeometry) <= 15) return false;
-    return true;
-}
-
-function getUnderBridgeRoadBridgePairs(layers, revision) {
-    if (underBridgeRoadBridgeCache.revision === revision) {
-        return underBridgeRoadBridgeCache.contexts;
-    }
-
-    const bridges = [];
-    const roads = [];
-    for (const layer of layers) {
-        const source = layer && layer.getSource && layer.getSource();
-        if (!source || !source.getFeatures) continue;
-        for (const feature of source.getFeatures()) {
-            if (isBridgeFeature(feature)) {
-                const geometry = feature.getGeometry && feature.getGeometry();
-                if (geometry) bridges.push({ feature, geometry, layer: getWayLayer(feature, 1) });
-            } else if (getFeatureRoadClass(feature)) {
-                const geometry = feature.getGeometry && feature.getGeometry();
-                if (geometry && ['LineString', 'MultiLineString'].includes(geometry.getType())) {
-                    roads.push({ feature, geometry, layer: getWayLayer(feature, 0) });
-                }
-            }
-        }
-    }
-
-    const contexts = [];
-    for (const bridge of bridges) {
-        for (const road of roads) {
-            if (road.layer >= bridge.layer || road.feature === bridge.feature ||
-                !geometriesIntersect(road.geometry, bridge.geometry)) continue;
-            contexts.push({
-                bridge: bridge.feature,
-                bridgeGeometry: bridge.geometry,
-                groundWay: road.feature,
-                groundGeometry: road.geometry,
-                bridgeLayer: bridge.layer
-            });
-        }
-    }
-    underBridgeRoadBridgeCache = { revision, contexts };
-    return contexts;
-}
-
-function findNearbyUnderBridgeContext(feature) {
-    if (!feature || !window.map || !window.modelRenderer ||
-        isBridgeFeature(feature) || isTunnelFeature(feature) || getFeatureRoadClass(feature)) return null;
-    const geometry = feature.getGeometry && feature.getGeometry();
-    if (!geometry) return null;
-
-    const layers = window.modelRenderer.getAllMapLayers(window.map.getLayers().getArray());
-    const revision = layers.map(layer => {
-        const source = layer && layer.getSource && layer.getSource();
-        return source && source.getRevision ? source.getRevision() : '';
-    }).join(':');
-    const cached = nearbyUnderBridgeContextCache.get(feature);
-    if (cached && cached.revision === revision) return cached.context;
-
-    let bestContext = null;
-    let bestDistance = Infinity;
-    for (const context of getUnderBridgeRoadBridgePairs(layers, revision)) {
-        if (context.groundWay === feature ||
-            !isNearUnderBridgeRoad(feature, context.groundWay, context.bridge)) continue;
-        const distance = getGeometryDistanceMeters(geometry, context.groundGeometry);
-        if (distance < bestDistance) {
-            bestDistance = distance;
-            bestContext = { bridge: context.bridge, groundWay: context.groundWay };
-        }
-    }
-
-    nearbyUnderBridgeContextCache.set(feature, { revision, context: bestContext });
-    return bestContext;
-}
-
-function getUnderBridgeContext(feature, position) {
-    const bridge = findBridgeAboveFeature(feature, position);
-    if (bridge) {
-        const nearbyContext = findNearbyUnderBridgeContext(feature);
-        return {
-            bridge,
-            groundWay: nearbyContext && nearbyContext.bridge === bridge
-                ? nearbyContext.groundWay
-                : null
-        };
-    }
-    return findNearbyUnderBridgeContext(feature);
-}
 
 function findBridgeAboveFeature(feature, lonLatPosition = null) {
     if (!feature || isBridgeFeature(feature) || !window.map || !window.modelRenderer) return null;
@@ -723,11 +541,7 @@ function findUnderBridgeWayFeature(areaFeature, bridge, areaCentre) {
             if (candidate === areaFeature || isBridgeFeature(candidate)) continue;
             const geometry = candidate.getGeometry && candidate.getGeometry();
             if (!geometry || !['LineString', 'MultiLineString'].includes(geometry.getType())) continue;
-            const intersects = geometriesIntersect(areaGeometry, geometry);
-            const isNearbyHighwayForLine = !intersects &&
-                ['LineString', 'MultiLineString'].includes(areaGeometry.getType()) &&
-                !!candidate.get('highway');
-            if (!intersects && !isNearbyHighwayForLine) continue;
+            if (!geometriesIntersect(areaGeometry, geometry)) continue;
             const candidateLayer = parseOsNumber(candidate.get('layer'));
             if ((isFinite(candidateLayer) ? candidateLayer : 0) >= bridgeLevel) continue;
             if (typeof getFeatureModelOptions === 'function' && !getFeatureModelOptions(candidate)) continue;
@@ -743,7 +557,6 @@ function findUnderBridgeWayFeature(areaFeature, bridge, areaCentre) {
                     );
                 }
             }
-            if (isNearbyHighwayForLine && distance > 15) continue;
             if (distance < closestDistance) {
                 closestFeature = candidate;
                 closestDistance = distance;
@@ -753,29 +566,21 @@ function findUnderBridgeWayFeature(areaFeature, bridge, areaCentre) {
     return closestFeature;
 }
 
-function getUnderBridgeSurface(feature, bridge, lonLatPosition, groundWay = null) {
-    const bridgeFeatureKey = getFeatureKey(bridge);
-    const surfaceWay = groundWay;
-    const surfacePosition = surfaceWay
-        ? getFeatureAnchorLonLat(surfaceWay)
-        : lonLatPosition;
-    const bridgeKey = `${bridgeFeatureKey}:${getFeatureKey(surfaceWay || feature)}`;
+function getUnderBridgeSurface(feature, bridge, lonLatPosition) {
+    const bridgeKey = getFeatureKey(bridge);
     const cached = feature.get('underBridgeSurfaces') || {};
-    const bridgeSurfaces = bridge.get('underBridgeSurfaces') || {};
-    let surface = bridgeSurfaces[bridgeKey] || cached[bridgeKey];
+    let surface = cached[bridgeKey];
     if (!surface) {
         if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
-            try { window.mapterhornTerrain.warmUp(surfacePosition[0], surfacePosition[1]); } catch (e) { /* no DEM yet */ }
+            try { window.mapterhornTerrain.warmUp(lonLatPosition[0], lonLatPosition[1]); } catch (e) { /* no DEM yet */ }
         }
         surface = {
-            height: sampleGroundElevation(surfacePosition[0], surfacePosition[1]),
-            position: surfacePosition.slice(0, 2)
+            height: sampleGroundElevation(lonLatPosition[0], lonLatPosition[1]),
+            position: lonLatPosition.slice(0, 2)
         };
-        bridgeSurfaces[bridgeKey] = surface;
-        bridge.set('underBridgeSurfaces', bridgeSurfaces);
+        cached[bridgeKey] = surface;
+        feature.set('underBridgeSurfaces', cached);
     }
-    cached[bridgeKey] = surface;
-    feature.set('underBridgeSurfaces', cached);
     return { bridge, bridgeKey, feature, height: surface.height, position: surface.position };
 }
 
@@ -1659,12 +1464,9 @@ window.modelRenderer = {
         //   ground level per-position DEM height, independently of the bridge.
         const isTunnel = isTunnelFeature(feature);
         const isBridge = !isTunnel && isBridgeFeature(feature);
-        const underBridgeContext = (isBridge || isTunnel)
-            ? null
-            : getUnderBridgeContext(feature, lonLat);
-        const bridgeAbove = underBridgeContext && underBridgeContext.bridge;
+        const bridgeAbove = (isBridge || isTunnel) ? null : findBridgeAboveFeature(feature, lonLat);
         const underBridge = bridgeAbove
-            ? getUnderBridgeSurface(feature, bridgeAbove, lonLat, underBridgeContext.groundWay)
+            ? getUnderBridgeSurface(feature, bridgeAbove, lonLat)
             : null;
 
         let terrainElevation;
@@ -1879,20 +1681,13 @@ window.modelRenderer = {
                     flatSurfaceHeight = getBridgeReferenceHeight(feature, centre);
                     flatSurfacePosition = feature.get('bridgeRefPosition');
                 } else if (centre) {
-                    const underBridgeContext = getUnderBridgeContext(feature, centre);
-                    if (underBridgeContext) {
-                        const bridgeAbove = underBridgeContext.bridge;
-                        underBridgeFeature = underBridgeContext.groundWay ||
-                            findUnderBridgeWayFeature(feature, bridgeAbove, centre) || feature;
+                    const bridgeAbove = findBridgeAboveFeature(feature, centre);
+                    if (bridgeAbove) {
+                        underBridgeFeature = findUnderBridgeWayFeature(feature, bridgeAbove, centre) || feature;
                         const surfacePosition = underBridgeFeature === feature
                             ? centre
                             : getFeatureAnchorLonLat(underBridgeFeature);
-                        const underBridge = getUnderBridgeSurface(
-                            underBridgeFeature,
-                            bridgeAbove,
-                            surfacePosition,
-                            underBridgeContext.groundWay
-                        );
+                        const underBridge = getUnderBridgeSurface(underBridgeFeature, bridgeAbove, surfacePosition);
                         surfaceHeightOffset = getFeatureHeightOffset(underBridgeFeature);
                         flatSurfaceHeight = underBridge.height + surfaceHeightOffset;
                         flatSurfacePosition = underBridge.position;
@@ -2020,28 +1815,10 @@ window.modelRenderer = {
         // Keep bridge repetitions level with one sampled terrain height.
         const repIsTunnel = isTunnelFeature(feature);
         const repIsBridge = !repIsTunnel && isBridgeFeature(feature);
-        const underBridgeContext = (repIsBridge || repIsTunnel)
-            ? null
-            : getUnderBridgeContext(feature, repLonLat);
-        const bridgeAbove = underBridgeContext && underBridgeContext.bridge;
-        const underBridgeFeature = bridgeAbove
-            ? (underBridgeContext.groundWay ||
-                findUnderBridgeWayFeature(feature, bridgeAbove, repLonLat) || feature)
-            : null;
-        const underBridgePosition = underBridgeFeature && underBridgeFeature !== feature
-            ? getFeatureAnchorLonLat(underBridgeFeature)
-            : repLonLat;
+        const bridgeAbove = (repIsBridge || repIsTunnel) ? null : findBridgeAboveFeature(feature, repLonLat);
         const underBridge = bridgeAbove
-            ? getUnderBridgeSurface(
-                underBridgeFeature,
-                bridgeAbove,
-                underBridgePosition,
-                underBridgeContext.groundWay
-            )
+            ? getUnderBridgeSurface(feature, bridgeAbove, repLonLat)
             : null;
-        const underBridgeHeightOffset = underBridge
-            ? getFeatureHeightOffset(underBridgeFeature)
-            : 0;
 
         // Create model matrix for repetition model - GROUND LEVEL (like footway)
         const repHeightOffset = feature.get(`fence_repetition_${repIndex}_heightOffset`) || 
@@ -2063,7 +1840,7 @@ window.modelRenderer = {
         } else if (repIsBridge) {
             repTerrainElevation = getBridgeReferenceHeight(feature, repLonLat);
         } else if (underBridge) {
-            repTerrainElevation = underBridge.height + underBridgeHeightOffset;
+            repTerrainElevation = underBridge.height;
         } else {
             if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
                 try { window.mapterhornTerrain.warmUp(repLonLat[0], repLonLat[1]); } catch (e) { /* no DEM yet */ }
@@ -2151,9 +1928,7 @@ window.modelRenderer = {
             isBridge: repIsBridge,
             isUnderBridge: !!underBridge,
             underBridgeKey: underBridge && underBridge.bridgeKey,
-            surfaceFeature: underBridge && underBridge.feature,
             surfacePosition: underBridge && underBridge.position,
-            surfaceHeightOffset: underBridgeHeightOffset,
             lon: repLonLat[0],
             lat: repLonLat[1],
             elevation: repTerrainElevation,
@@ -2198,24 +1973,17 @@ window.modelRenderer = {
         // budget no matter how many were already resident.
         const areaCentre = areaGeometryCentreLonLat(geometry);
         const isTunnel = isTunnelFeature(feature);
-        const underBridgeContext = isTunnel || isBridgeFeature(feature) || !areaCentre
+        const bridgeAbove = isTunnel || isBridgeFeature(feature) || !areaCentre
             ? null
-            : getUnderBridgeContext(feature, areaCentre);
-        const bridgeAbove = underBridgeContext && underBridgeContext.bridge;
+            : findBridgeAboveFeature(feature, areaCentre);
         const underBridgeFeature = bridgeAbove
-            ? (underBridgeContext.groundWay ||
-                findUnderBridgeWayFeature(feature, bridgeAbove, areaCentre) || feature)
+            ? (findUnderBridgeWayFeature(feature, bridgeAbove, areaCentre) || feature)
             : null;
         const underBridgePosition = underBridgeFeature && underBridgeFeature !== feature
             ? getFeatureAnchorLonLat(underBridgeFeature)
             : areaCentre;
         const underBridge = bridgeAbove
-            ? getUnderBridgeSurface(
-                underBridgeFeature,
-                bridgeAbove,
-                underBridgePosition,
-                underBridgeContext.groundWay
-            )
+            ? getUnderBridgeSurface(underBridgeFeature, bridgeAbove, underBridgePosition)
             : null;
         const underBridgeHeightOffset = underBridge
             ? getFeatureHeightOffset(underBridgeFeature)
@@ -3607,10 +3375,7 @@ window.modelRenderer = {
                     if (surface) surface.height = demHeight;
                     surfaceFeature.set('underBridgeSurfaces', surfaces);
                 }
-                const surfaceHeightOffset = entry.isUnderBridge
-                    ? (entry.surfaceHeightOffset || 0)
-                    : 0;
-                const totalHeight = heightOffset + surfaceHeightOffset + demHeight;
+                const totalHeight = heightOffset + demHeight;
 
                 const matrix = entry.model.modelMatrix;
                 const translation = Cesium.Matrix4.getColumn(matrix, 3, new Cesium.Cartesian4());
