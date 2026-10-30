@@ -333,28 +333,6 @@ function sampleGroundElevation(lon, lat) {
     return 0;
 }
 
-// Smoothed DEM sampling that prevents abrupt changes (max 1m per 2m horizontal)
-// Under bridges, cliffs are impossible so DEM should be smooth.
-const DEM_SMOOTH_CACHE = new Map();
-function smoothGroundElevation(lon, lat, lastHeight, cacheKey) {
-    const raw = sampleGroundElevation(lon, lat);
-    if (!isFinite(raw) || !isFinite(lastHeight)) return raw;
-
-    // Apply gradient limiting: max 0.5 slope (1m change per 2m horizontal)
-    // Estimate step size from cache key if available
-    const lastEntry = cacheKey ? DEM_SMOOTH_CACHE.get(cacheKey) : null;
-    if (lastEntry && isFinite(lastEntry.dist)) {
-        const dist2M = lastEntry.dist / 2; // normalize to 2m units
-        const maxDelta = 1.0; // 1m max change
-        const allowedDelta = Math.min(maxDelta, Math.abs(raw - lastEntry.height) * (dist2M > 0 ? dist2M : 1));
-        if (Math.abs(raw - lastEntry.height) > allowedDelta) {
-            // Smooth the value
-            return lastEntry.height + (raw - lastEntry.height) * (allowedDelta / Math.abs(raw - lastEntry.height));
-        }
-    }
-    return raw;
-}
-
 const bridgeSurfaceFeatureCache = new WeakMap();
 const BRIDGE_SURFACE_MATCH_DISTANCE_METERS = 30;
 
@@ -1710,13 +1688,9 @@ window.modelRenderer = {
                 let underBridgeFeature = null;
                 if (isTunnelFeature(feature)) {
                     flatSurfaceHeight = getTunnelElevation();
-                } else if (isBridgeFeature(feature) && centre) {
-                    if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
-                        try { window.mapterhornTerrain.warmUp(centre[0], centre[1]); } catch (e) { /* no DEM yet */ }
-                    }
-                    flatSurfaceHeight = getBridgeReferenceHeight(feature, centre);
-                    flatSurfacePosition = feature.get('bridgeRefPosition');
                 } else if (centre) {
+                    // Check for bridges above FIRST (before bridge feature check)
+                    // so barriers under bridges use ground height, not bridge deck height
                     const bridgeAbove = findBridgeAboveFeature(feature, centre);
                     if (bridgeAbove) {
                         underBridgeFeature = findUnderBridgeWayFeature(feature, bridgeAbove, centre) || feature;
@@ -1728,6 +1702,12 @@ window.modelRenderer = {
                         flatSurfaceHeight = underBridge.height + surfaceHeightOffset;
                         flatSurfacePosition = underBridge.position;
                         underBridgeKey = underBridge.bridgeKey;
+                    } else if (isBridgeFeature(feature)) {
+                        if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
+                            try { window.mapterhornTerrain.warmUp(centre[0], centre[1]); } catch (e) { /* no DEM yet */ }
+                        }
+                        flatSurfaceHeight = getBridgeReferenceHeight(feature, centre);
+                        flatSurfacePosition = feature.get('bridgeRefPosition');
                     }
                 }
 
@@ -2017,7 +1997,7 @@ window.modelRenderer = {
         // budget no matter how many were already resident.
         const areaCentre = areaGeometryCentreLonLat(geometry);
         const isTunnel = isTunnelFeature(feature);
-        const bridgeAbove = isTunnel || isBridgeFeature(feature) || !areaCentre
+        const bridgeAbove = isTunnel || !areaCentre
             ? null
             : findBridgeAboveFeature(feature, areaCentre);
         const underBridgeFeature = bridgeAbove
