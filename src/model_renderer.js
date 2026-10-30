@@ -386,6 +386,51 @@ function findBridgeSurfaceFeature(feature, position) {
     return closest || feature;
 }
 
+// Find the closest highway/footway that this barrier runs alongside
+function findAdjacentHighway(feature, lonLat) {
+    const geometry = feature.getGeometry && feature.getGeometry();
+    if (!geometry) return null;
+    const featureLevel = parseOsNumber(feature.get('layer')) || 0;
+    const projection = window.map.getView().getProjection();
+    let closestFeature = null;
+    let closestDistance = Infinity;
+
+    const layers = window.modelRenderer.getAllMapLayers(window.map.getLayers().getArray());
+    for (const layer of layers) {
+        const source = layer && layer.getSource && layer.getSource();
+        if (!source || !source.getFeatures) continue;
+        for (const candidate of source.getFeatures()) {
+            if (candidate === feature) continue;
+            const candidateLevel = parseOsNumber(candidate.get('layer')) || 0;
+            // Must be at same level
+            if (Math.abs(candidateLevel - featureLevel) > 0.01) continue;
+            // Must be a highway, footway, or path
+            const highway = candidate.get('highway');
+            if (!highway || !['primary', 'secondary', 'tertiary', 'residential',
+                'unclassified', 'footway', 'path', 'cycleway', 'steps',
+                'living_street', 'pedestrian', 'track'].includes(highway)) continue;
+            const candidateGeometry = candidate.getGeometry && candidate.getGeometry();
+            if (!candidateGeometry) continue;
+            // Check intersection or proximity
+            if (!geometriesIntersect(geometry, candidateGeometry)) continue;
+            // Calculate distance
+            let distance = Infinity;
+            for (const line of getGeometryLines(candidateGeometry)) {
+                for (let i = 0; i < line.length - 1; i++) {
+                    const start = ol.proj.transform(line[i], projection, 'EPSG:4326');
+                    const end = ol.proj.transform(line[i + 1], projection, 'EPSG:4326');
+                    distance = Math.min(distance, window.modelRenderer.pointToSegmentDistanceMeters(lonLat, start, end));
+                }
+            }
+            if (distance < closestDistance) {
+                closestFeature = candidate;
+                closestDistance = distance;
+            }
+        }
+    }
+    return closestFeature;
+}
+
 function getBridgeReferenceHeight(feature, lonLat) {
     const surfaceFeature = findBridgeSurfaceFeature(feature, lonLat);
     const surfaceAnchor = surfaceFeature === feature
@@ -1485,10 +1530,16 @@ window.modelRenderer = {
             // Feature is UNDER a bridge: use cached ground height (same as textures)
             terrainElevation = underBridge.height;
         } else if (isBarrier && isBridge) {
-            // Barrier with bridge=yes (inherited from highway): use highway's reference height
-            const adjHighway = findBridgeSurfaceFeature(feature, lonLat);
-            if (adjHighway !== feature) {
-                terrainElevation = getBridgeReferenceHeight(adjHighway, lonLat);
+            // Barrier with bridge=yes (inherited): find adjacent highway and use its height
+            const adjHighway = findAdjacentHighway(feature, lonLat);
+            if (adjHighway && adjHighway !== feature) {
+                // Use the highway's reference height if it has one, otherwise ground
+                const highwayRefHeight = adjHighway.get('bridgeRefHeight');
+                if (highwayRefHeight !== undefined && isFinite(highwayRefHeight)) {
+                    terrainElevation = highwayRefHeight;
+                } else {
+                    terrainElevation = getBridgeReferenceHeight(adjHighway, lonLat);
+                }
             } else {
                 terrainElevation = sampleGroundElevation(lonLat[0], lonLat[1]);
             }
@@ -1869,10 +1920,15 @@ window.modelRenderer = {
             // Feature is UNDER a bridge: use cached ground height (same as textures)
             repTerrainElevation = underBridge.height;
         } else if (repIsBarrier && repIsBridge) {
-            // Barrier with bridge=yes (inherited from highway): use highway's reference height
-            const adjHighway = findBridgeSurfaceFeature(feature, repLonLat);
-            if (adjHighway !== feature) {
-                repTerrainElevation = getBridgeReferenceHeight(adjHighway, repLonLat);
+            // Barrier with bridge=yes (inherited): find adjacent highway and use its height
+            const adjHighway = findAdjacentHighway(feature, repLonLat);
+            if (adjHighway && adjHighway !== feature) {
+                const highwayRefHeight = adjHighway.get('bridgeRefHeight');
+                if (highwayRefHeight !== undefined && isFinite(highwayRefHeight)) {
+                    repTerrainElevation = highwayRefHeight;
+                } else {
+                    repTerrainElevation = getBridgeReferenceHeight(adjHighway, repLonLat);
+                }
             } else {
                 repTerrainElevation = sampleGroundElevation(repLonLat[0], repLonLat[1]);
             }
