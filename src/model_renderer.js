@@ -1462,16 +1462,34 @@ window.modelRenderer = {
         //   they do not undulate along the way.
         // - Non-bridge ways (including everything UNDER a bridge): stay at
         //   ground level per-position DEM height, independently of the bridge.
+        //   Barriers (guard rails, fences, walls) under bridges must NOT be
+        //   elevated to the deck height — they belong on the ground.
         const isTunnel = isTunnelFeature(feature);
         const isBridge = !isTunnel && isBridgeFeature(feature);
+        const isBarrier = feature.get('barrier') || feature.get('fence_type') || feature.get('wall_type') || feature.get('wall');
+
+        // Check for bridges above this feature. Barriers must be allowed to detect
+        // bridges above them so we can clamp to ground (ignore DEM undulations)
+        // when they run under a bridge. Tunnels and bridge features themselves
+        // should NOT look upward.
         const bridgeAbove = (isBridge || isTunnel) ? null : findBridgeAboveFeature(feature, lonLat);
         const underBridge = bridgeAbove
             ? getUnderBridgeSurface(feature, bridgeAbove, lonLat)
             : null;
 
+        // Barriers must ALWAYS use ground elevation, even if they have bridge=yes
+        // (inherited from the road they run alongside). A guard rail under a bridge
+        // stays on the ground, not on the deck.
+        const isBarrierOnBridge = isBarrier && isBridge;
+
         let terrainElevation;
         if (isTunnel) {
             terrainElevation = getTunnelElevation();
+        } else if (isBarrierOnBridge) {
+            if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
+                try { window.mapterhornTerrain.warmUp(lonLat[0], lonLat[1]); } catch (e) { /* no DEM yet */ }
+            }
+            terrainElevation = sampleGroundElevation(lonLat[0], lonLat[1]);
         } else if (isBridge) {
             terrainElevation = getBridgeReferenceHeight(feature, lonLat);
         } else if (underBridge) {
@@ -1485,14 +1503,19 @@ window.modelRenderer = {
             terrainElevation = sampleGroundElevation(lonLat[0], lonLat[1]);
         }
         
+        // Clamp to ground when the feature is under a bridge (ignore DEM undulations)
+        // OR when it's not a bridge feature (stay on ground, not on deck).
+        // When isBarrier && isBridge && !underBridge: the barrier sits ON the bridge deck,
+        // so we must NOT clamp — let totalHeight place it at deck elevation.
+        const clampToGround = !isBridge || underBridge;
+
         const totalHeight = heightOffset + terrainElevation;
         let modelMatrix = Cesium.Transforms.eastNorthUpToFixedFrame(
-            Cesium.Cartesian3.fromDegrees(lonLat[0], lonLat[1], totalHeight)
+            Cesium.Cartesian3.fromDegrees(lonLat[0], lonLat[1], clampToGround ? 0 : totalHeight)
         );
-        
-        // Tilt the model to follow the terrain slope so it stands correctly
-        // inclined on mountains (MapTerhorn DEM surface normal)
-        if (!isTunnel && !isBridge && !underBridge && window.mapterhornTerrain && window.mapterhornTerrain.applySlopeTilt) {
+
+        // Tilt the model to follow the terrain slope
+        if (!isTunnel && !isBridge && (!underBridge || isBarrier) && window.mapterhornTerrain && window.mapterhornTerrain.applySlopeTilt) {
             try {
                 modelMatrix = window.mapterhornTerrain.applySlopeTilt(modelMatrix, lonLat[0], lonLat[1]);
             } catch (e) { /* no DEM data yet */ }
@@ -1530,9 +1553,9 @@ window.modelRenderer = {
         // Update pooled model with ALL properties at once to prevent flashing
         pooledModel.model.modelMatrix = modelMatrix;
         pooledModel.model.scale = model.scale || 1.0;
-        // Keep the sampled height explicit. Cesium's ground clamp can snap a
-        // way beneath a bridge onto the bridge surface.
-        pooledModel.model.heightReference = Cesium.HeightReference.NONE;
+        // Keep the sampled height explicit. Ground-clamping can snap an
+        // under-bridge way onto the bridge surface, unless it's a barrier.
+        pooledModel.model.heightReference = isBarrier ? Cesium.HeightReference.CLAMP_TO_GROUND : Cesium.HeightReference.NONE;
         pooledModel.model.show = true; // Ensure it's visible
 
         // Track loaded model for the current 3D session only
@@ -1681,7 +1704,8 @@ window.modelRenderer = {
                     flatSurfaceHeight = getBridgeReferenceHeight(feature, centre);
                     flatSurfacePosition = feature.get('bridgeRefPosition');
                 } else if (centre) {
-                    const bridgeAbove = findBridgeAboveFeature(feature, centre);
+                    const isRepBarrier = feature.get('barrier') || feature.get('fence_type') || feature.get('wall_type') || feature.get('wall');
+                    const bridgeAbove = isRepBarrier ? null : findBridgeAboveFeature(feature, centre);
                     if (bridgeAbove) {
                         underBridgeFeature = findUnderBridgeWayFeature(feature, bridgeAbove, centre) || feature;
                         const surfacePosition = underBridgeFeature === feature
@@ -1815,6 +1839,11 @@ window.modelRenderer = {
         // Keep bridge repetitions level with one sampled terrain height.
         const repIsTunnel = isTunnelFeature(feature);
         const repIsBridge = !repIsTunnel && isBridgeFeature(feature);
+        const repIsBarrier = feature.get('barrier') || feature.get('fence_type') || feature.get('wall_type') || feature.get('wall');
+
+        // Check for bridges above this feature. Barriers must be allowed to detect
+        // bridges above them so we can clamp to ground (ignore DEM undulations)
+        // when they run under a bridge.
         const bridgeAbove = (repIsBridge || repIsTunnel) ? null : findBridgeAboveFeature(feature, repLonLat);
         const underBridge = bridgeAbove
             ? getUnderBridgeSurface(feature, bridgeAbove, repLonLat)
@@ -1830,6 +1859,10 @@ window.modelRenderer = {
             try { window.mapterhornTerrain.warmUp(repLonLat[0], repLonLat[1]); } catch (e) { /* no DEM yet */ }
         }
         
+        // Barriers must ALWAYS use ground elevation, even if they have bridge=yes
+        // (inherited from the road they run alongside).
+        const repIsBarrierOnBridge = repIsBarrier && repIsBridge;
+
         // Get terrain elevation. For bridges: cache reference DEM height on
         // first repetition so the whole bridge stays FLAT at one elevation
         // (no undulation down mountains). Non-bridge ways sample per-position
@@ -1837,6 +1870,11 @@ window.modelRenderer = {
         let repTerrainElevation;
         if (repIsTunnel) {
             repTerrainElevation = getTunnelElevation();
+        } else if (repIsBarrierOnBridge) {
+            if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
+                try { window.mapterhornTerrain.warmUp(repLonLat[0], repLonLat[1]); } catch (e) { /* no DEM yet */ }
+            }
+            repTerrainElevation = sampleGroundElevation(repLonLat[0], repLonLat[1]);
         } else if (repIsBridge) {
             repTerrainElevation = getBridgeReferenceHeight(feature, repLonLat);
         } else if (underBridge) {
@@ -1848,13 +1886,17 @@ window.modelRenderer = {
             repTerrainElevation = sampleGroundElevation(repLonLat[0], repLonLat[1]);
         }
         
+        // Same clamp logic as addModelForFeature: clamp when not on a bridge deck,
+        // or when under another bridge (draped over ground ignoring DEM undulations).
+        const repClampToGround = !repIsBridge || underBridge;
+
         const repTotalHeight = repHeightOffset + repTerrainElevation;
         let repModelMatrix = Cesium.Transforms.eastNorthUpToFixedFrame(
-            Cesium.Cartesian3.fromDegrees(repLonLat[0], repLonLat[1], repTotalHeight)
+            Cesium.Cartesian3.fromDegrees(repLonLat[0], repLonLat[1], repClampToGround ? 0 : repTotalHeight)
         );
 
         // Follow terrain slope so poles/fences stand perpendicular to the ground
-        if (!repIsTunnel && !repIsBridge && !underBridge && window.mapterhornTerrain && window.mapterhornTerrain.applySlopeTilt) {
+        if (!repIsTunnel && !repIsBridge && (!underBridge || repIsBarrier) && window.mapterhornTerrain && window.mapterhornTerrain.applySlopeTilt) {
             try {
                 repModelMatrix = window.mapterhornTerrain.applySlopeTilt(repModelMatrix, repLonLat[0], repLonLat[1]);
             } catch (e) { /* no DEM data yet */ }
@@ -1910,9 +1952,10 @@ window.modelRenderer = {
             show: true
         }));
         
-        // Keep the sampled height explicit. Ground-clamping can snap an
-        // under-bridge way onto the bridge surface.
-        repCesiumModel.heightReference = Cesium.HeightReference.NONE;
+        // Keep the sampled height explicit for non-barriers (to avoid ground-clamp
+        // snapping under-bridge ways onto the bridge surface). Barriers under bridges
+        // should use CLAMP_TO_GROUND so they stay on the terrain, not at bridge height.
+        repCesiumModel.heightReference = repIsBarrier ? Cesium.HeightReference.CLAMP_TO_GROUND : Cesium.HeightReference.NONE;
 
         // Track repetition models so the DEM re-seat hook can re-ground them
         // when terrain tiles refine AFTER placement (without this, kerbs,
@@ -1973,7 +2016,8 @@ window.modelRenderer = {
         // budget no matter how many were already resident.
         const areaCentre = areaGeometryCentreLonLat(geometry);
         const isTunnel = isTunnelFeature(feature);
-        const bridgeAbove = isTunnel || isBridgeFeature(feature) || !areaCentre
+        const isAreaBarrier = feature.get('barrier') || feature.get('fence_type') || feature.get('wall_type') || feature.get('wall');
+        const bridgeAbove = isTunnel || isBridgeFeature(feature) || !areaCentre || isAreaBarrier
             ? null
             : findBridgeAboveFeature(feature, areaCentre);
         const underBridgeFeature = bridgeAbove
