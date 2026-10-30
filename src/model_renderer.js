@@ -1484,6 +1484,14 @@ window.modelRenderer = {
         } else if (underBridge) {
             // Feature is UNDER a bridge: use cached ground height (same as textures)
             terrainElevation = underBridge.height;
+        } else if (isBarrier && isBridge) {
+            // Barrier with bridge=yes (inherited from highway): use highway's reference height
+            const adjHighway = findBridgeSurfaceFeature(feature, lonLat);
+            if (adjHighway !== feature) {
+                terrainElevation = getBridgeReferenceHeight(adjHighway, lonLat);
+            } else {
+                terrainElevation = sampleGroundElevation(lonLat[0], lonLat[1]);
+            }
         } else if (isBridge && !isBarrier) {
             // Feature is a BRIDGE (and not a barrier): use bridge reference height
             terrainElevation = getBridgeReferenceHeight(feature, lonLat);
@@ -1496,9 +1504,9 @@ window.modelRenderer = {
             terrainElevation = sampleGroundElevation(lonLat[0], lonLat[1]);
         }
 
-        // Clamp to ground for all non-bridge features (including barriers under bridges).
-        // For bridges, do NOT clamp to ground (they must be at bridge deck elevation).
-        const clampToGround = !isBridge || (isBarrier && !isBridge) || underBridge;
+        // Clamp to ground only when under a bridge or not a bridge feature.
+        // Barriers on bridges should be at bridge deck elevation (like the highway).
+        const clampToGround = underBridge || (!isBridge && !isBarrier);
 
         const totalHeight = heightOffset + terrainElevation;
         let modelMatrix = Cesium.Transforms.eastNorthUpToFixedFrame(
@@ -1860,6 +1868,14 @@ window.modelRenderer = {
         } else if (underBridge) {
             // Feature is UNDER a bridge: use cached ground height (same as textures)
             repTerrainElevation = underBridge.height;
+        } else if (repIsBarrier && repIsBridge) {
+            // Barrier with bridge=yes (inherited from highway): use highway's reference height
+            const adjHighway = findBridgeSurfaceFeature(feature, repLonLat);
+            if (adjHighway !== feature) {
+                repTerrainElevation = getBridgeReferenceHeight(adjHighway, repLonLat);
+            } else {
+                repTerrainElevation = sampleGroundElevation(repLonLat[0], repLonLat[1]);
+            }
         } else if (repIsBridge && !repIsBarrier) {
             repTerrainElevation = getBridgeReferenceHeight(feature, repLonLat);
         } else {
@@ -1869,7 +1885,7 @@ window.modelRenderer = {
             repTerrainElevation = sampleGroundElevation(repLonLat[0], repLonLat[1]);
         }
 
-        const repClampToGround = !repIsBridge || (repIsBarrier && !repIsBridge) || underBridge;
+        const repClampToGround = underBridge || (!repIsBridge && !repIsBarrier);
 
         const repTotalHeight = repHeightOffset + repTerrainElevation;
         let repModelMatrix = Cesium.Transforms.eastNorthUpToFixedFrame(
