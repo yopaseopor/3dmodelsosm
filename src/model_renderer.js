@@ -411,20 +411,29 @@ function findAdjacentHighway(feature, lonLat) {
                 'living_street', 'pedestrian', 'track'].includes(highway)) continue;
             const candidateGeometry = candidate.getGeometry && candidate.getGeometry();
             if (!candidateGeometry) continue;
-            // Check intersection or proximity
+            // First check bounding box overlap (fast filter)
             if (!geometriesIntersect(geometry, candidateGeometry)) continue;
-            // Calculate distance
-            let distance = Infinity;
-            for (const line of getGeometryLines(candidateGeometry)) {
-                for (let i = 0; i < line.length - 1; i++) {
-                    const start = ol.proj.transform(line[i], projection, 'EPSG:4326');
-                    const end = ol.proj.transform(line[i + 1], projection, 'EPSG:4326');
-                    distance = Math.min(distance, window.modelRenderer.pointToSegmentDistanceMeters(lonLat, start, end));
+            // Sample multiple points along the guard rail to find minimum distance
+            const featureCoords = getGeometryLines(geometry);
+            let minDist = Infinity;
+            for (const fLine of featureCoords) {
+                // Check at intervals along the line
+                for (let i = 0; i < fLine.length; i += Math.max(1, Math.floor(fLine.length / 10))) {
+                    const point = ol.proj.transform(fLine[i], projection, 'EPSG:4326');
+                    for (const cLine of getGeometryLines(candidateGeometry)) {
+                        for (let j = 0; j < cLine.length - 1; j++) {
+                            const start = ol.proj.transform(cLine[j], projection, 'EPSG:4326');
+                            const end = ol.proj.transform(cLine[j + 1], projection, 'EPSG:4326');
+                            const dist = window.modelRenderer.pointToSegmentDistanceMeters(point, start, end);
+                            minDist = Math.min(minDist, dist);
+                        }
+                    }
                 }
             }
-            if (distance < closestDistance) {
+            // Only consider if very close (within 10 meters)
+            if (minDist < 10 && minDist < closestDistance) {
                 closestFeature = candidate;
-                closestDistance = distance;
+                closestDistance = minDist;
             }
         }
     }
