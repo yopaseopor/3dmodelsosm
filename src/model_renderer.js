@@ -1515,6 +1515,8 @@ window.modelRenderer = {
                 const maxDelta = Math.min(1.0, dist / 2); // 1m max change per 2m horizontal
                 const delta = raw - underBridge.height;
                 terrainElevation = underBridge.height + Math.max(-maxDelta, Math.min(maxDelta, delta));
+                // Mark as smoothed so next call doesn't re-smooth
+                underBridge.smoothed = true;
             } else {
                 terrainElevation = underBridge.height;
             }
@@ -1901,6 +1903,8 @@ window.modelRenderer = {
                 const maxDelta = Math.min(1.0, dist / 2); // 1m max change per 2m horizontal
                 const delta = raw - underBridge.height;
                 repTerrainElevation = underBridge.height + Math.max(-maxDelta, Math.min(maxDelta, delta));
+                // Mark as smoothed
+                underBridge.smoothed = true;
             } else {
                 repTerrainElevation = underBridge.height;
             }
