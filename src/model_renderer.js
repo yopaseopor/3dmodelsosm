@@ -333,6 +333,28 @@ function sampleGroundElevation(lon, lat) {
     return 0;
 }
 
+// Smoothed DEM sampling that prevents abrupt changes (max 1m per 2m horizontal)
+// Under bridges, cliffs are impossible so DEM should be smooth.
+const DEM_SMOOTH_CACHE = new Map();
+function smoothGroundElevation(lon, lat, lastHeight, cacheKey) {
+    const raw = sampleGroundElevation(lon, lat);
+    if (!isFinite(raw) || !isFinite(lastHeight)) return raw;
+
+    // Apply gradient limiting: max 0.5 slope (1m change per 2m horizontal)
+    // Estimate step size from cache key if available
+    const lastEntry = cacheKey ? DEM_SMOOTH_CACHE.get(cacheKey) : null;
+    if (lastEntry && isFinite(lastEntry.dist)) {
+        const dist2M = lastEntry.dist / 2; // normalize to 2m units
+        const maxDelta = 1.0; // 1m max change
+        const allowedDelta = Math.min(maxDelta, Math.abs(raw - lastEntry.height) * (dist2M > 0 ? dist2M : 1));
+        if (Math.abs(raw - lastEntry.height) > allowedDelta) {
+            // Smooth the value
+            return lastEntry.height + (raw - lastEntry.height) * (allowedDelta / Math.abs(raw - lastEntry.height));
+        }
+    }
+    return raw;
+}
+
 const bridgeSurfaceFeatureCache = new WeakMap();
 const BRIDGE_SURFACE_MATCH_DISTANCE_METERS = 30;
 
@@ -576,7 +598,8 @@ function getUnderBridgeSurface(feature, bridge, lonLatPosition) {
         }
         surface = {
             height: sampleGroundElevation(lonLatPosition[0], lonLatPosition[1]),
-            position: lonLatPosition.slice(0, 2)
+            position: lonLatPosition.slice(0, 2),
+            smoothed: false // Flag to indicate if smoothing has been applied
         };
         cached[bridgeKey] = surface;
         feature.set('underBridgeSurfaces', cached);
@@ -1481,7 +1504,20 @@ window.modelRenderer = {
             terrainElevation = getTunnelElevation();
         } else if (underBridge) {
             // Feature is UNDER a bridge: use under-bridge cached height (clamped to ground)
-            terrainElevation = underBridge.height;
+            // For barriers, smooth DEM to prevent cliffs (max 1m per 2m horizontal)
+            if (isBarrier && !underBridge.smoothed) {
+                // Smooth DEM for barriers under bridges
+                const raw = sampleGroundElevation(lonLat[0], lonLat[1]);
+                const dist = underBridge.position
+                    ? Math.sqrt(Math.pow(lonLat[0] - underBridge.position[0], 2) +
+                               Math.pow(lonLat[1] - underBridge.position[1], 2)) * 111320
+                    : 0;
+                const maxDelta = Math.min(1.0, dist / 2); // 1m max change per 2m horizontal
+                const delta = raw - underBridge.height;
+                terrainElevation = underBridge.height + Math.max(-maxDelta, Math.min(maxDelta, delta));
+            } else {
+                terrainElevation = underBridge.height;
+            }
         } else if (isBridge && !isBarrier) {
             // Feature is a BRIDGE (and not a barrier): use bridge reference height
             terrainElevation = getBridgeReferenceHeight(feature, lonLat);
@@ -1855,7 +1891,19 @@ window.modelRenderer = {
         if (repIsTunnel) {
             repTerrainElevation = getTunnelElevation();
         } else if (underBridge) {
-            repTerrainElevation = underBridge.height;
+            // For barrier repetitions under bridges, smooth DEM to prevent cliffs
+            if (repIsBarrier && !underBridge.smoothed) {
+                const raw = sampleGroundElevation(repLonLat[0], repLonLat[1]);
+                const dist = underBridge.position
+                    ? Math.sqrt(Math.pow(repLonLat[0] - underBridge.position[0], 2) +
+                               Math.pow(repLonLat[1] - underBridge.position[1], 2)) * 111320
+                    : 0;
+                const maxDelta = Math.min(1.0, dist / 2); // 1m max change per 2m horizontal
+                const delta = raw - underBridge.height;
+                repTerrainElevation = underBridge.height + Math.max(-maxDelta, Math.min(maxDelta, delta));
+            } else {
+                repTerrainElevation = underBridge.height;
+            }
         } else if (repIsBridge && !repIsBarrier) {
             repTerrainElevation = getBridgeReferenceHeight(feature, repLonLat);
         } else {
