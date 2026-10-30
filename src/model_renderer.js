@@ -1492,9 +1492,10 @@ window.modelRenderer = {
         const isBridge = !isTunnel && isBridgeFeature(feature);
         const isBarrier = feature.get('barrier') || feature.get('fence_type') || feature.get('wall_type') || feature.get('wall');
 
-        // Check for bridges above this feature. All features (except tunnels/bridges
-        // themselves) check for bridge overhead to see if they are under a bridge.
-        const bridgeAbove = (isBridge || isTunnel) ? null : findBridgeAboveFeature(feature, lonLat);
+        // Check for bridges above this feature. All features (except tunnels) check
+        // for bridge overhead. Barriers must detect bridges above them to stay
+        // on ground (not bridge deck), even if they have bridge=yes inherited.
+        const bridgeAbove = isTunnel ? null : findBridgeAboveFeature(feature, lonLat);
         const underBridge = bridgeAbove
             ? getUnderBridgeSurface(feature, bridgeAbove, lonLat)
             : null;
@@ -1852,10 +1853,9 @@ window.modelRenderer = {
         const repIsBridge = !repIsTunnel && isBridgeFeature(feature);
         const repIsBarrier = feature.get('barrier') || feature.get('fence_type') || feature.get('wall_type') || feature.get('wall');
 
-        // Check for bridges above this feature. Barriers must be allowed to detect
-        // bridges above them so we can clamp to ground (ignore DEM undulations)
-        // when they run under a bridge.
-        const bridgeAbove = (repIsBridge || repIsTunnel) ? null : findBridgeAboveFeature(feature, repLonLat);
+        // Check for bridges above this feature. All features (except tunnels) check
+        // for bridge overhead.
+        const bridgeAbove = repIsTunnel ? null : findBridgeAboveFeature(feature, repLonLat);
         const underBridge = bridgeAbove
             ? getUnderBridgeSurface(feature, bridgeAbove, repLonLat)
             : null;
