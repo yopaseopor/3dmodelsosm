@@ -1693,8 +1693,7 @@ window.modelRenderer = {
                     flatSurfaceHeight = getBridgeReferenceHeight(feature, centre);
                     flatSurfacePosition = feature.get('bridgeRefPosition');
                 } else if (centre) {
-                    const isRepBarrier = feature.get('barrier') || feature.get('fence_type') || feature.get('wall_type') || feature.get('wall');
-                    const bridgeAbove = isRepBarrier ? null : findBridgeAboveFeature(feature, centre);
+                    const bridgeAbove = findBridgeAboveFeature(feature, centre);
                     if (bridgeAbove) {
                         underBridgeFeature = findUnderBridgeWayFeature(feature, bridgeAbove, centre) || feature;
                         const surfacePosition = underBridgeFeature === feature
@@ -1994,8 +1993,7 @@ window.modelRenderer = {
         // budget no matter how many were already resident.
         const areaCentre = areaGeometryCentreLonLat(geometry);
         const isTunnel = isTunnelFeature(feature);
-        const isAreaBarrier = feature.get('barrier') || feature.get('fence_type') || feature.get('wall_type') || feature.get('wall');
-        const bridgeAbove = isTunnel || isBridgeFeature(feature) || !areaCentre || isAreaBarrier
+        const bridgeAbove = isTunnel || isBridgeFeature(feature) || !areaCentre
             ? null
             : findBridgeAboveFeature(feature, areaCentre);
         const underBridgeFeature = bridgeAbove
