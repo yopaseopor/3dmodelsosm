@@ -1462,52 +1462,41 @@ window.modelRenderer = {
         //   they do not undulate along the way.
         // - Non-bridge ways (including everything UNDER a bridge): stay at
         //   ground level per-position DEM height, independently of the bridge.
-        //   Barriers (guard rails, fences, walls) under bridges must NOT be
-        //   elevated to the deck height — they belong on the ground.
+        //   Barriers (guard rails, fences, walls) must ALWAYS be on the ground
+        //   level, even if they have bridge=yes (inherited from the road they
+        //   run alongside).
         const isTunnel = isTunnelFeature(feature);
         const isBridge = !isTunnel && isBridgeFeature(feature);
         const isBarrier = feature.get('barrier') || feature.get('fence_type') || feature.get('wall_type') || feature.get('wall');
 
-        // Check for bridges above this feature. Barriers must be allowed to detect
-        // bridges above them so we can clamp to ground (ignore DEM undulations)
-        // when they run under a bridge. Tunnels and bridge features themselves
-        // should NOT look upward.
+        // Check for bridges above this feature. All features (except tunnels/bridges
+        // themselves) check for bridge overhead to see if they are under a bridge.
         const bridgeAbove = (isBridge || isTunnel) ? null : findBridgeAboveFeature(feature, lonLat);
         const underBridge = bridgeAbove
             ? getUnderBridgeSurface(feature, bridgeAbove, lonLat)
             : null;
 
-        // Barriers must ALWAYS use ground elevation, even if they have bridge=yes
-        // (inherited from the road they run alongside). A guard rail under a bridge
-        // stays on the ground, not on the deck.
-        const isBarrierOnBridge = isBarrier && isBridge;
-
         let terrainElevation;
         if (isTunnel) {
             terrainElevation = getTunnelElevation();
-        } else if (isBarrierOnBridge) {
-            if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
-                try { window.mapterhornTerrain.warmUp(lonLat[0], lonLat[1]); } catch (e) { /* no DEM yet */ }
-            }
-            terrainElevation = sampleGroundElevation(lonLat[0], lonLat[1]);
-        } else if (isBridge) {
-            terrainElevation = getBridgeReferenceHeight(feature, lonLat);
         } else if (underBridge) {
+            // Feature is UNDER a bridge: use under-bridge cached height (clamped to ground)
             terrainElevation = underBridge.height;
+        } else if (isBridge && !isBarrier) {
+            // Feature is a BRIDGE (and not a barrier): use bridge reference height
+            terrainElevation = getBridgeReferenceHeight(feature, lonLat);
         } else {
-            // Non-bridge way: sample DEM at this position (ground level).
-            // Prime the DEM tile before sampling.
+            // Non-bridge way, or barrier (even if it has bridge=yes):
+            // use ground elevation (sampleGroundElevation).
             if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
                 try { window.mapterhornTerrain.warmUp(lonLat[0], lonLat[1]); } catch (e) { /* no DEM yet */ }
             }
             terrainElevation = sampleGroundElevation(lonLat[0], lonLat[1]);
         }
-        
-        // Clamp to ground when the feature is under a bridge (ignore DEM undulations)
-        // OR when it's not a bridge feature (stay on ground, not on deck).
-        // When isBarrier && isBridge && !underBridge: the barrier sits ON the bridge deck,
-        // so we must NOT clamp — let totalHeight place it at deck elevation.
-        const clampToGround = !isBridge || underBridge;
+
+        // Clamp to ground for all non-bridge features (including barriers under bridges).
+        // For bridges, do NOT clamp to ground (they must be at bridge deck elevation).
+        const clampToGround = !isBridge || (isBarrier && !isBridge) || underBridge;
 
         const totalHeight = heightOffset + terrainElevation;
         let modelMatrix = Cesium.Transforms.eastNorthUpToFixedFrame(
@@ -1859,10 +1848,6 @@ window.modelRenderer = {
             try { window.mapterhornTerrain.warmUp(repLonLat[0], repLonLat[1]); } catch (e) { /* no DEM yet */ }
         }
         
-        // Barriers must ALWAYS use ground elevation, even if they have bridge=yes
-        // (inherited from the road they run alongside).
-        const repIsBarrierOnBridge = repIsBarrier && repIsBridge;
-
         // Get terrain elevation. For bridges: cache reference DEM height on
         // first repetition so the whole bridge stays FLAT at one elevation
         // (no undulation down mountains). Non-bridge ways sample per-position
@@ -1870,25 +1855,18 @@ window.modelRenderer = {
         let repTerrainElevation;
         if (repIsTunnel) {
             repTerrainElevation = getTunnelElevation();
-        } else if (repIsBarrierOnBridge) {
-            if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
-                try { window.mapterhornTerrain.warmUp(repLonLat[0], repLonLat[1]); } catch (e) { /* no DEM yet */ }
-            }
-            repTerrainElevation = sampleGroundElevation(repLonLat[0], repLonLat[1]);
-        } else if (repIsBridge) {
-            repTerrainElevation = getBridgeReferenceHeight(feature, repLonLat);
         } else if (underBridge) {
             repTerrainElevation = underBridge.height;
+        } else if (repIsBridge && !repIsBarrier) {
+            repTerrainElevation = getBridgeReferenceHeight(feature, repLonLat);
         } else {
             if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
                 try { window.mapterhornTerrain.warmUp(repLonLat[0], repLonLat[1]); } catch (e) { /* no DEM yet */ }
             }
             repTerrainElevation = sampleGroundElevation(repLonLat[0], repLonLat[1]);
         }
-        
-        // Same clamp logic as addModelForFeature: clamp when not on a bridge deck,
-        // or when under another bridge (draped over ground ignoring DEM undulations).
-        const repClampToGround = !repIsBridge || underBridge;
+
+        const repClampToGround = !repIsBridge || (repIsBarrier && !repIsBridge) || underBridge;
 
         const repTotalHeight = repHeightOffset + repTerrainElevation;
         let repModelMatrix = Cesium.Transforms.eastNorthUpToFixedFrame(
