@@ -1532,16 +1532,20 @@ window.modelRenderer = {
         } else if (isBarrier && isBridge) {
             // Barrier with bridge=yes (inherited): find adjacent highway and use its height
             const adjHighway = findAdjacentHighway(feature, lonLat);
+            if (debugConfig.enabled) console.log(`🔍 Guardrail bridge: barrier=true, isBridge=true, adjHighway=${adjHighway ? 'found' : 'null'}`);
             if (adjHighway && adjHighway !== feature) {
                 // Use the highway's reference height if it has one, otherwise ground
                 const highwayRefHeight = adjHighway.get('bridgeRefHeight');
+                if (debugConfig.enabled) console.log(`🔍 Highway refHeight=${highwayRefHeight}`);
                 if (highwayRefHeight !== undefined && isFinite(highwayRefHeight)) {
                     terrainElevation = highwayRefHeight;
                 } else {
                     terrainElevation = getBridgeReferenceHeight(adjHighway, lonLat);
+                    if (debugConfig.enabled) console.log(`🔍 Calculated refHeight=${terrainElevation}`);
                 }
             } else {
                 terrainElevation = sampleGroundElevation(lonLat[0], lonLat[1]);
+                if (debugConfig.enabled) console.log(`🔍 No highway found, using ground=${terrainElevation}`);
             }
         } else if (isBridge && !isBarrier) {
             // Feature is a BRIDGE (and not a barrier): use bridge reference height
