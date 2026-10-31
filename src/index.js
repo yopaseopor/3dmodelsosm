@@ -1588,7 +1588,7 @@ function startPreLoadGate(ol3d, revealAfterMs) {
     // Safety timers FIRST, before anything that can throw: the canvas must
     // become visible and the panel must close no matter what happens below.
     const emergencyReveal = setTimeout(function () { reveal('safety timer'); }, revealAfterMs || 8000);
-    const emergencyFinish = setTimeout(function () { closePanel('max wait'); }, 45000);
+    const emergencyFinish = setTimeout(function () { closePanel('max wait'); }, 60000);
 
     function showCanvas() {
         if (!holder) return;
@@ -1607,7 +1607,7 @@ function startPreLoadGate(ol3d, revealAfterMs) {
     }
 
     try {
-        panel.begin({ title: 'Building 3D scene', hardStopMs: 45000 });
+        panel.begin({ title: 'Building 3D scene', hardStopMs: 60000 });
     } catch (error) {
         console.warn('🎯 Pre-load panel failed, showing 3D directly:', error);
         showCanvas();
