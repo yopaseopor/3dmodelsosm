@@ -578,6 +578,57 @@ function getFeatureAnchorLonLat(feature) {
     return ol.proj.toLonLat(ol.extent.getCenter(extent));
 }
 
+/**
+ * Find ALL features whose geometry crosses the given feature's geometry,
+ * regardless of tags (bridge=*, layer=*, etc.). Returns the closest
+ * crossing feature by minimum point-to-segment distance.
+ */
+function findCrossingFeatures(feature, maxDistance = 15) {
+    const geometry = feature.getGeometry && feature.getGeometry();
+    if (!geometry || !window.map || !window.modelRenderer) return [];
+    const projection = window.map.getView().getProjection();
+    const featureLines = getGeometryLines(geometry);
+    const layers = window.modelRenderer.getAllMapLayers(window.map.getLayers().getArray());
+    const results = [];
+
+    for (const layer of layers) {
+        const source = layer && layer.getSource && layer.getSource();
+        if (!source || !source.getFeatures) continue;
+        for (const candidate of source.getFeatures()) {
+            if (candidate === feature) continue;
+            const candidateGeometry = candidate.getGeometry && candidate.getGeometry();
+            if (!candidateGeometry) continue;
+            if (!geometriesIntersect(geometry, candidateGeometry)) continue;
+
+            // Compute minimum distance between the two geometries
+            let minDist = Infinity;
+            for (const fLine of featureLines) {
+                for (let i = 0; i < fLine.length - 1; i++) {
+                    const fStart = ol.proj.transform(fLine[i], projection, 'EPSG:4326');
+                    const fEnd = ol.proj.transform(fLine[i + 1], projection, 'EPSG:4326');
+                    for (const cLine of getGeometryLines(candidateGeometry)) {
+                        for (let j = 0; j < cLine.length - 1; j++) {
+                            const cStart = ol.proj.transform(cLine[j], projection, 'EPSG:4326');
+                            const cEnd = ol.proj.transform(cLine[j + 1], projection, 'EPSG:4326');
+                            minDist = Math.min(minDist,
+                                window.modelRenderer.pointToSegmentDistanceMeters(fStart, cStart, cEnd),
+                                window.modelRenderer.pointToSegmentDistanceMeters(fEnd, cStart, cEnd),
+                                window.modelRenderer.pointToSegmentDistanceMeters(cStart, fStart, fEnd),
+                                window.modelRenderer.pointToSegmentDistanceMeters(cEnd, fStart, fEnd)
+                            );
+                        }
+                    }
+                }
+            }
+            if (minDist <= maxDistance) {
+                results.push({ feature: candidate, distance: minDist });
+            }
+        }
+    }
+    results.sort((a, b) => a.distance - b.distance);
+    return results;
+}
+
 function findUnderBridgeWayFeature(areaFeature, bridge, areaCentre) {
     const areaGeometry = areaFeature.getGeometry && areaFeature.getGeometry();
     if (!areaGeometry || !bridge) return null;
@@ -640,13 +691,26 @@ function getUnderBridgeSurface(feature, bridge, lonLatPosition) {
 }
 
 /**
- * When a feature is very close (<1m) to a bridge but NOT tagged bridge=yes,
- * sample DEM just outside the bridge influence zone on both sides and
- * interpolate. This avoids DEM artifacts right next to bridge structures
- * (like mediana/median ground level fluctuations) while still placing the
- * feature at the correct ground elevation.
+ * When a feature is very close (<1m) to a bridge or crossing way
+ * but NOT tagged bridge=yes, sample DEM just outside the influence
+ * zone on both sides and interpolate. This avoids DEM artifacts
+ * right next to bridge structures (like mediana/median ground
+ * level fluctuations) while still placing the feature at the
+ * correct ground elevation.
+ *
+ * Also finds crossing features regardless of bridge/layer tags.
  */
 function getInterpolatedBridgeHeight(feature, bridge, lonLatPosition) {
+    // Also look for ANY crossing feature (not just bridge=yes)
+    let crossingFeature = bridge;
+    if (!crossingFeature) {
+        const crossings = findCrossingFeatures(feature, 15);
+        if (crossings.length > 0) {
+            crossingFeature = crossings[0].feature;
+            console.log(`🔍 Bridge proximity: found crossing feature ${crossingFeature.getId()} (${crossingFeature.get('highway') || crossingFeature.get('barrier') || 'unknown'}) at ${crossings[0].distance.toFixed(2)}m`);
+        }
+    }
+    if (!crossingFeature) return null;
     const geometry = feature.getGeometry && feature.getGeometry();
     if (!geometry || !bridge) return null;
     const projection = window.map.getView().getProjection();
@@ -1643,13 +1707,13 @@ window.modelRenderer = {
         } else {
             // Non-bridge way, or barrier (even if it has bridge=yes):
             // use ground elevation (sampleGroundElevation).
-            // If very close to a bridge (<1m) but not tagged bridge=yes,
-            // interpolate between bridge-edge heights to avoid DEM artifacts.
-            const nearBridgeHeight = !isTunnel && !underBridge
+            // If very close to a crossing feature (<1m), interpolate instead
+            // of using DEM (avoids artifacts near structures).
+            const nearCrossingHeight = !isTunnel && !underBridge
                 ? getInterpolatedBridgeHeight(feature, bridgeAbove, lonLat)
                 : null;
-            if (nearBridgeHeight !== null) {
-                terrainElevation = nearBridgeHeight;
+            if (nearCrossingHeight !== null) {
+                terrainElevation = nearCrossingHeight;
             } else {
                 if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
                     try { window.mapterhornTerrain.warmUp(lonLat[0], lonLat[1]); } catch (e) { /* no DEM yet */ }
@@ -2050,12 +2114,12 @@ window.modelRenderer = {
             repTerrainElevation = getBridgeReferenceHeight(feature, repLonLat);
         } else {
             // Non-bridge way: use ground elevation, but if very close to a
-            // bridge (<1m) without bridge=yes, interpolate instead of DEM.
-            const nearBridgeHeight = !repIsTunnel && !underBridge
+            // crossing feature (<1m), interpolate instead of DEM.
+            const nearCrossingHeight = !repIsTunnel && !underBridge
                 ? getInterpolatedBridgeHeight(feature, bridgeAbove, repLonLat)
                 : null;
-            if (nearBridgeHeight !== null) {
-                repTerrainElevation = nearBridgeHeight;
+            if (nearCrossingHeight !== null) {
+                repTerrainElevation = nearCrossingHeight;
             } else {
                 if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
                     try { window.mapterhornTerrain.warmUp(repLonLat[0], repLonLat[1]); } catch (e) { /* no DEM yet */ }
