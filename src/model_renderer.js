@@ -1537,6 +1537,7 @@ window.modelRenderer = {
             terrainElevation = getTunnelElevation();
         } else if (underBridge) {
             // Feature is UNDER a bridge: use cached ground height (same as textures)
+            // This applies to ALL features under bridges, including barriers with bridge=yes
             terrainElevation = underBridge.height;
         } else if (isBarrier && isBridge) {
             // Barrier with bridge=yes (inherited): find adjacent highway and use ITS height
