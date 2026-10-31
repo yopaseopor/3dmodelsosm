@@ -738,13 +738,11 @@ function getInterpolatedBridgeHeight(feature, bridge, lonLatPosition) {
     }
     if (!closestPoint || closestDist > 1.0) return null;
 
-    // Sample DEM at 5m and 10m perpendicular distances on both sides
-    // This captures the middle ground height away from crossing interference
-    const SAMPLE_DISTS = [5, 10];  // meters - two points on each side
+    // Sample DEM at 5m and 10m below bridge deck height for crossing features
+    // When a feature crosses a bridge=* way without having bridge tag itself,
+    // it should be placed 5-10m below the bridge deck (under the bridge).
+    const CROSSING_HEIGHT_OFFSETS = [5, 10];  // meters below bridge
     const TOLERANCE = 1.0;  // max allowed difference between samples (meters)
-
-    const perpDir1 = segmentAngle + Math.PI / 2;
-    const perpDir2 = segmentAngle - Math.PI / 2;
 
     function sampleAt(offsetMeters, angle) {
         const mPerDegLat = 111320;
@@ -754,7 +752,30 @@ function getInterpolatedBridgeHeight(feature, bridge, lonLatPosition) {
         return sampleGroundElevation(lonLatPosition[0] + lonOffset, lonLatPosition[1] + latOffset);
     }
 
-    // Sample at 5m and 10m on both sides of crossing
+    // Get the bridge deck height from the crossing feature
+    let bridgeDeckHeight = null;
+    if (crossingFeature && isBridgeFeature(crossingFeature)) {
+        const bridgeAnchor = getFeatureAnchorLonLat(crossingFeature);
+        if (bridgeAnchor) {
+            bridgeDeckHeight = getBridgeReferenceHeight(crossingFeature, bridgeAnchor);
+        }
+    }
+
+    // If we have bridge deck height, calculate heights below it
+    if (bridgeDeckHeight !== null && isFinite(bridgeDeckHeight)) {
+        const samples = [];
+        for (const offset of CROSSING_HEIGHT_OFFSETS) {
+            const calculatedHeight = bridgeDeckHeight - offset;
+            samples.push(calculatedHeight);
+        }
+        console.log(`🔍 Bridge crossing: using height ${samples.length}m below bridge deck (${bridgeDeckHeight.toFixed(2)}m → ${samples[0].toFixed(2)}m)`);
+        return samples[0]; // Use 5m offset as default
+    }
+
+    // Fallback to DEM sampling if no bridge height found
+    const perpDir1 = segmentAngle + Math.PI / 2;
+    const perpDir2 = segmentAngle - Math.PI / 2;
+
     const h1_5m = sampleAt(5, perpDir1);
     const h2_5m = sampleAt(5, perpDir2);
     const h1_10m = sampleAt(10, perpDir1);
