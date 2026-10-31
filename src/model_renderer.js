@@ -707,48 +707,44 @@ function getInterpolatedBridgeHeight(feature, bridge, lonLatPosition) {
         const crossings = findCrossingFeatures(feature, 15);
         if (crossings.length > 0) {
             crossingFeature = crossings[0].feature;
-            console.log(`🔍 Bridge proximity: found crossing feature ${crossingFeature.getId()} (${crossingFeature.get('highway') || crossingFeature.get('barrier') || 'unknown'}) at ${crossings[0].distance.toFixed(2)}m`);
+            console.log(`🔍 Crossing feature: ${crossingFeature.getId()} (${crossingFeature.get('highway') || crossingFeature.get('barrier') || 'unknown'}) at ${crossings[0].distance.toFixed(2)}m`);
         }
     }
     if (!crossingFeature) return null;
+
     const geometry = feature.getGeometry && feature.getGeometry();
-    if (!geometry || !bridge) return null;
+    if (!geometry || !crossingFeature) return null;
     const projection = window.map.getView().getProjection();
-    const bridgeGeom = bridge.getGeometry();
+    const crossingGeom = crossingFeature.getGeometry();
     const pos = ol.proj.transform(lonLatPosition, 'EPSG:4326', projection);
 
-    // Find the closest point on the bridge geometry
+    // Find the closest point on the crossing geometry
     let closestDist = Infinity;
-    let closestT = 0;
-    let closestBridgePos = null;
-    for (const line of getGeometryLines(bridgeGeom)) {
+    let closestPoint = null;
+    let segmentAngle = 0;
+    for (const line of getGeometryLines(crossingGeom)) {
         for (let i = 0; i < line.length - 1; i++) {
             const start = ol.proj.transform(line[i], projection, 'EPSG:4326');
             const end = ol.proj.transform(line[i + 1], projection, 'EPSG:4326');
             const dist = window.modelRenderer.pointToSegmentDistanceMeters(pos, start, end);
             if (dist < closestDist) {
                 closestDist = dist;
-                // Parametric t along segment
                 const dx = end[0] - start[0], dy = end[1] - start[1];
-                const px = pos[0] - start[0], py = pos[1] - start[1];
-                const lenSq = dx*dx + dy*dy;
-                closestT = lenSq > 0 ? Math.max(0, Math.min(1, (px*dx + py*dy) / lenSq)) : 0;
-                closestBridgePos = [start[0] + closestT * dx, start[1] + closestT * dy];
+                segmentAngle = Math.atan2(dy, dx);
+                closestPoint = [start[0] + ((pos[0] - start[0]) * dx + (pos[1] - start[1]) * dy) / (dx*dx + dy*dy) * dx,
+                                start[1] + ((pos[0] - start[0]) * dx + (pos[1] - start[1]) * dy) / (dx*dx + dy*dy) * dy];
             }
         }
     }
-    if (!closestBridgePos || closestDist >= 1.0) return null;
+    if (!closestPoint || closestDist > 1.0) return null;
 
-    // Sample DEM perpendicular to bridge at two points just outside its influence
-    // (0.5m inside, 2.0m outside) to get a reliable ground reference
-    const SAMPLE_INSIDE = 0.5;  // meters just inside bridge edge
-    const SAMPLE_OUTSIDE = 2.5; // meters just outside bridge edge
-    const TOLERANCE = 0.5;      // max allowed difference between samples (meters)
+    // Sample DEM at 20-50m perpendicular distances on both sides
+    // This captures the medium ground height away from structure interference
+    const SAMPLE_DISTS = [20, 30, 40, 50];  // meters
+    const TOLERANCE = 1.0;  // max allowed difference between samples (meters)
 
-    const perpAngle = Math.atan2(closestBridgePos[1] - pos[1], closestBridgePos[0] - pos[0]);
-    // Two perpendicular directions
-    const perpDir1 = perpAngle + Math.PI / 2;
-    const perpDir2 = perpAngle - Math.PI / 2;
+    const perpDir1 = segmentAngle + Math.PI / 2;
+    const perpDir2 = segmentAngle - Math.PI / 2;
 
     function sampleAt(offsetMeters, angle) {
         const mPerDegLat = 111320;
@@ -758,28 +754,34 @@ function getInterpolatedBridgeHeight(feature, bridge, lonLatPosition) {
         return sampleGroundElevation(lonLatPosition[0] + lonOffset, lonLatPosition[1] + latOffset);
     }
 
-    // Sample 0.5m inside bridge and 2.5m outside on both sides
-    const hInside1 = SAMPLE_INSIDE <= closestDist ? sampleAt(SAMPLE_INSIDE, perpDir1) : null;
-    const hInside2 = SAMPLE_INSIDE <= closestDist ? sampleAt(SAMPLE_INSIDE, perpDir2) : null;
-    const hOutside1 = sampleAt(SAMPLE_OUTSIDE, perpDir1);
-    const hOutside2 = sampleAt(SAMPLE_OUTSIDE, perpDir2);
+    // Sample at multiple distances on both sides
+    const samples = [];
+    for (const dist of SAMPLE_DISTS) {
+        const h1 = sampleAt(dist, perpDir1);
+        const h2 = sampleAt(dist, perpDir2);
+        if (h1 !== null) samples.push(h1);
+        if (h2 !== null) samples.push(h2);
+    }
 
-    const heights = [hInside1, hInside2, hOutside1, hOutside2].filter(h => h !== null && isFinite(h));
-    if (heights.length < 2) return null;
+    if (samples.length < 4) return null;
 
     // Check consistency: if any pair differs by more than TOLERANCE, fall back to raw DEM
-    for (let i = 0; i < heights.length; i++) {
-        for (let j = i + 1; j < heights.length; j++) {
-            if (Math.abs(heights[i] - heights[j]) > TOLERANCE) {
-                console.log(`⚠️ Bridge interp: inconsistent samples (${heights.map(h=>h.toFixed(2)).join(',')}) > ${TOLERANCE}m, using DEM`);
-                return null;
-            }
+    const avgHeight = samples.reduce((a, b) => a + b, 0) / samples.length;
+    let isConsistent = true;
+    for (let i = 0; i < samples.length; i++) {
+        if (Math.abs(samples[i] - avgHeight) > TOLERANCE) {
+            isConsistent = false;
+            break;
         }
     }
 
-    const result = heights.reduce((a, b) => a + b, 0) / heights.length;
-    console.log(`🔍 Bridge interp: ${heights.length} samples → ${result.toFixed(2)}m (closest=${closestDist.toFixed(2)}m)`);
-    return result;
+    if (!isConsistent) {
+        console.log(`⚠️ Crossing interp: inconsistent samples, using DEM`);
+        return null;
+    }
+
+    console.log(`🔍 Crossing interp: ${samples.length} samples at 20-50m → ${avgHeight.toFixed(2)}m (dist=${closestDist.toFixed(2)}m)`);
+    return avgHeight;
 }
 
 function getFeatureHeightOffset(feature) {
