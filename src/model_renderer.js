@@ -585,6 +585,117 @@ function getUnderBridgeSurface(feature, bridge, lonLatPosition) {
 }
 
 /**
+ * Calculate smooth under-bridge height avoiding DEM climb
+ * Uses ground elevation at segment ends and blends to a safe height in the middle
+ */
+function getUnderBridgeSmoothHeight(feature, bridge, lonLatPosition) {
+    const geometry = feature.getGeometry();
+    if (!geometry || !lonLatPosition) {
+        // Fallback to simple ground sampling
+        if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
+            try { window.mapterhornTerrain.warmUp(lonLatPosition[0], lonLatPosition[1]); } catch (e) {}
+        }
+        return sampleGroundElevation(lonLatPosition[0], lonLatPosition[1]);
+    }
+
+    // Get bridge reference height
+    const bridgeHeight = getBridgeReferenceHeight(bridge, lonLatPosition);
+
+    // Find intersection segment of feature with bridge
+    const featureLines = getGeometryLines(geometry);
+    const bridgeLines = getGeometryLines(bridge.getGeometry());
+
+    let intersectionPoints = [];
+
+    for (const fLine of featureLines) {
+        for (const bLine of bridgeLines) {
+            // Find intersection points between line segments
+            const segs = segmentsIntersect(fLine, bLine);
+            intersectionPoints = intersectionPoints.concat(segs);
+        }
+    }
+
+    if (intersectionPoints.length < 2) {
+        // Not enough points for smoothing, use ground
+        if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
+            try { window.mapterhornTerrain.warmUp(lonLatPosition[0], lonLatPosition[1]); } catch (e) {}
+        }
+        return sampleGroundElevation(lonLatPosition[0], lonLatPosition[1]);
+    }
+
+    // Get DEM at start and end of intersection segment
+    const startPoint = intersectionPoints[0];
+    const endPoint = intersectionPoints[intersectionPoints.length - 1];
+
+    if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
+        try { window.mapterhornTerrain.warmUp(startPoint[0], startPoint[1]); } catch (e) {}
+        try { window.mapterhornTerrain.warmUp(endPoint[0], endPoint[1]); } catch (e) {}
+    }
+
+    const startGround = sampleGroundElevation(startPoint[0], startPoint[1]);
+    const endGround = sampleGroundElevation(endPoint[0], endPoint[1]);
+    const avgGround = (startGround + endGround) / 2;
+
+    // Safe height: middle between ground and bridge (avoid DEM climbing)
+    const safeHeight = (avgGround + bridgeHeight) / 2;
+
+    // Calculate distance along intersection segment
+    const totalLength = distanceMeters(startPoint, endPoint);
+    if (totalLength < 1) return safeHeight;
+
+    const currentDist = distanceMeters(startPoint, lonLatPosition);
+    const t = Math.min(currentDist / totalLength, 1);
+
+    // Smooth blend: ground at ends, safe height in middle (ease-in-out)
+    const blended = easeInOutCubic(t) * (safeHeight - avgGround) + avgGround;
+
+    return blended;
+}
+
+/**
+ * Check if two line segments intersect
+ */
+function segmentsIntersect(seg1, seg2) {
+    const intersections = [];
+    for (let i = 0; i < seg1.length - 1; i++) {
+        for (let j = 0; j < seg2.length - 1; j++) {
+            const p1 = seg1[i], p2 = seg1[i + 1];
+            const p3 = seg2[j], p4 = seg2[j + 1];
+
+            const denom = (p1[0] - p2[0]) * (p3[1] - p4[1]) - (p1[1] - p2[1]) * (p3[0] - p4[0]);
+            if (Math.abs(denom) < 1e-10) continue;
+
+            const t = ((p1[0] - p3[0]) * (p3[1] - p4[1]) - (p1[1] - p3[1]) * (p3[0] - p4[0])) / denom;
+            const u = -((p1[0] - p2[0]) * (p1[1] - p3[1]) - (p1[0] - p3[0]) * (p1[1] - p2[1])) / denom;
+
+            if (t >= 0 && t <= 1 && u >= 0 && u <= 1) {
+                intersections.push([
+                    p1[0] + t * (p2[0] - p1[0]),
+                    p1[1] + t * (p2[1] - p1[1])
+                ]);
+            }
+        }
+    }
+    return intersections;
+}
+
+/**
+ * Distance between two [lon, lat] points in meters
+ */
+function distanceMeters(a, b) {
+    const cartA = Cesium.Cartesian3.fromDegrees(a[0], a[1]);
+    const cartB = Cesium.Cartesian3.fromDegrees(b[0], b[1]);
+    return Cesium.Cartesian3.distance(cartA, cartB);
+}
+
+/**
+ * Smooth ease-in-out curve
+ */
+function easeInOutCubic(t) {
+    return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
+/**
  * Find the nearest highway feature adjacent to the given feature
  * Used to match barrier height to the highway they run alongside
  */
@@ -1578,8 +1689,8 @@ window.modelRenderer = {
         if (isTunnel) {
             terrainElevation = getTunnelElevation();
         } else if (underBridge) {
-            // Feature is UNDER a bridge: use cached ground height (same as textures)
-            terrainElevation = underBridge.height;
+            // Feature is UNDER a bridge: use smooth blended height (not per-point DEM)
+            terrainElevation = getUnderBridgeSmoothHeight(feature, underBridge.bridge, lonLat);
         } else if (isBarrier && !isBridge) {
             // Barrier WITHOUT bridge tag: use ground level or adjacent highway height
             const adjHighway = findAdjacentHighway(feature, lonLat);
@@ -1968,7 +2079,8 @@ window.modelRenderer = {
         if (repIsTunnel) {
             repTerrainElevation = getTunnelElevation();
         } else if (underBridge) {
-            repTerrainElevation = underBridge.height;
+            // Feature is UNDER a bridge: use smooth blended height (not per-point DEM)
+            repTerrainElevation = getUnderBridgeSmoothHeight(feature, underBridge.bridge, repLonLat);
         } else if (repIsBarrier && !repIsBridge) {
             // Barrier WITHOUT bridge tag: use ground level or adjacent highway height
             const adjHighway = findAdjacentHighway(feature, repLonLat);
