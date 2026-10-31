@@ -1693,29 +1693,11 @@ window.modelRenderer = {
             terrainElevation = getUnderBridgeSmoothHeight(feature, underBridge.bridge, lonLat);
         } else if (isBarrier && !isBridge) {
             // Barrier WITHOUT bridge tag: use ground level (they're UNDER/adjacent to bridge)
-            if (underBridge) {
-                // Feature is UNDER a bridge: use ground level (not bridge height)
-                if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
-                    try { window.mapterhornTerrain.warmUp(lonLat[0], lonLat[1]); } catch (e) { /* no DEM yet */ }
-                }
-                terrainElevation = sampleGroundElevation(lonLat[0], lonLat[1]);
-            } else {
-                const adjHighway = findAdjacentHighway(feature, lonLat);
-                if (adjHighway && adjHighway !== feature) {
-                    const highwayAnchor = getFeatureAnchorLonLat(adjHighway) || lonLat;
-                    const highwayRefHeight = adjHighway.get('bridgeRefHeight');
-                    if (highwayRefHeight !== undefined && isFinite(highwayRefHeight)) {
-                        terrainElevation = highwayRefHeight;
-                    } else {
-                        terrainElevation = getBridgeReferenceHeight(adjHighway, highwayAnchor);
-                    }
-                } else {
-                    if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
-                        try { window.mapterhornTerrain.warmUp(lonLat[0], lonLat[1]); } catch (e) { /* no DEM yet */ }
-                    }
-                    terrainElevation = sampleGroundElevation(lonLat[0], lonLat[1]);
-                }
+            // Use SAME height as highway texture - simple ground DEM, no blending to bridge
+            if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
+                try { window.mapterhornTerrain.warmUp(lonLat[0], lonLat[1]); } catch (e) { /* no DEM yet */ }
             }
+            terrainElevation = sampleGroundElevation(lonLat[0], lonLat[1]);
         } else if (isBridge) {
             terrainElevation = getBridgeReferenceHeight(feature, lonLat);
         } else {
@@ -2088,29 +2070,11 @@ window.modelRenderer = {
             repTerrainElevation = getUnderBridgeSmoothHeight(feature, underBridge.bridge, repLonLat);
         } else if (repIsBarrier && !repIsBridge) {
             // Barrier WITHOUT bridge tag: use ground level (they're UNDER/adjacent to bridge)
-            if (underBridge) {
-                // Feature is UNDER a bridge: use ground level (not bridge height)
-                if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
-                    try { window.mapterhornTerrain.warmUp(repLonLat[0], repLonLat[1]); } catch (e) { /* no DEM yet */ }
-                }
-                repTerrainElevation = sampleGroundElevation(repLonLat[0], repLonLat[1]);
-            } else {
-                const adjHighway = findAdjacentHighway(feature, repLonLat);
-                if (adjHighway && adjHighway !== feature) {
-                    const highwayAnchor = getFeatureAnchorLonLat(adjHighway) || repLonLat;
-                    const highwayRefHeight = adjHighway.get('bridgeRefHeight');
-                    if (highwayRefHeight !== undefined && isFinite(highwayRefHeight)) {
-                        repTerrainElevation = highwayRefHeight;
-                    } else {
-                        repTerrainElevation = getBridgeReferenceHeight(adjHighway, highwayAnchor);
-                    }
-                } else {
-                    if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
-                        try { window.mapterhornTerrain.warmUp(repLonLat[0], repLonLat[1]); } catch (e) { /* no DEM yet */ }
-                    }
-                    repTerrainElevation = sampleGroundElevation(repLonLat[0], repLonLat[1]);
-                }
+            // Use SAME height as highway texture - simple ground DEM, no blending to bridge
+            if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
+                try { window.mapterhornTerrain.warmUp(repLonLat[0], repLonLat[1]); } catch (e) { /* no DEM yet */ }
             }
+            repTerrainElevation = sampleGroundElevation(repLonLat[0], repLonLat[1]);
         } else if (repIsBridge) {
             repTerrainElevation = getBridgeReferenceHeight(feature, repLonLat);
         } else {
