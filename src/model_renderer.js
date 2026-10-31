@@ -1541,21 +1541,21 @@ window.modelRenderer = {
         } else if (isBarrier && isBridge) {
             // Barrier with bridge=yes (inherited): find adjacent highway and use ITS height
             const adjHighway = findAdjacentHighway(feature, lonLat);
-            if (debugConfig.enabled) console.log(`🔍 Guardrail bridge: barrier=true, isBridge=true, adjHighway=${adjHighway ? 'found' : 'null'}`);
+            console.log(`🔍 Guardrail: barrier=${feature.get('barrier')}, bridge=${feature.get('bridge')}, adjHighway=${adjHighway ? adjHighway.getId() : 'null'}`);
             if (adjHighway && adjHighway !== feature) {
                 // Use highway's reference height - calculate at highway's anchor point
                 const highwayAnchor = getFeatureAnchorLonLat(adjHighway) || lonLat;
                 const highwayRefHeight = adjHighway.get('bridgeRefHeight');
-                if (debugConfig.enabled) console.log(`🔍 Highway anchor: ${highwayAnchor}, refHeight=${highwayRefHeight}`);
+                console.log(`🔍 Highway ${adjHighway.getId()}: highway=${adjHighway.get('highway')}, bridge=${adjHighway.get('bridge')}, anchor=[${highwayAnchor[0].toFixed(6)},${highwayAnchor[1].toFixed(6)}], refHeight=${highwayRefHeight}`);
                 if (highwayRefHeight !== undefined && isFinite(highwayRefHeight)) {
                     terrainElevation = highwayRefHeight;
                 } else {
                     terrainElevation = getBridgeReferenceHeight(adjHighway, highwayAnchor);
-                    if (debugConfig.enabled) console.log(`🔍 Calculated refHeight=${terrainElevation}`);
+                    console.log(`🔍 Guardrail using highway refHeight=${terrainElevation.toFixed(2)}m`);
                 }
             } else {
                 terrainElevation = sampleGroundElevation(lonLat[0], lonLat[1]);
-                if (debugConfig.enabled) console.log(`🔍 No highway found, using ground=${terrainElevation}`);
+                console.log(`🔍 Guardrail: no highway found, using ground=${terrainElevation.toFixed(2)}m`);
             }
         } else if (isBridge && !isBarrier) {
             // Feature is a BRIDGE (and not a barrier): use bridge reference height
