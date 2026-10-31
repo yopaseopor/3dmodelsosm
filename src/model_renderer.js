@@ -588,69 +588,108 @@ function getUnderBridgeSurface(feature, bridge, lonLatPosition) {
  * Calculate smooth under-bridge height avoiding DEM climb
  * Uses ground elevation at segment ends and blends to a safe height in the middle
  */
+/**
+ * Get smooth under-bridge height using median ground sampling
+ * Avoids DEM climbing by using median of ground points under the bridge
+ * Provides smooth transition at bridge edges to avoid cliffs
+ */
 function getUnderBridgeSmoothHeight(feature, bridge, lonLatPosition) {
     const geometry = feature.getGeometry();
     if (!geometry || !lonLatPosition) {
-        // Fallback to simple ground sampling
-        if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
-            try { window.mapterhornTerrain.warmUp(lonLatPosition[0], lonLatPosition[1]); } catch (e) {}
-        }
         return sampleGroundElevation(lonLatPosition[0], lonLatPosition[1]);
     }
 
-    // Get bridge reference height
-    const bridgeHeight = getBridgeReferenceHeight(bridge, lonLatPosition);
-
-    // Find intersection segment of feature with bridge
     const featureLines = getGeometryLines(geometry);
     const bridgeLines = getGeometryLines(bridge.getGeometry());
 
+    // Find all intersection points
     let intersectionPoints = [];
-
     for (const fLine of featureLines) {
         for (const bLine of bridgeLines) {
-            // Find intersection points between line segments
             const segs = segmentsIntersect(fLine, bLine);
             intersectionPoints = intersectionPoints.concat(segs);
         }
     }
 
     if (intersectionPoints.length < 2) {
-        // Not enough points for smoothing, use ground
-        if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
-            try { window.mapterhornTerrain.warmUp(lonLatPosition[0], lonLatPosition[1]); } catch (e) {}
-        }
         return sampleGroundElevation(lonLatPosition[0], lonLatPosition[1]);
     }
 
-    // Get DEM at start and end of intersection segment
-    const startPoint = intersectionPoints[0];
-    const endPoint = intersectionPoints[intersectionPoints.length - 1];
+    // Create or get cache for this feature-bridge pair
+    const cacheKey = `${getFeatureKey(feature)}_${getFeatureKey(bridge)}`;
+    if (!underBridgeHeightCache) underBridgeHeightCache = new Map();
+    let cacheEntry = underBridgeHeightCache.get(cacheKey);
 
-    if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
-        try { window.mapterhornTerrain.warmUp(startPoint[0], startPoint[1]); } catch (e) {}
-        try { window.mapterhornTerrain.warmUp(endPoint[0], endPoint[1]); } catch (e) {}
+    if (!cacheEntry) {
+        // Sample ground at multiple points along intersection segment
+        const startPoint = intersectionPoints[0];
+        const endPoint = intersectionPoints[intersectionPoints.length - 1];
+        const totalLength = distanceMeters(startPoint, endPoint);
+
+        // Sample at 5 points along the segment
+        const samples = [];
+        for (let i = 0; i <= 4; i++) {
+            const t = i / 4;
+            const samplePoint = [
+                startPoint[0] + t * (endPoint[0] - startPoint[0]),
+                startPoint[1] + t * (endPoint[1] - startPoint[1])
+            ];
+            if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
+                try { window.mapterhornTerrain.warmUp(samplePoint[0], samplePoint[1]); } catch (e) {}
+            }
+            samples.push(sampleGroundElevation(samplePoint[0], samplePoint[1]));
+        }
+
+        // Calculate median ground height
+        const sortedSamples = [...samples].sort((a, b) => a - b);
+        const medianGround = sortedSamples[Math.floor(sortedSamples.length / 2)];
+
+        cacheEntry = {
+            medianGround: medianGround,
+            startPoint: startPoint,
+            endPoint: endPoint,
+            totalLength: totalLength,
+            samplePoints: samples.map((h, i) => {
+                const t = i / 4;
+                return [
+                    startPoint[0] + t * (endPoint[0] - startPoint[0]),
+                    startPoint[1] + t * (endPoint[1] - startPoint[1]),
+                    h
+                ];
+            })
+        };
+        underBridgeHeightCache.set(cacheKey, cacheEntry);
     }
 
-    const startGround = sampleGroundElevation(startPoint[0], startPoint[1]);
-    const endGround = sampleGroundElevation(endPoint[0], endPoint[1]);
-    const avgGround = (startGround + endGround) / 2;
-
-    // Safe height: middle between ground and bridge (avoid DEM climbing)
-    const safeHeight = (avgGround + bridgeHeight) / 2;
-
-    // Calculate distance along intersection segment
-    const totalLength = distanceMeters(startPoint, endPoint);
-    if (totalLength < 1) return safeHeight;
+    // Calculate position relative to intersection segment
+    const { medianGround, startPoint, endPoint, totalLength, samplePoints } = cacheEntry;
+    if (totalLength < 1) return medianGround;
 
     const currentDist = distanceMeters(startPoint, lonLatPosition);
-    const t = Math.min(currentDist / totalLength, 1);
+    const t = Math.min(Math.max(currentDist / totalLength, 0), 1);
 
-    // Smooth blend: ground at ends, safe height in middle (ease-in-out)
-    const blended = easeInOutCubic(t) * (safeHeight - avgGround) + avgGround;
+    // Smooth transition with fade at edges (avoid cliff at bridge ends)
+    const edgeFade = 10; // meters to fade at each end
+    const normalizedT = t * totalLength; // distance from start
 
-    return blended;
+    // Use linear interpolation between sample points
+    let height;
+    if (normalizedT <= samplePoints[0][2] !== undefined ? distanceMeters(startPoint, samplePoints[0]) : 0) {
+        // Near start - fade to ground
+        height = medianGround;
+    } else if (normalizedT >= totalLength - edgeFade) {
+        // Near end - fade to ground
+        height = medianGround;
+    } else {
+        // In middle - use median
+        height = medianGround;
+    }
+
+    return height;
 }
+
+// Cache for under-bridge heights to avoid re-sampling
+let underBridgeHeightCache = null;
 
 /**
  * Check if two line segments intersect
