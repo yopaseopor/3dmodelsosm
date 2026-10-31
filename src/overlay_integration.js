@@ -29,6 +29,72 @@ function createOlLayer(overlay) {
     }
     
     let vectorSource;
+
+    /**
+     * Turn one parsed GeoJSON object into features on the map.
+     *
+     * This is the single path for overlay data, used by both the normal fetch
+     * and the precharge hand-off. It was inline in the fetch's .then() before,
+     * so there was nowhere for an already-parsed file to enter except by
+     * fetching and parsing it all over again.
+     */
+    function ingestGeoJSON(data, projection) {
+        setOverlaySpinner(false);
+        if (debugConfig.enabled && debugConfig.logOverlayLoading) console.log('Received GeoJSON data for ' + overlay.title, data);
+        if (debugConfig.enabled && debugConfig.logOverlayLoading) console.log('Number of features in GeoJSON:', data.features ? data.features.length : 'unknown');
+        const features = new ol.format.GeoJSON().readFeatures(data, {
+            featureProjection: projection
+        });
+
+        if (debugConfig.enabled && debugConfig.logFeatureProcessing) console.log('Parsed features count:', features.length);
+        if (debugConfig.enabled && debugConfig.logFeatureProcessing) console.log('First few features:', features.slice(0, 3).map(f => ({
+            type: f.getGeometry().getType(),
+            properties: f.getProperties()
+        })));
+
+        // Assign 3D models to features based on their properties
+        if (debugConfig.enabled && debugConfig.logModelAssignment) console.log('🎯 About to assign models to', features.length, 'features');
+
+        // Same reason as the GeoJSON loader's sweep: thousands of features in
+        // one blocking loop freeze the tab, so it is time-sliced here too.
+        //
+        // The fallback keeps the old synchronous behaviour, so a missing
+        // progressive.js degrades to "slow" rather than to "broken" - and it
+        // calls onDone itself, which is why the add lives in onDone and not
+        // straight after the call.
+        const assignAll = window.progressive && window.progressive.forEach
+            ? window.progressive.forEach
+            : function (items, worker, opts) {
+                for (let i = 0; i < items.length; i++) {
+                    try { worker(items[i], i); }
+                    catch (error) { if (opts && opts.onError) opts.onError(items[i], error, i); }
+                }
+                if (opts && opts.onDone) opts.onDone();
+            };
+
+        // Everything after the sweep: the features are only added to the source
+        // once EVERY one of them has its model, otherwise the renderer would
+        // wake up on a half-finished layer and never revisit it.
+        function publishFeatures() {
+            if (debugConfig.enabled && debugConfig.logOverlayLoading) console.log('Added ' + features.length + ' features for ' + overlay.title);
+            vectorSource.addFeatures(features);
+            // Dispatch event to trigger global summary update
+            window.dispatchEvent(new CustomEvent('overlayFeaturesLoaded'));
+        }
+
+        assignAll(features, (feature, index) => {
+            if (index < 5 && debugConfig.enabled && debugConfig.logFeatureProcessing) { // Log first 5
+                console.log('🎯 Processing feature', index, 'properties:', feature.getProperties());
+            }
+            assignModelToFeature(feature, features);
+        }, {
+            label: 'overlay features',
+            onError: (feature, error, index) => {
+                console.error('Overlay "' + overlay.title + '" feature ' + index + ' failed, skipping this feature only:', error);
+            },
+            onDone: publishFeatures
+        });
+    }
     
     if (overlay.geojson) {
         // Handle GeoJSON overlays
@@ -40,6 +106,19 @@ function createOlLayer(overlay) {
                     // Show spinner before fetch
                     setOverlaySpinner(true);
                     const url = overlay.geojson;
+
+                    // Precharge may already have fetched AND parsed this file
+                    // in the background. Take it instead of asking for it again:
+                    // no request, no JSON.parse, straight to the map. Without
+                    // this the background work was thrown away and opening the
+                    // overlay still cost the full download plus parse.
+                    const precharged = window.precharge ? window.precharge.take(url) : null;
+                    if (precharged) {
+                        console.log('⚡ Using precharged data for ' + overlay.title);
+                        ingestGeoJSON(precharged, projection);
+                        return;
+                    }
+
                     fetch(url)
                         .then(response => {
                             if (!response.ok) {
@@ -48,32 +127,7 @@ function createOlLayer(overlay) {
                             return response.json();
                         })
                         .then(data => {
-                            setOverlaySpinner(false);
-                            if (debugConfig.enabled && debugConfig.logOverlayLoading) console.log('Received GeoJSON data for ' + overlay.title, data);
-                            if (debugConfig.enabled && debugConfig.logOverlayLoading) console.log('Number of features in GeoJSON:', data.features ? data.features.length : 'unknown');
-                            const features = new ol.format.GeoJSON().readFeatures(data, {
-                                featureProjection: projection
-                            });
-                            
-                            if (debugConfig.enabled && debugConfig.logFeatureProcessing) console.log('Parsed features count:', features.length);
-                            if (debugConfig.enabled && debugConfig.logFeatureProcessing) console.log('First few features:', features.slice(0, 3).map(f => ({ 
-                                type: f.getGeometry().getType(),
-                                properties: f.getProperties() 
-                            })));
-                            
-                            // Assign 3D models to features based on their properties
-                            if (debugConfig.enabled && debugConfig.logModelAssignment) console.log('🎯 About to assign models to', features.length, 'features');
-                            features.forEach((feature, index) => {
-                                if (index < 5 && debugConfig.enabled && debugConfig.logFeatureProcessing) { // Log first 5
-                                    console.log('🎯 Processing feature', index, 'properties:', feature.getProperties());
-                                }
-                                assignModelToFeature(feature, features);
-                            });
-                            
-                            if (debugConfig.enabled && debugConfig.logOverlayLoading) console.log('Added ' + features.length + ' features for ' + overlay.title);
-                            vectorSource.addFeatures(features);
-                            // Dispatch event to trigger global summary update
-                            window.dispatchEvent(new CustomEvent('overlayFeaturesLoaded'));
+                            ingestGeoJSON(data, projection);
                         })
                         .catch(error => {
                             setOverlaySpinner(false);
@@ -115,7 +169,7 @@ function createOlLayer(overlay) {
                         
                         // Assign 3D models to features based on their properties
                         features.forEach(feature => {
-                            assignModelToFeature(feature);
+                            assignModelToFeature(feature, features);
                         });
                         
                         if (debugConfig.enabled && debugConfig.logOverlayLoading) console.log('Added ' + features.length + ' features for ' + overlay.title);
@@ -205,11 +259,18 @@ function assignModelToFeature(feature, allFeatures = null) {
         tagsObj[tag] = properties[tag];
     });
     if (debugConfig.enabled && debugConfig.logModelAssignment) console.log('assignModelToFeature tagsObj:', tagsObj);
-    if (debugConfig.enabled && debugConfig.logGeometryDetection) console.log('geometryType initial:', geometryType);
+
+    // Feature geometry (OL geometry in the map projection). This declaration was
+    // lost in a refactor (commit 4a6a397): the code below read an undeclared
+    // `geometry`, throwing "ReferenceError: geometry is not defined" for every
+    // feature and killing model/texture assignment for all GeoJSON overlays —
+    // the load's .catch() also swallowed the features themselves.
+    const geometry = feature.getGeometry();
 
     let geometryType = 'point'; // default
     let wayCoordinates = null;
     let nodeIndex = null;
+    let orientationContext = null;
     
     if (debugConfig.enabled && debugConfig.logGeometryDetection) console.log(`🎯 Geometry detection for feature with tags:`, tagsObj, `geometry:`, geometry ? geometry.getType() : 'null');
     
@@ -254,19 +315,13 @@ function assignModelToFeature(feature, allFeatures = null) {
             ));
         } else if (geomType === 'Point') {
             geometryType = 'point';
-            // For point features, always try to find bearing from parent ways first
+            // The rules in model_orientation.js decide what this point turns to
+            // face; here we only say where it is and what ways are around it.
             if (allFeatures) {
-                const parentBearing = findBearingFromParentWays(feature, allFeatures);
-                if (parentBearing !== null) {
-                    // Don't set coordinates when we have parent bearing
-                    wayCoordinates = null;
-                    nodeIndex = null;
-                    
-                    // Override the bearing in the model configuration by setting a synthetic bearing
-                    tagsObj._parentWayBearing = parentBearing;
-                    
-                    if (debugConfig.enabled && debugConfig.logGeometryDetection) console.log(`🎯 Using parent way bearing ${(parentBearing * 180 / Math.PI).toFixed(2)}° for point feature`);
-                }
+                orientationContext = {
+                    pointLonLat: ol.proj.transform(geometry.getCoordinates(), window.map.getView().getProjection(), 'EPSG:4326'),
+                    allFeatures: allFeatures
+                };
             }
         }
     }
@@ -282,7 +337,7 @@ function assignModelToFeature(feature, allFeatures = null) {
     }
 
     if (debugConfig.enabled && debugConfig.logGeometryDetection) console.log(`🔍 Final geometry type determination: ${geometryType} for tags:`, tagsObj);
-    const modelMapping = window.models ? window.models.getModelForTags(tagsObj, wayCoordinates, nodeIndex, geometryType) : null;
+    const modelMapping = window.models ? window.models.getModelForTags(tagsObj, wayCoordinates, nodeIndex, geometryType, orientationContext) : null;
     if (debugConfig.enabled && debugConfig.logModelAssignment) console.log(`🎯 Model mapping for tags:`, tagsObj, `geometry type: ${geometryType}:`, modelMapping);
     
     if (modelMapping) {
@@ -291,6 +346,23 @@ function assignModelToFeature(feature, allFeatures = null) {
         const mappingGeometryType = modelMapping.geometryType;
         
         if (mappingGeometryType === 'area') {
+            if (window.areaRepetition) {
+                try {
+                    window.areaRepetition.applyAreaRepetitions(feature, modelFilename, modelConfig, tagsObj);
+                } catch (error) {
+                    console.error('🎨 Error applying area repetitions:', error);
+                }
+            }
+            if (feature.get('repetition_0_type') === 'polygon_texture') {
+                feature.set(window.OSM3D_MODEL_PROPERTY || 'osm3dModel', {
+                    uri: `/3dmodelsosm/src/models/${modelFilename}`,
+                    scale: modelConfig ? modelConfig.scale : 1.0,
+                    heightReference: Cesium.HeightReference.CLAMP_TO_GROUND
+                });
+                feature.set('modelHeightOffset', modelConfig ? modelConfig.heightOffset : 0);
+                if (modelConfig) feature.set('modelRotation', modelConfig.rotation);
+                return;
+            }
             if (debugConfig.enabled && debugConfig.logAreaProcessing) console.log('🎨 Area code reached for tags:', tagsObj, 'geometryType:', mappingGeometryType);
             // Handle area textures/materials
             if (debugConfig.enabled && debugConfig.logAreaProcessing) console.log(`🎨 Applying area texture ${modelFilename} to polygon or line`);
@@ -300,7 +372,14 @@ function assignModelToFeature(feature, allFeatures = null) {
                 const geometry = feature.getGeometry();
                 if (geometry && geometry.getType() === 'Polygon') {
                     const coordinates = geometry.getCoordinates()[0];
-                    const cesiumPositions = coordinates.map(coord => Cesium.Cartesian3.fromDegrees(coord[0], coord[1]));
+                    // OL geometries are in the map projection (EPSG:3857 meters):
+                    // transform to WGS84 degrees before fromDegrees, otherwise the
+                    // draped texture lands near (0,0) in the Atlantic.
+                    const mapProjection = window.map.getView().getProjection();
+                    const cesiumPositions = coordinates.map(coord => {
+                        const lonLat = ol.proj.transform(coord, mapProjection, 'EPSG:4326');
+                        return Cesium.Cartesian3.fromDegrees(lonLat[0], lonLat[1]);
+                    });
                     
                     if (cesiumPositions.length > 0) {
                         // Check if feature already has an area entity to prevent duplicates
@@ -316,6 +395,24 @@ function assignModelToFeature(feature, allFeatures = null) {
                         const textureRotation = window.modelRenderer ? 
                             window.modelRenderer.calculateTextureRotation(polygonCoords, modelFilename, tagsObj) : 
                             0; // No rotation if modelRenderer not available
+                        const textureBounds = polygonCoords.reduce((bounds, coord) => ({
+                            minLon: Math.min(bounds.minLon, coord[0]),
+                            maxLon: Math.max(bounds.maxLon, coord[0]),
+                            minLat: Math.min(bounds.minLat, coord[1]),
+                            maxLat: Math.max(bounds.maxLat, coord[1])
+                        }), {
+                            minLon: Infinity, maxLon: -Infinity,
+                            minLat: Infinity, maxLat: -Infinity
+                        });
+                        const tileSizeMeters = modelConfig && Number.isFinite(modelConfig.scale) &&
+                            modelConfig.scale > 0 ? modelConfig.scale : 1;
+                        const centerLat = (textureBounds.minLat + textureBounds.maxLat) / 2;
+                        const repeat = new Cesium.Cartesian2(
+                            (textureBounds.maxLon - textureBounds.minLon) *
+                                111320 * Math.cos(centerLat * Math.PI / 180) / tileSizeMeters,
+                            (textureBounds.maxLat - textureBounds.minLat) *
+                                111320 / tileSizeMeters
+                        );
                         
                         if (debugConfig.enabled && debugConfig.logAreaProcessing) {
                             console.log(`🎨 overlay texture °: ${(textureRotation * 180 / Math.PI).toFixed(1)}`);
@@ -328,10 +425,10 @@ function assignModelToFeature(feature, allFeatures = null) {
                         const areaEntity = new Cesium.Entity({
                             polygon: {
                                 hierarchy: hierarchy,
+                                stRotation: textureRotation,
                                 material: new Cesium.ImageMaterialProperty({
                                     image: `/3dmodelsosm/src/models/${modelFilename}`,
-                                    repeat: new Cesium.Cartesian2(1, 1),
-                                    stRotation: textureRotation !== 0 ? textureRotation : undefined
+                                    repeat
                                 }),
                                 heightReference: Cesium.HeightReference.CLAMP_TO_GROUND // drape over DEM terrain (was flat at 0.001m)
                             }
@@ -367,7 +464,12 @@ function assignModelToFeature(feature, allFeatures = null) {
                     }
                 } else if (geometry && geometry.getType() === 'LineString') {
                     const coordinates = geometry.getCoordinates();
-                    const positions = coordinates.map(coord => Cesium.Cartesian3.fromDegrees(coord[0], coord[1]));
+                    // Same projection fix as polygons above (map projection -> WGS84).
+                    const mapProjection = window.map.getView().getProjection();
+                    const positions = coordinates.map(coord => {
+                        const lonLat = ol.proj.transform(coord, mapProjection, 'EPSG:4326');
+                        return Cesium.Cartesian3.fromDegrees(lonLat[0], lonLat[1]);
+                    });
                     
                     if (positions.length > 1) {
                         // Calculate texture rotation based on nearby ways for line textures
@@ -391,8 +493,7 @@ function assignModelToFeature(feature, allFeatures = null) {
                                                      // mountains and z-fights at sea level
                                 material: new Cesium.ImageMaterialProperty({
                                     image: `/3dmodelsosm/src/models/${modelFilename}`,
-                                    repeat: new Cesium.Cartesian2(coordinates.length * 0.1, 1),
-                                    stRotation: textureRotation !== 0 ? textureRotation : undefined
+                                    repeat: new Cesium.Cartesian2(coordinates.length * 0.1, 1)
                                 })
                             }
                         });
@@ -444,38 +545,30 @@ function assignModelToFeature(feature, allFeatures = null) {
             
             // Start with option 1: place models at intervals along the way
             if (wayCoordinates && wayCoordinates.length > 1) {
-                const wayModels = [];
-                
-                for (let i = 0; i < wayCoordinates.length - 1; i += 0.05) {
-                    const floorI = Math.floor(i);
-                    const frac = i - floorI;
-                    const curr = wayCoordinates[floorI];
-                    const next = wayCoordinates[floorI + 1];
-                    
-                    // Interpolate position
-                    const lon = curr[0] + (next[0] - curr[0]) * frac;
-                    const lat = curr[1] + (next[1] - curr[1]) * frac;
-                    
-                    const bearing = window.models.calculateBearing(wayCoordinates, floorI);
-                    const adjustedConfig = window.models.adjustConfigForDirection ? 
-                        window.models.adjustConfigForDirection(modelConfig, tagsObj, bearing) : modelConfig;
-                    
-                    const wayModelOptions = {
-                        uri: `/3dmodelsosm/src/models/${modelFilename}`,
-                        scale: adjustedConfig ? adjustedConfig.scale : 1.0,
-                        heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
-                        position: Cesium.Cartesian3.fromDegrees(lon, lat)
-                    };
-                    
-                    wayModels.push({
-                        position: [lon, lat],
-                        model: wayModelOptions,
-                        config: adjustedConfig
-                    });
+                // Models along a way must be written as repetition_0, repetition_1,
+                // ... because that is the ONLY thing model_renderer reads when it
+                // places a feature (see addRepetitionModels).
+                //
+                // This block used to build the whole run of way models right here,
+                // at a step of 0.05 along the way index (20 models PER SEGMENT),
+                // and park the result on `feature.wayModels`. Nothing ever read
+                // that property: it is written in this file and in value_search.js
+                // and read nowhere in the codebase. So every line model produced
+                // here went into a dead end, which is why a railway way in an
+                // overlay GeoJSON resolved to w_railway_rail.glb and then drew
+                // nothing at all.
+                //
+                // The 170k intermediate objects it built per overlay are gone too:
+                // paris.geojson has ~8500 way segments, so one overlay produced
+                // 170,280 of them on every load.
+                //
+                // applyLineRepetitions (model_repetition.js) delegates all mapped
+                // line types to the same configurable line_repetition.js module.
+                if (window.modelRepetition && window.modelRepetition.applyLineRepetitions) {
+                    window.modelRepetition.applyLineRepetitions(feature, tagsObj, modelFilename, modelConfig, mappingGeometryType);
+                } else if (window.modelRepetition && window.modelRepetition.applyModelRepetitions) {
+                    window.modelRepetition.applyModelRepetitions(feature, modelFilename, modelConfig, mappingGeometryType);
                 }
-                
-                feature.wayModels = wayModels;
-                console.log(`🛤️ SUCCESS: Placed ${wayModels.length} models along way with tags:`, tagsObj);
             } else if (!wayCoordinates && geometry && geometry.getType() === 'Point') {
                 // Handle point features treated as lines: place a single model at the point
                 const pointCoords = geometry.getCoordinates();
@@ -488,7 +581,7 @@ function assignModelToFeature(feature, allFeatures = null) {
                     position: Cesium.Cartesian3.fromDegrees(lonLat[0], lonLat[1])
                 };
                 
-                feature.model = pointModelOptions;
+                feature.set(window.OSM3D_MODEL_PROPERTY || 'osm3dModel', pointModelOptions);
                 
                 // Set additional model configuration for positioning
                 if (modelConfig) {
@@ -521,7 +614,7 @@ function assignModelToFeature(feature, allFeatures = null) {
                 heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
             };
 
-            feature.model = modelOptions;
+            feature.set(window.OSM3D_MODEL_PROPERTY || 'osm3dModel', modelOptions);
 
             // Set additional model configuration for positioning
             if (modelConfig) {
@@ -547,62 +640,12 @@ function assignModelToFeature(feature, allFeatures = null) {
     }
 }
 
-// Function to find bearing from parent ways for a point feature
-function findBearingFromParentWays(feature, allFeatures) {
-    const properties = feature.getProperties();
-    const geometry = feature.getGeometry();
-    
-    // Only process point features
-    if (!geometry || geometry.getType() !== 'Point') return null;
-    
-    const pointCoords = geometry.getCoordinates();
-    const pointLonLat = ol.proj.transform(pointCoords, window.map.getView().getProjection(), 'EPSG:4326');
-    
-    console.log(`🔍 Looking for parent ways for point at [${pointLonLat[0].toFixed(6)}, ${pointLonLat[1].toFixed(6)}]`);
-    
-    let closestWay = null;
-    let closestDistance = Infinity;
-    let closestIndex = 0;
-    
-    // Find the closest way that contains this point
-    for (const otherFeature of allFeatures) {
-        const otherGeometry = otherFeature.getGeometry();
-        if (otherGeometry && otherGeometry.getType() === 'LineString') {
-            const wayCoords = otherGeometry.getCoordinates();
-            
-            // Find the closest point on this way to our point
-            wayCoords.forEach((coord, index) => {
-                const wayLonLat = ol.proj.transform(coord, window.map.getView().getProjection(), 'EPSG:4326');
-                const distance = Math.sqrt(
-                    Math.pow(wayLonLat[0] - pointLonLat[0], 2) + 
-                    Math.pow(wayLonLat[1] - pointLonLat[1], 2)
-                );
-                
-                if (distance < closestDistance) {
-                    closestDistance = distance;
-                    closestWay = wayCoords;
-                    closestIndex = index;
-                }
-            });
-        }
-    }
-    
-    // If we found a close enough way (within ~10 meters), calculate bearing
-    if (closestWay && closestDistance < 0.0001) {
-        const wayLonLatCoords = closestWay.map(coord => 
-            ol.proj.transform(coord, window.map.getView().getProjection(), 'EPSG:4326')
-        );
-        
-        const bearing = window.models.calculateBearing(wayLonLatCoords, closestIndex);
-        console.log(`🎯 Found parent way for point, bearing: ${(bearing * 180 / Math.PI).toFixed(2)}° at distance: ${(closestDistance * 111000).toFixed(1)}m`);
-        return bearing;
-    }
-    
-    return null;
-}
-
-// Make findBearingFromParentWays globally accessible
-window.findBearingFromParentWays = findBearingFromParentWays;
+// findBearingFromParentWays() used to live here. It picked the globally
+// NEAREST way VERTEX with no tag filter and compared distances in raw
+// degrees (0.0001, which is ~11 m north but only ~8 m east). It is gone:
+// a point's orientation is now resolved from the declarative rules in
+// model_orientation.js, which pick the KIND of way to use, not merely the
+// nearest one. Nothing calls this any more; do not reintroduce it.
 
 // Function to integrate overlays
 function integrateOverlays() {
@@ -617,6 +660,14 @@ function integrateOverlays() {
     const allOverlaysFlat = Object.values(window.allOverlays)
         .filter(Array.isArray)
         .flat();
+
+    // Start downloading and parsing the overlay files NOW, in the background,
+    // so that opening one later is instant instead of a long download plus a
+    // long JSON.parse while the tab is frozen. precharge probes each file with
+    // a HEAD request first and only really fetches the big ones.
+    if (window.precharge && window.precharge.warmAll) {
+        window.precharge.warmAll(allOverlaysFlat);
+    }
         
     // Group overlays by their group property
     const groupMap = {};

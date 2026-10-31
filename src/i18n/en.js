@@ -373,5 +373,6 @@ export const en = {
     interactiveMapOpenNewWindow: 'Interactive map will open in new window',
     openMapillary: 'Open Mapillary',
     // Server selection translations
-    overpassServer: 'Overpass Server'
+    overpassServer: 'Overpass Server',
+    overpassTimeout: 'Overpass Timeout'
 };

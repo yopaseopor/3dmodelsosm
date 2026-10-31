@@ -252,6 +252,7 @@ function processQueryResults(allFeatures, key, value) {
         let geometryType = 'point'; // default
         let wayCoordinates = null;
         let nodeIndex = null;
+        let orientationContext = null;
 
         if (debugConfig.enabled && debugConfig.logGeometryDetection) console.log(`🎯 Geometry detection for feature ${index + 1}:`, geometry, `type:`, geometry ? (geometry.getType ? geometry.getType() : typeof geometry) : 'null');
 
@@ -316,12 +317,26 @@ function processQueryResults(allFeatures, key, value) {
                 }
             } else if (geomType === 'Point') {
                 geometryType = 'point';
+                orientationContext = {
+                    pointLonLat: ol.proj.transform(
+                        geometry.getCoordinates(),
+                        window.map.getView().getProjection(),
+                        'EPSG:4326'
+                    ),
+                    allFeatures: featuresWithTags
+                };
             }
         }
 
         if (debugConfig.enabled && debugConfig.logGeometryDetection) console.log(`🔍 Final geometry type determination for feature ${index + 1}: ${geometryType}`);
 
-        const mapping = window.models ? window.models.getModelForTags(tagsObj, wayCoordinates, nodeIndex, geometryType) : null;
+        const mapping = window.models ? window.models.getModelForTags(
+            tagsObj,
+            wayCoordinates,
+            nodeIndex,
+            geometryType,
+            orientationContext
+        ) : null;
         if (debugConfig.enabled && debugConfig.logModelAssignment) console.log('mapping:', mapping);
         if (mapping) {
             const modelFilename = mapping.model;
@@ -329,52 +344,12 @@ function processQueryResults(allFeatures, key, value) {
             const mappingGeometryType = mapping.geometryType;
             if (debugConfig.enabled && debugConfig.logModelAssignment) console.log('mappingGeometryType:', mappingGeometryType);
 
-            // Apply footway repetitions if this is a footway feature
-            if (window.footwayRepetition && typeof window.footwayRepetition.applyFootwayRepetitions === 'function') {
+            if (mappingGeometryType === 'line' && window.lineRepetition) {
                 const tags = feature.getProperties();
-                const highway = tags.highway;
-                
-                if (highway === 'footway' || highway === 'path' || highway === 'pedestrian') {
-                    if (debugConfig.enabled && debugConfig.logModelAssignment) console.log('🚶 Applying repetitions to footway feature from query:', tags);
-                    try {
-                        window.footwayRepetition.applyFootwayRepetitions(feature, modelFilename, modelConfig);
-                    } catch (error) {
-                        console.error('🚶 Error applying repetitions to footway query result:', error);
-                    }
-                }
-            }
-
-            // Apply highway repetitions if this is a highway feature
-            if (window.highwayRepetition && typeof window.highwayRepetition.applyHighwayRepetitions === 'function') {
-                const tags = feature.getProperties();
-                const highway = tags.highway;
-                
-                if (highway && highway !== 'footway' && highway !== 'path' && highway !== 'pedestrian') {
-                    if (debugConfig.enabled && debugConfig.logModelAssignment) console.log(`🛣️ Applying repetitions to highway ${highway} feature from query:`, tags);
-                    try {
-                        window.highwayRepetition.applyHighwayRepetitions(feature, modelFilename, modelConfig, highway);
-                    } catch (error) {
-                        console.error(`🛣️ Error applying repetitions to highway ${highway} query result:`, error);
-                    }
-                }
-            }
-
-            // Apply fence repetitions if this is a fence feature
-            if (window.fenceRepetition && typeof window.fenceRepetition.applyFenceRepetitions === 'function') {
-                const tags = feature.getProperties();
-                const barrier = tags.barrier;
-                const fenceType = tags.fence_type;
-                
-                console.log(`🚜 SEARCH DEBUG: Checking fence feature - barrier: ${barrier}, fence_type: ${fenceType}`);
-                
-                if (barrier === 'fence' || fenceType) {
-                    const fenceTypeToUse = fenceType || 'default';
-                    console.log(`🚜 SEARCH DEBUG: Applying repetitions to fence ${fenceTypeToUse} feature from query:`, tags);
-                    try {
-                        window.fenceRepetition.applyFenceRepetitions(feature, modelFilename, modelConfig, fenceTypeToUse);
-                    } catch (error) {
-                        console.error(`🚜 Error applying repetitions to fence ${fenceTypeToUse} query result:`, error);
-                    }
+                try {
+                    window.lineRepetition.applyLineRepetitions(feature, modelFilename, modelConfig, tags);
+                } catch (error) {
+                    console.error('Error applying line repetitions to query result:', error);
                 }
             }
 
@@ -447,15 +422,33 @@ function processQueryResults(allFeatures, key, value) {
                         const textureRotation = window.modelRenderer ? 
                             window.modelRenderer.calculateTextureRotation(polygonCoords, modelFilename, featureTags) : 
                             0; // No rotation if modelRenderer not available
+                        const textureBounds = polygonCoords.reduce((bounds, coord) => ({
+                            minLon: Math.min(bounds.minLon, coord[0]),
+                            maxLon: Math.max(bounds.maxLon, coord[0]),
+                            minLat: Math.min(bounds.minLat, coord[1]),
+                            maxLat: Math.max(bounds.maxLat, coord[1])
+                        }), {
+                            minLon: Infinity, maxLon: -Infinity,
+                            minLat: Infinity, maxLat: -Infinity
+                        });
+                        const tileSizeMeters = mapping.config && Number.isFinite(mapping.config.scale) &&
+                            mapping.config.scale > 0 ? mapping.config.scale : 1;
+                        const centerLat = (textureBounds.minLat + textureBounds.maxLat) / 2;
+                        const textureRepeat = new Cesium.Cartesian2(
+                            (textureBounds.maxLon - textureBounds.minLon) *
+                                111320 * Math.cos(centerLat * Math.PI / 180) / tileSizeMeters,
+                            (textureBounds.maxLat - textureBounds.minLat) *
+                                111320 / tileSizeMeters
+                        );
 
                         if (debugConfig.enabled && debugConfig.logAreaProcessing) console.log(`🎨 Calculated texture rotation for value search: ${(textureRotation * 180 / Math.PI).toFixed(1)}°`);
 
                         // Create textured material
                         const material = new Cesium.ImageMaterialProperty({
                             image: `/3dmodelsosm/src/models/${modelFilename}`,
+                            repeat: textureRepeat,
                             transparent: true,
-                            color: new Cesium.Color(1.0, 1.0, 1.0, 0.8), // Slight transparency
-                            stRotation: textureRotation !== 0 ? textureRotation : undefined
+                            color: new Cesium.Color(1.0, 1.0, 1.0, 0.8) // Slight transparency
                         });
                         
                         if (debugConfig.enabled && debugConfig.logAreaProcessing) console.log(`🎨 Created material with texture: ${modelFilename}, stRotation: ${(textureRotation * 180 / Math.PI).toFixed(1)}°`);
@@ -464,6 +457,7 @@ function processQueryResults(allFeatures, key, value) {
                         const areaEntity = new Cesium.Entity({
                             polygon: {
                                 hierarchy: hierarchy,
+                                stRotation: textureRotation,
                                 heightReference: Cesium.HeightReference.CLAMP_TO_GROUND, // drape over DEM terrain
                                 material: material,
                                 outline: true, // Enable outline for debugging
@@ -545,7 +539,7 @@ function processQueryResults(allFeatures, key, value) {
                     }
                 } else {
                     // Point model
-                    feature.set('model', modelOptions);
+                    feature.set(window.OSM3D_MODEL_PROPERTY || 'osm3dModel', modelOptions);
                 }
 
                 // Set additional model configuration for positioning
@@ -601,7 +595,7 @@ function processQueryResults(allFeatures, key, value) {
                     }
                 } else {
                     // Point model
-                    feature.set('model', modelOptions);
+                    feature.set(window.OSM3D_MODEL_PROPERTY || 'osm3dModel', modelOptions);
                 }
 
                 // Set additional model configuration for positioning
@@ -1826,6 +1820,15 @@ function initValueSearch() {
                     <option value="5">https://overpass.osm.ch/api/interpreter</option>
                     <option value="6">https://z.overpass-api.de/api/interpreter</option>
                 </select>
+                <label for="overpass-timeout-select" style="margin-left: 15px;">${window.getTranslation ? window.getTranslation('overpassTimeout') : 'Overpass Timeout'}:</label>
+                <select id="overpass-timeout-select" style="margin-left: 5px; padding: 2px;">
+                    <option value="60">60 s</option>
+                    <option value="90">90 s</option>
+                    <option value="120">120 s</option>
+                    <option value="150">150 s</option>
+                    <option value="180">180 s</option>
+                    <option value="240">240 s</option>
+                </select>
             </div>
         `;
 
@@ -1842,18 +1845,46 @@ function initValueSearch() {
         }
     } else {
         console.log('🔍 DEBUG: Server selector already exists, skipping creation');
-    }
+    }        // Set current server from localStorage (always update in case it changed)
+        const currentServerIndex = parseInt(localStorage.getItem('overpassServerIndex') || '0');
+        $('#overpass-server-select').val(currentServerIndex.toString());
 
-    // Set current server from localStorage (always update in case it changed)
-    const currentServerIndex = parseInt(localStorage.getItem('overpassServerIndex') || '0');
-    $('#overpass-server-select').val(currentServerIndex.toString());
+        // Set current Overpass timeout from localStorage (or config default)
+        const savedTimeout = parseInt(localStorage.getItem('overpassTimeoutSeconds') || '0', 10);
+        const defaultTimeout = (window.config && typeof window.config.overpassTimeoutSeconds === 'number')
+            ? window.config.overpassTimeoutSeconds : 25;
+        const effectiveTimeout = (savedTimeout > 0) ? savedTimeout : defaultTimeout;
+        $('#overpass-timeout-select').val(effectiveTimeout.toString());
 
-    // Handle server selection change (only if selector exists)
-    $('#overpass-server-select').off('change').on('change', function() {
-        const selectedIndex = parseInt($(this).val());
-        localStorage.setItem('overpassServerIndex', selectedIndex.toString());
-        console.log('Overpass server changed to:', config.overpassApi());
-    });
+        // Handle server selection change (only if selector exists)
+        $('#overpass-server-select').off('change').on('change', function() {
+            const selectedIndex = parseInt($(this).val());
+            localStorage.setItem('overpassServerIndex', selectedIndex.toString());
+            console.log('Overpass server changed to:', config.overpassApi());
+        });
+
+        // Handle Overpass timeout selection change
+        $('#overpass-timeout-select').off('change').on('change', function() {
+            const timeoutSeconds = parseInt($(this).val(), 10);
+            if (!isNaN(timeoutSeconds) && timeoutSeconds > 0) {
+                localStorage.setItem('overpassTimeoutSeconds', timeoutSeconds.toString());
+                console.log('Overpass timeout changed to:', timeoutSeconds, 's');
+                // Inform the app if it exposes a setter; the actual query path in
+                // index.js reads config.overpassTimeoutSeconds on each request.
+                if (typeof window.setOverpassTimeout === 'function') {
+                    try { window.setOverpassTimeout(timeoutSeconds); } catch (e) { /* ignore */ }
+                }
+            }
+        });
+
+        // Sync the app-side config default with the selector default when it changes
+        try {
+            if (window.config && typeof window.config.overpassTimeoutSeconds !== 'undefined') {
+                if (typeof window.setOverpassTimeout === 'function') {
+                    window.setOverpassTimeout(window.config.overpassTimeoutSeconds);
+                }
+            }
+        } catch (e) { /* ignore */ }
 
     const searchInput = $('#value-search');
     const resultsContainer = $('#value-search-dropdown');

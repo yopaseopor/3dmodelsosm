@@ -910,8 +910,11 @@ function generateOverpassQuery(key, value = null, bbox, elementTypes = ['node', 
             queryParts.push(`  node(w)`); // Get nodes of those ways - these will be marked as polygon nodes
         }
 
-        const query = `[out:xml][timeout:35];\n(\n${queryParts.join(';\n')};\n);\nout meta;`;
-        console.log('🔧 Generated multi-element query:', query);
+        // Get timeout from localStorage (set by timeout selector) or fall back to default 35
+        const timeoutKeyValue = parseInt(localStorage.getItem('overpassTimeoutSeconds') || '0', 10);
+        const effectiveTimeoutKeyValue = (timeoutKeyValue > 0) ? timeoutKeyValue : 35;
+        const query = `[out:xml][timeout:${effectiveTimeoutKeyValue}];\n(\n${queryParts.join(';\n')};\n);\nout meta;`;
+        console.log('🔧 Generated multi-element query with timeout:', effectiveTimeoutKeyValue);
         return query;
     } else {
         // Generic key query (all values for this key) - include all selected element types
@@ -935,8 +938,11 @@ function generateOverpassQuery(key, value = null, bbox, elementTypes = ['node', 
             queryParts.push(`  node(w)`); // Get nodes of those ways - these will be marked as polygon nodes
         }
 
-        const query = `[out:xml][timeout:60];\n(\n${queryParts.join(';\n')};\n);\nout meta;`;
-        console.log('🔧 Generated multi-element generic query:', query);
+        // Get timeout from localStorage (set by timeout selector) or fall back to default 60
+        const timeoutGeneric = parseInt(localStorage.getItem('overpassTimeoutSeconds') || '0', 10);
+        const effectiveTimeoutGeneric = (timeoutGeneric > 0) ? timeoutGeneric : 60;
+        const query = `[out:xml][timeout:${effectiveTimeoutGeneric}];\n(\n${queryParts.join(';\n')};\n);\nout meta;`;
+        console.log('🔧 Generated multi-element generic query with timeout:', effectiveTimeoutGeneric);
         return query;
     }
 }

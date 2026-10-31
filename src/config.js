@@ -71,6 +71,9 @@ var config = {
 		'https://overpass.osm.ch/api/interpreter',
 		'https://z.overpass-api.de/api/interpreter'
 	],
+	// Default Overpass query timeout in seconds. The UI selector lets the user
+	// override this per session; unset/null falls back to 25 (the historic value).
+	overpassTimeoutSeconds: 25,
 	overpassApi: function(){
 		// Try to get the server selected by the user from localStorage, or use the first one
 		var servers = this._overpassServers;
@@ -378,61 +381,6 @@ query: '(nwr({{bbox}});<;);out meta;',
 /*@@ fin-inicio de copia */			},
 /*   abrir */							{
     group: 'Geojson',
-    title: 'Test geojson (z20)',
-geojson: '/3dmodelsosm/src/test.geojson',
-    iconSrc: imgSrc + 'icones/maxspeed_empty.svg',
-    iconStyle: 'background-color:rgba(255,255,255,0.4)',
-    style: function (feature) {
-        var key_regex = /^name$/;
-        var name_key = feature.getKeys().filter(function(t){return t.match(key_regex)}).pop() || "name";
-        var name = feature.get(name_key) || '';
-        var fill = new ol.style.Fill({
-            color: 'rgba(117,63,79,0.4)'
-        });
-        var stroke = new ol.style.Stroke({
-            color: 'rgba(117,63,79,1)',
-            width: 1
-        });
-        // Get the geometry type
-        var geom = feature.getGeometry();
-        var isPolygon = geom.getType() === 'Polygon' || geom.getType() === 'MultiPolygon';
-        
-        var style = new ol.style.Style({
-            image: new ol.style.Icon({
-                src: imgSrc + 'icones/maxspeed_empty.svg',
-                scale: 0.03
-            }),
-            text: new ol.style.Text({
-                text: name,
-              			
-                fill: new ol.style.Fill({
-                    color: 'rgba(0,0,0,1)'
-                }),
-                stroke: new ol.style.Stroke({
-                    color: 'rgba(255,255,255,0.7)',
-                    width: 2
-                }),
-                // For polygons, we'll use a different placement strategy
-                placement: isPolygon ? 'point' : 'point',
-				textAlign: 'center',
-                textBaseline: 'bottom',
-                offsetY: isPolygon ? -15 : 0, // Move text up for polygons
-                overflow: true // Allow text to be rendered outside the view
-            }),
-            fill: fill,
-            stroke: stroke
-        });
-        
-        return style;
-/*   cerrar */								}
-
-/*@@ fin-inicio de copia */			},
-/*   abrir */							{
-    group: 'Geojson',
-    title: 'ES_CAT_BCN geojson',
-geojson: './src/bcn1.geojson',
-    iconSrc: imgSrc + 'icones/maxspeed_empty.svg',
-    iconStyle: 'background-color:rgba(255,255,255,0.4)',
     title: 'ES_CAT_BCN geojson',
 geojson: './src/bcn1.geojson',
     iconSrc: imgSrc + 'icones/maxspeed_empty.svg',
@@ -484,8 +432,8 @@ geojson: './src/bcn1.geojson',
 /*@@ fin-inicio de copia */			},
 /*   abrir */							{
     group: 'Geojson',
-    title: 'ES_CAT_VNG traffic_signals semáforos semàfors',
-geojson: './src/vng_highway_traffic_signals.geojson',
+    title: 'ES_CAT_BCN Plaça Espanya',
+geojson: './src/espanya.geojson',
     iconSrc: imgSrc + 'icones/maxspeed_empty.svg',
     iconStyle: 'background-color:rgba(255,255,255,0.4)',
     style: function (feature) {
@@ -583,11 +531,11 @@ geojson: './src/vng_natural_tree.geojson',
         return style;
 /*   cerrar */								}
 
-},
+/*@@ fin-inicio de copia */			},
 /*   abrir */							{
     group: 'Geojson',
-    title: 'ES_CAT_VNG5 Sant Joan area',
-geojson: './src/vng5_area.geojson',
+    title: 'ES_CAT_VNG Zona piscina',
+geojson: './src/vng7_piscina.geojson',
     iconSrc: imgSrc + 'icones/maxspeed_empty.svg',
     iconStyle: 'background-color:rgba(255,255,255,0.4)',
     style: function (feature) {
@@ -595,7 +543,7 @@ geojson: './src/vng5_area.geojson',
         var name_key = feature.getKeys().filter(function(t){return t.match(key_regex)}).pop() || "name";
         var name = feature.get(name_key) || '';
         var fill = new ol.style.Fill({
-            color: 'rgba(117,63,79,0.1)'
+            color: 'rgba(117,63,79,0.4)'
         });
         var stroke = new ol.style.Stroke({
             color: 'rgba(117,63,79,1)',
@@ -608,16 +556,169 @@ geojson: './src/vng5_area.geojson',
         var style = new ol.style.Style({
             image: new ol.style.Icon({
                 src: imgSrc + 'icones/maxspeed_empty.svg',
-                scale: 0.01
+                scale: 0.03
             }),
             text: new ol.style.Text({
                 text: name,
              			
                 fill: new ol.style.Fill({
-                    color: 'rgba(0,0,0,0.1)'
+                    color: 'rgba(0,0,0,1)'
+                }),
+                stroke: new ol.style.Stroke({
+                    color: 'rgba(255,255,255,0.7)',
+                    width: 2
+                }),
+                // For polygons, we'll use a different placement strategy
+                placement: isPolygon ? 'point' : 'point',
+				textAlign: 'center',
+                textBaseline: 'bottom',
+                offsetY: isPolygon ? -15 : 0, // Move text up for polygons
+                overflow: true // Allow text to be rendered outside the view
+            }),
+            fill: fill,
+            stroke: stroke
+        });
+        
+        return style;
+/*   cerrar */								}
+
+},
+/*   abrir */							{
+    group: 'Geojson',
+    title: 'ES_CAT_VNG Zona Sant Joan Aigua',
+geojson: './src/sant_joan_aigua.geojson',
+    iconSrc: imgSrc + 'icones/maxspeed_empty.svg',
+    iconStyle: 'background-color:rgba(255,255,255,0.4)',
+    style: function (feature) {
+        var key_regex = /^name$/;
+        var name_key = feature.getKeys().filter(function(t){return t.match(key_regex)}).pop() || "name";
+        var name = feature.get(name_key) || '';
+        var fill = new ol.style.Fill({
+            color: 'rgba(117,63,79,0.05)'
+        });
+        var stroke = new ol.style.Stroke({
+            color: 'rgba(117,63,79,0.5)',
+            width: 1
+        });
+        // Get the geometry type
+        var geom = feature.getGeometry();
+        var isPolygon = geom.getType() === 'Polygon' || geom.getType() === 'MultiPolygon';
+        
+        var style = new ol.style.Style({
+            image: new ol.style.Icon({
+                src: imgSrc + 'icones/maxspeed_empty.svg',
+                scale: 0.001
+            }),
+            text: new ol.style.Text({
+                text: name,
+				font: 'bold 12px/1 Arial',             			
+                fill: new ol.style.Fill({
+                    color: 'rgba(0,0,0,0.9)'
                 }),
                 stroke: new ol.style.Stroke({
                     color: 'rgba(255,255,255,0.3)',
+                    width: 2
+                }),
+                // For polygons, we'll use a different placement strategy
+                placement: isPolygon ? 'point' : 'point',
+				textAlign: 'center',
+                textBaseline: 'bottom',
+                offsetY: isPolygon ? -15 : 0, // Move text up for polygons
+                overflow: true // Allow text to be rendered outside the view
+            }),
+            fill: fill,
+            stroke: stroke
+        });
+        
+        return style;
+/*   cerrar */								}
+
+/*@@ fin-inicio de copia */			},
+/*   abrir */							{
+    group: 'Geojson',
+    title: 'ES_CAT_VNG Zona Sant Joan',
+geojson: './src/vng5_area.geojson',
+    iconSrc: imgSrc + 'icones/maxspeed_empty.svg',
+    iconStyle: 'background-color:rgba(255,255,255,0.4)',
+    style: function (feature) {
+        var key_regex = /^name$/;
+        var name_key = feature.getKeys().filter(function(t){return t.match(key_regex)}).pop() || "name";
+        var name = feature.get(name_key) || '';
+        var fill = new ol.style.Fill({
+            color: 'rgba(117,63,79,0.05)'
+        });
+        var stroke = new ol.style.Stroke({
+            color: 'rgba(117,63,79,0.5)',
+            width: 1
+        });
+        // Get the geometry type
+        var geom = feature.getGeometry();
+        var isPolygon = geom.getType() === 'Polygon' || geom.getType() === 'MultiPolygon';
+        
+        var style = new ol.style.Style({
+            image: new ol.style.Icon({
+                src: imgSrc + 'icones/maxspeed_empty.svg',
+                scale: 0.001
+            }),
+            text: new ol.style.Text({
+                text: name,
+				font: 'bold 12px/1 Arial',             			
+                fill: new ol.style.Fill({
+                    color: 'rgba(0,0,0,0.9)'
+                }),
+                stroke: new ol.style.Stroke({
+                    color: 'rgba(255,255,255,0.3)',
+                    width: 2
+                }),
+                // For polygons, we'll use a different placement strategy
+                placement: isPolygon ? 'point' : 'point',
+				textAlign: 'center',
+                textBaseline: 'bottom',
+                offsetY: isPolygon ? -15 : 0, // Move text up for polygons
+                overflow: true // Allow text to be rendered outside the view
+            }),
+            fill: fill,
+            stroke: stroke
+        });
+        
+        return style;
+/*   cerrar */								}
+
+/*@@ fin-inicio de copia */			},
+/*   abrir */							{
+    group: 'Geojson',
+    title: 'ES_CAT_VNG Ponts C-15',
+geojson: './src/tunnelbridgemotorway.geojson',
+    iconSrc: imgSrc + 'icones/maxspeed_empty.svg',
+    iconStyle: 'background-color:rgba(255,255,255,0.4)',
+    style: function (feature) {
+        var key_regex = /^name$/;
+        var name_key = feature.getKeys().filter(function(t){return t.match(key_regex)}).pop() || "name";
+        var name = feature.get(name_key) || '';
+        var fill = new ol.style.Fill({
+            color: 'rgba(117,63,79,0.4)'
+        });
+        var stroke = new ol.style.Stroke({
+            color: 'rgba(117,63,79,1)',
+            width: 1
+        });
+        // Get the geometry type
+        var geom = feature.getGeometry();
+        var isPolygon = geom.getType() === 'Polygon' || geom.getType() === 'MultiPolygon';
+        
+        var style = new ol.style.Style({
+            image: new ol.style.Icon({
+                src: imgSrc + 'icones/maxspeed_empty.svg',
+                scale: 0.03
+            }),
+            text: new ol.style.Text({
+                text: name,
+             			
+                fill: new ol.style.Fill({
+                    color: 'rgba(0,0,0,1)'
+                }),
+                stroke: new ol.style.Stroke({
+                    color: 'rgba(255,255,255,0.7)',
                     width: 2
                 }),
                 // For polygons, we'll use a different placement strategy
@@ -739,8 +840,8 @@ geojson: './src/pedrola.geojson',
 },
 /*   abrir */							{
     group: 'Geojson',
-    title: 'ES_CAT_StAnBa Sant Andreu de la Barca',
-geojson: './src/catalunya_sab.geojson',
+    title: 'ES_CAT_StAnBa Sant Andreu de la Barca (Barri Catalunya)',
+geojson: './src/sab_catalunya.geojson',
     iconSrc: imgSrc + 'icones/maxspeed_empty.svg',
     iconStyle: 'background-color:rgba(255,255,255,0.4)',
     style: function (feature) {
@@ -790,7 +891,58 @@ geojson: './src/catalunya_sab.geojson',
 },
 /*   abrir */							{
     group: 'Geojson',
-    title: 'ES_CAT_VNG Talaia',
+    title: 'ES_CAT_StAnBa Sant Andreu de la Barca',
+geojson: './src/sab_catalunya.geojson',
+    iconSrc: imgSrc + 'icones/maxspeed_empty.svg',
+    iconStyle: 'background-color:rgba(255,255,255,0.4)',
+    style: function (feature) {
+        var key_regex = /^name$/;
+        var name_key = feature.getKeys().filter(function(t){return t.match(key_regex)}).pop() || "name";
+        var name = feature.get(name_key) || '';
+        var fill = new ol.style.Fill({
+            color: 'rgba(117,63,79,0.1)'
+        });
+        var stroke = new ol.style.Stroke({
+            color: 'rgba(117,63,79,1)',
+            width: 1
+        });
+        // Get the geometry type
+        var geom = feature.getGeometry();
+        var isPolygon = geom.getType() === 'Polygon' || geom.getType() === 'MultiPolygon';
+        
+        var style = new ol.style.Style({
+            image: new ol.style.Icon({
+                src: imgSrc + 'icones/maxspeed_empty.svg',
+                scale: 0.01
+            }),
+            text: new ol.style.Text({
+                text: name,
+             			
+                fill: new ol.style.Fill({
+                    color: 'rgba(0,0,0,0.1)'
+                }),
+                stroke: new ol.style.Stroke({
+                    color: 'rgba(255,255,255,0.3)',
+                    width: 2
+                }),
+                // For polygons, we'll use a different placement strategy
+                placement: isPolygon ? 'point' : 'point',
+				textAlign: 'center',
+                textBaseline: 'bottom',
+                offsetY: isPolygon ? -15 : 0, // Move text up for polygons
+                overflow: true // Allow text to be rendered outside the view
+            }),
+            fill: fill,
+            stroke: stroke
+        });
+        
+        return style;
+/*   cerrar */								}
+
+},
+/*   abrir */							{
+    group: 'Geojson',
+    title: 'ES_CAT_VNG La Talaia (muntanya)',
 geojson: './src/talaia.geojson',
     iconSrc: imgSrc + 'icones/maxspeed_empty.svg',
     iconStyle: 'background-color:rgba(255,255,255,0.4)',
@@ -841,8 +993,8 @@ geojson: './src/talaia.geojson',
 },
 /*   abrir */							{
     group: 'Geojson',
-    title: 'ES_CAT_VNG1 Molí de Vent',
-geojson: './src/vng1.geojson',
+    title: 'FR_PARIS Gare du Nord',
+geojson: './src/paris.geojson',
     iconSrc: imgSrc + 'icones/maxspeed_empty.svg',
     iconStyle: 'background-color:rgba(255,255,255,0.4)',
     style: function (feature) {
@@ -850,10 +1002,10 @@ geojson: './src/vng1.geojson',
         var name_key = feature.getKeys().filter(function(t){return t.match(key_regex)}).pop() || "name";
         var name = feature.get(name_key) || '';
         var fill = new ol.style.Fill({
-            color: 'rgba(117,63,79,0.4)'
+            color: 'rgba(117,63,79,0.05)'
         });
         var stroke = new ol.style.Stroke({
-            color: 'rgba(117,63,79,1)',
+            color: 'rgba(117,63,79,0.5)',
             width: 1
         });
         // Get the geometry type
@@ -867,9 +1019,9 @@ geojson: './src/vng1.geojson',
             }),
             text: new ol.style.Text({
                 text: name,
-             			
+				font: 'bold 12px/1 Arial',             			
                 fill: new ol.style.Fill({
-                    color: 'rgba(0,0,0,1)'
+                    color: 'rgba(0,0,0,0.9)'
                 }),
                 stroke: new ol.style.Stroke({
                     color: 'rgba(255,255,255,0.7)',
@@ -889,11 +1041,12 @@ geojson: './src/vng1.geojson',
         return style;
 /*   cerrar */								}
 
-/*@@ fin-inicio de copia */			},
+
+},
 /*   abrir */							{
     group: 'Geojson',
-    title: 'ES_CAT_VNG2 Torrent Sant Joan',
-geojson: './src/vng2.geojson',
+    title: 'GE_BERLIN Hauptbahnhof',
+geojson: './src/berlin.geojson',
     iconSrc: imgSrc + 'icones/maxspeed_empty.svg',
     iconStyle: 'background-color:rgba(255,255,255,0.4)',
     style: function (feature) {
@@ -918,9 +1071,9 @@ geojson: './src/vng2.geojson',
             }),
             text: new ol.style.Text({
                 text: name,
-             			
+				font: 'bold 12px/1 Arial',             			
                 fill: new ol.style.Fill({
-                    color: 'rgba(0,0,0,1)'
+                    color: 'rgba(0,0,0,0.9)'
                 }),
                 stroke: new ol.style.Stroke({
                     color: 'rgba(255,255,255,0.7)',
@@ -940,113 +1093,12 @@ geojson: './src/vng2.geojson',
         return style;
 /*   cerrar */								}
 
-/*@@ fin-inicio de copia */			},
-/*   abrir */							{
-    group: 'Geojson',
-    title: 'ES_CAT_VNG3 encreuament',
-geojson: './src/vng3.geojson',
-    iconSrc: imgSrc + 'icones/maxspeed_empty.svg',
-    iconStyle: 'background-color:rgba(255,255,255,0.4)',
-    style: function (feature) {
-        var key_regex = /^name$/;
-        var name_key = feature.getKeys().filter(function(t){return t.match(key_regex)}).pop() || "name";
-        var name = feature.get(name_key) || '';
-        var fill = new ol.style.Fill({
-            color: 'rgba(117,63,79,0.4)'
-        });
-        var stroke = new ol.style.Stroke({
-            color: 'rgba(117,63,79,1)',
-            width: 1
-        });
-        // Get the geometry type
-        var geom = feature.getGeometry();
-        var isPolygon = geom.getType() === 'Polygon' || geom.getType() === 'MultiPolygon';
-        
-        var style = new ol.style.Style({
-            image: new ol.style.Icon({
-                src: imgSrc + 'icones/maxspeed_empty.svg',
-                scale: 0.03
-            }),
-            text: new ol.style.Text({
-                text: name,
-             			
-                fill: new ol.style.Fill({
-                    color: 'rgba(0,0,0,1)'
-                }),
-                stroke: new ol.style.Stroke({
-                    color: 'rgba(255,255,255,0.7)',
-                    width: 2
-                }),
-                // For polygons, we'll use a different placement strategy
-                placement: isPolygon ? 'point' : 'point',
-				textAlign: 'center',
-                textBaseline: 'bottom',
-                offsetY: isPolygon ? -15 : 0, // Move text up for polygons
-                overflow: true // Allow text to be rendered outside the view
-            }),
-            fill: fill,
-            stroke: stroke
-        });
-        
-        return style;
-/*   cerrar */								}
-
-/*@@ fin-inicio de copia */			},
-/*   abrir */							{
-    group: 'Geojson',
-    title: 'ES_CAT_VNG4 Olèrdola',
-geojson: './src/vng4_area.geojson',
-    iconSrc: imgSrc + 'icones/maxspeed_empty.svg',
-    iconStyle: 'background-color:rgba(255,255,255,0.4)',
-    style: function (feature) {
-        var key_regex = /^name$/;
-        var name_key = feature.getKeys().filter(function(t){return t.match(key_regex)}).pop() || "name";
-        var name = feature.get(name_key) || '';
-        var fill = new ol.style.Fill({
-            color: 'rgba(117,63,79,0.4)'
-        });
-        var stroke = new ol.style.Stroke({
-            color: 'rgba(117,63,79,1)',
-            width: 1
-        });
-        // Get the geometry type
-        var geom = feature.getGeometry();
-        var isPolygon = geom.getType() === 'Polygon' || geom.getType() === 'MultiPolygon';
-        
-        var style = new ol.style.Style({
-            image: new ol.style.Icon({
-                src: imgSrc + 'icones/maxspeed_empty.svg',
-                scale: 0.03
-            }),
-            text: new ol.style.Text({
-                text: name,
-             			
-                fill: new ol.style.Fill({
-                    color: 'rgba(0,0,0,1)'
-                }),
-                stroke: new ol.style.Stroke({
-                    color: 'rgba(255,255,255,0.7)',
-                    width: 2
-                }),
-                // For polygons, we'll use a different placement strategy
-                placement: isPolygon ? 'point' : 'point',
-				textAlign: 'center',
-                textBaseline: 'bottom',
-                offsetY: isPolygon ? -15 : 0, // Move text up for polygons
-                overflow: true // Allow text to be rendered outside the view
-            }),
-            fill: fill,
-            stroke: stroke
-        });
-        
-        return style;
-/*   cerrar */								}
 
 },
  {
 
-   group: 'Geojson',
-   title: 'ES_CAT_BCN Moll Marina',
+   group: 'Test',
+   title: 'ES_CAT_BCN Moll Marina geojson',
    geojson: '/3dmodelsosm/src/test.geojson',
    iconSrc:'https://raw.githubusercontent.com/yopaseopor/beta_preset_josm/master/ES/traffic_signs/ES/ES_B1a.png',
    iconStyle: 'background-color:rgba(255,255,255,0.4)',

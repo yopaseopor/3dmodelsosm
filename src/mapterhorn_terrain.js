@@ -51,6 +51,11 @@
                                            // coarse ancestors and draped textures sag
                                            // off the mesh ("flying" at grazing angles).
     const TERRARIUM_OFFSET = 32768.0;
+    // How many levels a cached ancestor may stand in for a requested tile.
+    // 1 = the parent tile only. Anything coarser renders flat.
+    const MAX_CACHED_ANCESTOR_LEVELS = 1;
+    const CAMERA_CLEARANCE_M = 15;   // camera eye must stay this far above the DEM
+                                      // (same clearance as the 3D nav pad)
 
     function debugEnabled() {
         return window.MAPTERTHORN_VERBOSE === true ||
@@ -355,8 +360,17 @@
                 };
             };
 
-            // Fast path: first cached ancestor wins (no network wait).
+            // Fast path: a cached ancestor is only good enough when it is at
+            // most MAX_CACHED_ANCESTOR_LEVELS coarser than requested. Serving a
+            // z8 grid for a z15 request resamples ~5 km of terrain into a single
+            // tile, which renders FLAT — and because the coarse levels are cached
+            // first as the globe descends, that hit almost every tile: the view
+            // showed real elevation only on the few tiles whose own z15 tile had
+            // been warmed, and flat ground everywhere else. When the only cached
+            // ancestor is too coarse we fall through to the slow path, which
+            // fetches the exact level and only degrades if the fetch fails.
             for (let zTry = Math.min(level, this.maxLevel); zTry >= 0; zTry--) {
+                if (level - zTry > MAX_CACHED_ANCESTOR_LEVELS) break;
                 const entry = this._cache.getIfCached(zTry, x >> (level - zTry), y >> (level - zTry));
                 if (entry) {
                     log('cached tile z' + zTry + ' serves level ' + level);
@@ -437,25 +451,85 @@
                     .catch(fallbackToFlat);
 
                 // Camera safety: as DEM tiles arrive, make sure the camera never
-                // ends up below the terrain surface it is looking at.
-                this.onTilesLoaded(() => {
-                    try {
-                        const camera = scene.camera;
-                        const carto = camera.positionCartographic;
-                        const ground = scene.globe.getHeight(carto);
-                        if (ground !== undefined && ground !== null &&
-                            isFinite(ground) && carto.height < ground + 2) {
-                            const raised = new Cesium.Cartographic(carto.longitude, carto.latitude, ground + 2);
-                            camera.position = Cesium.Ellipsoid.WGS84.cartographicToCartesian(raised);
-                            log('camera raised above DEM ground: ' + Math.round(ground) + 'm');
-                        }
-                    } catch (e) { /* camera not ready */ }
-                });
+                // ends up below the terrain surface it is looking at (a camera
+                // underground is culled along with the globe → black viewport).
+                // The guard is registered ONCE and reads the scene it must watch
+                // from `this._cameraGuard.scene`: re-entering 3D used to append a
+                // new closure per session, leaking one callback for every toggle.
+                if (!this._cameraGuard) this._cameraGuard = {};
+                this._cameraGuard.scene = scene;
+                this._cameraGuard.clearance = CAMERA_CLEARANCE_M;
+                this._cameraGuard.settled = false;   // one settle-down per 3D session
+                if (!this._cameraGuard.registered) {
+                    this._cameraGuard.registered = true;
+                    this.onTilesLoaded(() => this.keepCameraAboveGround());
+                }
+                this.keepCameraAboveGround();
                 return true;
             } catch (e) {
                 console.warn('🗺️ Failed to enable MapTerhorn terrain:', e);
                 return false;
             }
+        },
+
+        /**
+         * Keep the camera at a sensible height over the DEM surface as terrain
+         * streams in. Called on every batch of decoded tiles.
+         *
+         * Two corrections, both driven by the DEM GRID (scene.globe.getHeight
+         * reports the coarse in-progress mesh and overshoots badly):
+         *  - RAISE when the camera ends up below the surface (it is culled with
+         *    the globe → black viewport).
+         *  - SETTLE DOWN once per 3D session when the camera starts absurdly
+         *    high. The entry camera is placed before the DEM is decoded, so it
+         *    can land at the coarse mesh height; once the real surface is known
+         *    the relief is invisible from up there. One-shot, so a user who
+         *    later zooms out is never yanked back.
+         *
+         * Skipped in the underground (L-1) view, where being below the surface is
+         * the whole point and the globe is rendered translucent.
+         */
+        keepCameraAboveGround: function () {
+            const scene = this._cameraGuard && this._cameraGuard.scene;
+            if (!scene || scene.isDestroyed || scene.isDestroyed()) return false;
+            try {
+                if (window.indoor && typeof window.indoor.isUndergroundEnabled === 'function' &&
+                    window.indoor.isUndergroundEnabled()) {
+                    return false; // L-1 navigation owns the camera height
+                }
+                const carto = scene.camera.positionCartographic;
+                // Ground from the DEM grid, falling back to the rendered mesh.
+                let ground = this.getElevation(
+                    Cesium.Math.toDegrees(carto.longitude), Cesium.Math.toDegrees(carto.latitude));
+                if (ground === null || ground === undefined || !isFinite(ground)) {
+                    const mesh = scene.globe.getHeight(carto);
+                    if (mesh === undefined || mesh === null || !isFinite(mesh)) return false;
+                    ground = mesh;
+                    return false; // mesh heights are unreliable: never act on them
+                }
+                const clearance = (this._cameraGuard && this._cameraGuard.clearance) || CAMERA_CLEARANCE_M;
+                const target = ground + clearance;
+
+                if (carto.height < target) {
+                    const raised = new Cesium.Cartographic(carto.longitude, carto.latitude, target);
+                    // Only move the eye — keep the orientation the user chose
+                    // instead of re-pointing the camera with a new lookAt transform.
+                    scene.camera.position = Cesium.Ellipsoid.WGS84.cartographicToCartesian(raised);
+                    log('camera raised above DEM ground: ' + Math.round(ground) + 'm');
+                    return true;
+                }
+                if (!this._cameraGuard.settled && carto.height > target * 3) {
+                    this._cameraGuard.settled = true;
+                    const lowered = new Cesium.Cartographic(carto.longitude, carto.latitude, target);
+                    scene.camera.position = Cesium.Ellipsoid.WGS84.cartographicToCartesian(lowered);
+                    if (scene.requestRender) scene.requestRender();
+                    log('camera settled to DEM surface: ' + Math.round(ground) + 'm (was ' +
+                        Math.round(carto.height) + 'm)');
+                    return true;
+                }
+                return false;
+            } catch (e) { /* camera not ready */ }
+            return false;
         },
 
         /** Register a callback fired (debounced) whenever new terrain arrives. */
@@ -748,13 +822,24 @@
 
         // Terrain fetch + decode test on a tile with strong relief.
         try {
+            // Probe a point with strong relief (the app's default view). The tile
+            // is DERIVED from the coordinate: the probe used to fetch a hardcoded
+            // z8/128/88 and then sample (1.59647, 41.69689), which lives in
+            // z8/129/95 — so the elevation step could never find its tile and
+            // always reported "null (tile not cached yet)".
+            const probeLon = 1.59647, probeLat = 41.69689, probeZ = 8;
+            const probeX = Math.floor(lonToTileX(probeLon, probeZ));
+            const probeY = Math.floor(latToTileY(probeLat, probeZ));
             const t0 = Date.now();
-            const entry = await mapterhornTerrain._cache.get(8, 128, 88); // Pyrenees area
+            const entry = await mapterhornTerrain._cache.get(probeZ, probeX, probeY);
             const ms = Date.now() - t0;
             const min = Math.round(entry.min), max = Math.round(entry.max);
-            report('MapTerhorn tile fetch+decode', true, 'z8/128/88 in ' + ms + 'ms, elevation range ' + min + 'm..' + max + 'm');
-            const elev = mapterhornTerrain.getElevation(1.59647, 41.69689); // app default view
-            report('Elevation at default view', elev !== null && isFinite(elev), elev === null ? 'null (tile not cached yet)' : Math.round(elev) + 'm');
+            report('MapTerhorn tile fetch+decode', true,
+                'z' + probeZ + '/' + probeX + '/' + probeY + ' in ' + ms + 'ms, elevation range ' +
+                min + 'm..' + max + 'm');
+            const elev = mapterhornTerrain.getElevation(probeLon, probeLat);
+            report('Elevation at default view', elev !== null && isFinite(elev),
+                elev === null ? 'null (tile not cached yet)' : Math.round(elev) + 'm');
         } catch (e) {
             report('MapTerhorn tile fetch+decode', false, e.message || String(e));
         }
@@ -779,6 +864,168 @@
                 report('3D scene active', true,
                     'terrain=' + tpName + ', depthTest=' + scene.globe.depthTestAgainstTerrain +
                     ', tilesLoaded=' + scene.globe.tilesLoaded);
+
+                // Is the DEM actually the RENDERED ground under the view, and is
+                // the camera above it? This is the difference between "no
+                // elevation" (flat globe / models at sea level) and a working DEM.
+                try {
+                    const view = window.map && window.map.getView();
+                    const centre = view ? ol.proj.toLonLat(view.getCenter()) : null;
+                    if (centre) {
+                        const carto = Cesium.Cartographic.fromDegrees(centre[0], centre[1]);
+                        const ground = scene.globe.getHeight(carto);
+                        report('Rendered DEM ground at view centre', ground !== undefined && ground !== null,
+                            (ground === undefined || ground === null)
+                                ? 'no mesh yet (undetermined)'
+                                : Math.round(ground) + 'm');
+
+                        // The float gap. Ground-conforming primitives (markers,
+                        // clampToGround lines, models) are seated on the RENDERED
+                        // MESH, while the DEM grid holds the true heights. Their
+                        // difference is exactly how far a draped marker appears to
+                        // hover above the ground — the mesh only has
+                        // (heightmapSize-1) quads per tile, ~7m at z15, so a few
+                        // metres of gap is expected and is not a placement bug.
+                        const demHere = mapterhornTerrain.getElevation(centre[0], centre[1]);
+                        if (demHere !== null && demHere !== undefined && isFinite(demHere) &&
+                            ground !== undefined && ground !== null && isFinite(ground)) {
+                            const gap = ground - demHere;
+                            report('Mesh vs DEM grid gap', Math.abs(gap) <= 8,
+                                Math.round(gap) + 'm (mesh ' + Math.round(ground) +
+                                'm vs grid ' + Math.round(demHere) + 'm) — this is the hover height');
+                        }
+                        const camCarto = scene.camera.positionCartographic;
+                        const groundM = (ground === undefined || ground === null) ? null : Math.round(ground);
+                        report('Camera above ground',
+                            groundM !== null && camCarto.height > groundM,
+                            'camera ' + Math.round(camCarto.height) + 'm vs ground ' +
+                            (groundM === null ? '?' : groundM + 'm') +
+                            // The tell-tale of the "flat map" symptom: the eye is so
+                            // high that a few hundred metres of relief is invisible.
+                            (groundM !== null && camCarto.height > 2000
+                                ? ' — too high, relief will look flat' : ''));
+
+                        // Is the camera still moving, and what does the 2D view ask
+                        // for? ol-cesium's OL->Cesium camera synchronizer copies the
+                        // OL view into the Cesium camera on every OL view
+                        // propertychange; a camera that drifts AFTER the entry
+                        // flight is that synchronizer (or the user) steering.
+                        const olView = window.ol3d.getOlView ? window.ol3d.getOlView() : null;
+                        const zoom = olView && olView.getZoom ? olView.getZoom() : null;
+                        report('2D view zoom', zoom !== null && isFinite(zoom),
+                            (zoom === null ? 'no OL view' : String(zoom)) +
+                            ' (relief of ' + (groundM === null ? '?' : groundM) + 'm needs a close camera)');
+                        const h0 = scene.camera.positionCartographic.height;
+                        await new Promise(r => setTimeout(r, 1500));
+                        const h1 = scene.camera.positionCartographic.height;
+                        report('Camera stable over 1.5s', Math.abs(h1 - h0) < 5,
+                            Math.round(h0) + 'm -> ' + Math.round(h1) + 'm (drift ' +
+                            Math.round(h1 - h0) + 'm)');
+                    }
+                } catch (e) {
+                    report('Rendered DEM ground at view centre', false, e.message || String(e));
+                }
+
+                // Tracked models: how many, and how many sit at a non-zero DEM
+                // height (a model parked at 0m is the classic "no elevation" tell).
+                try {
+                    if (window.modelRenderer && window.modelRenderer.loadedModels) {
+                        const entries = Array.from(window.modelRenderer.loadedModels.values());
+                        const clamped = entries.filter(en =>
+                            en.model && en.model.heightReference === Cesium.HeightReference.CLAMP_TO_GROUND).length;
+                        let onGround = 0;
+                        entries.forEach(en => {
+                            const h = mapterhornTerrain.getElevation(en.lon, en.lat);
+                            if (h !== null && h !== undefined && isFinite(h) && h !== 0) onGround++;
+                        });
+                        report('Tracked 3D models', entries.length > 0,
+                            entries.length + ' tracked, ' + clamped + ' ground-clamped, ' +
+                            onGround + ' with non-zero DEM elevation');
+
+                        // PLACEMENT ACCURACY — is anything at the wrong place?
+                        // Horizontal: run each model's lon/lat through the app's own
+                        // projection helpers (fromLonLat -> toLonLat). These are
+                        // exact inverses, so the error must be ~0; anything else
+                        // means a coordinate is being transformed twice.
+                        // Vertical: the DEM height at the model vs the height the
+                        // app placed it at. A large gap means a vertical offset.
+                        let maxHorizErr = 0, maxVertGap = 0, samples = [];
+                        entries.slice(0, 25).forEach(en => {
+                            const lon = en.lon, lat = en.lat;
+                            if (typeof lon !== 'number' || typeof lat !== 'number') return;
+                            const back = ol.proj.toLonLat(ol.proj.fromLonLat([lon, lat]));
+                            const err = Cesium.Cartesian3.distance(
+                                Cesium.Cartesian3.fromDegrees(lon, lat, 0),
+                                Cesium.Cartesian3.fromDegrees(back[0], back[1], 0));
+                            if (err > maxHorizErr) maxHorizErr = err;
+                            const dem = mapterhornTerrain.getElevation(lon, lat);
+                            if (dem !== null && dem !== undefined && isFinite(dem)) {
+                                const off = en.feature && en.feature.get ?
+                                    (en.feature.get('modelHeightOffset') || 0) : 0;
+                                if (Math.abs(dem + off) > maxVertGap) maxVertGap = Math.abs(dem + off);
+                                if (samples.length < 3) {
+                                    samples.push(lon.toFixed(5) + ',' + lat.toFixed(5) +
+                                        ' dem=' + Math.round(dem) + 'm off=' + Math.round(off) + 'm');
+                                }
+                            }
+                        });
+                        report('Placement: horizontal error', maxHorizErr < 1,
+                            'max ' + maxHorizErr.toFixed(4) + 'm over ' +
+                            Math.min(entries.length, 25) + ' model(s)');
+                        report('Placement: vertical (DEM ground)', true,
+                            'max |dem+offset| ' + maxVertGap.toFixed(0) + 'm | ' +
+                            (samples.length ? samples.join(' | ') : 'no DEM sample yet'));
+
+                        // Results with NO model and NO texture are not rendered by
+                        // this renderer at all: ol-cesium's VectorSynchronizer
+                        // draws them, and it converts OL geometry straight to
+                        // Cesium positions at ellipsoid height 0 (CLAMP_TO_GROUND
+                        // appears nowhere in its vector path). They therefore sit
+                        // at sea level while the ground is tens of metres up —
+                        // and with depthTestAgainstTerrain off they stay visible,
+                        // which reads as a sideways offset on sloped ground.
+                        // This measures how big that gap is.
+                        try {
+                            if (window.map && ol) {
+                                let plain = 0, maxGround = 0, sample = null;
+                                window.map.getLayers().forEach(layer => {
+                                    if (!layer.getSource || typeof layer.getSource !== 'function') return;
+                                    const src = layer.getSource();
+                                    if (!src || typeof src.getFeatures !== 'function') return;
+                                    src.getFeatures().forEach(f => {
+                                        // model_renderer.js loads after this file,
+                                        // so the helper only exists at call time.
+                                        if (typeof getFeatureModelOptions === 'function' &&
+                                            getFeatureModelOptions(f)) return;   // has a model
+                                        if (f.get('areaEntity')) return;          // has a texture
+                                        const g = f.getGeometry && f.getGeometry();
+                                        if (!g) return;
+                                        const c = g.getType && g.getType() === 'Point'
+                                            ? g.getCoordinates()
+                                            : (g.getExtent && g.getExtent()
+                                                ? ol.extent.getCenter(g.getExtent()) : null);
+                                        if (!c) return;
+                                        plain++;
+                                        const lonLat = ol.proj.toLonLat(c);
+                                        const h = mapterhornTerrain.getElevation(lonLat[0], lonLat[1]);
+                                        if (h !== null && h !== undefined && isFinite(h)) {
+                                            if (h > maxGround) maxGround = h;
+                                            if (!sample) {
+                                                sample = lonLat[0].toFixed(5) + ',' + lonLat[1].toFixed(5) +
+                                                    ' ground=' + Math.round(h) + 'm but drawn at 0m';
+                                            }
+                                        }
+                                    });
+                                });
+                                report('Plain results (no model/texture)', plain > 0,
+                                    plain + ' found, max ground ' + Math.round(maxGround) +
+                                    'm | ' + (sample || 'no DEM sample'));
+                            }
+                        } catch (e) { /* layer scan is best-effort */ }
+                    }
+                } catch (e) {
+                    report('Tracked 3D models', false, e.message || String(e));
+                }
             } else {
                 results['3D scene active'] = 'SKIPPED (toggle 3D first, then run mapterhornDiag() again)';
                 console.log('ℹ️ Toggle the 3D view first, then run mapterhornDiag() again for scene checks');

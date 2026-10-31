@@ -10,14 +10,20 @@ const availableModels = [
     'w_amenity_bench.gltf',
     'w_amenity_bicycle_parking.glb',
     'w_amenity_drinking_water.gltf',
-    'w_amenity_waste_basket.glb',
+    'w_amenity_post_box.glb',
+	'w_amenity_waste_basket.glb',
     'w_area_highway_footway.glb',
     'w_barrier_fence_wood.gltf',
     'w_barrier_kerb.gltf',
-    'w_highway_cycleway.gltf',
+	'w_barrier_wall.glb',
+	'w_barrier_guard_rail.glb',
+	'w_barrier_guard_rail_bridge.glb',
+	'w_highway_bus_stop.glb',
+    'w_highway_cycleway.glb',
     'w_highway_footway.glb',
     'w_highway_residential.glb',
     'w_highway_residential.gltf',
+	'w_highway_speed_camera.glb',
     'w_highway_street_lamp.glb',
     'w_highway_street_lamp_straight_mast.glb',
     'w_highway_track.gltf',
@@ -26,6 +32,7 @@ const availableModels = [
     'w_highway_traffic_signals_pedestrian.gltf',
     'w_man_made_pole.glb',
     'w_natural_beach.gltf',
+	'w_recycling_plastic_yes.glb',
     'w_recycling_type_container.glb',
     'w_leisure_garden.glb',
     'w_leisure_playground.glb',
@@ -33,9 +40,13 @@ const availableModels = [
     'w_playground_slide.gltf',
     'w_playground_spring.gltf',
     'w_playground_swing.glb',
+	'w_power_pole.gltf',
+	'w_power_tower.gltf',
+	'w_railway_rail.glb',
     'w_traffic_sign_ES_R2.gltf',
     'w_traffic_sign_ES_R101.gltf',
-    'w_waterway_stream.gltf',
+    'w_vending_parking_tickets.glb',
+	'w_waterway_stream.gltf',
     'ES_CAT_BCN_casa_batllo.glb',
     'ES_CAT_BCN_casa_mila.glb',
    'ES_CAT_BCN_hotel_arts.glb',
@@ -56,6 +67,7 @@ const availableModels = [
     'i_parking.png',
     'i_terra_verd.jpg',
     'i_panot.jpg',
+	'noimage.png',
         'i_llamborda.jpg'
 ];
 
@@ -64,10 +76,27 @@ const modelMappings = [
     // Point models (existing functionality)
     { tags: ['amenity=bench'], model: 'w_amenity_bench.gltf', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Bicycle parking model for amenity=bicycle_parking
     { tags: ['amenity=bicycle_parking'], model: 'w_amenity_bicycle_parking.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Bicycle parking model for amenity=bicycle_parking
+    { tags: ['amenity=charging_station'], model: 'w_amenity_charging_station.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Charging_station
     { tags: ['amenity=drinking_water'], model: 'w_amenity_drinking_water.gltf', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Bicycle parking model for amenity=bicycle_parking
+    { tags: ['amenity=post_box'], model: 'w_amenity_post_box.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Street lamp model for highway=street_lamp
     { tags: ['amenity=waste_basket'], model: 'w_amenity_waste_basket.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Bicycle parking model for amenity=bicycle_parking 
-    { tags: ['highway=street_lamp', 'lamp_mount=straight_mast'], model: 'w_highway_street_lamp_straight_mast.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
-    { tags: ['highway=street_lamp'], model: 'w_highway_street_lamp.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Street lamp model for highway=street_lamp
+    { tags: ['highway=bus_stop'], model: 'w_highway_bus_stop.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Street lamp model for highway=street_lamp
+    { tags: ['highway=speed_camera'], model: 'w_highway_speed_camera.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Street lamp model for highway=street_lamp
+    
+    // rotation[1] here is a constant OFFSET added on top of the computed
+    // bearing, not the bearing itself (see adjustConfigForDirection).
+    //
+    // Both lamp meshes carry a non-identity root rotation in the GLB
+    // (the straight mast is rotated 120 degrees about the 1,-1,1 axis), so
+    // their local axes do not match the +Y-forward assumption the orientation
+    // maths makes. The 90 degree offset below corrects that; without it a lamp
+    // turned to face the road ends up pointing ALONG it.
+    //
+    // If the lamp head ends up facing the wrong way, change the sign:
+    //   Math.PI / 2   head faces the road   (wanted)
+    //  -Math.PI / 2   head faces away from it
+	{ tags: ['highway=street_lamp', 'lamp_mount=straight_mast'], model: 'w_highway_street_lamp_straight_mast.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, Math.PI / 2, 0] } },
+    { tags: ['highway=street_lamp'], model: 'w_highway_street_lamp.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, Math.PI / 2, 0] } },  // Street lamp model for highway=street_lamp
     // More specific traffic signals first
     { tags: ['highway=traffic_signals', 'traffic_signals=cyclist_crossing'], model: 'w_highway_traffic_signals_cycle.gltf', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Traffic signals model for cyclist crossing
     { tags: ['highway=traffic_signals', 'traffic_signals=pedestrian_crossing'], model: 'w_highway_traffic_signals_pedestrian.gltf', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Traffic signals model for pedestrian crossing
@@ -78,8 +107,16 @@ const modelMappings = [
     { tags: ['natural=wood'], model: 'test.gltf', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Could use forest model
     { tags: ['playground=slide'], model: 'w_playground_slide.gltf', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // slide
     { tags: ['playground=springy'], model: 'w_playground_spring.gltf', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // slide
-        { tags: ['playground=swing'], model: 'w_playground_swing.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Could use forest model
-    
+    { tags: ['playground=swing'], model: 'w_playground_swing.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Could use forest model
+	{ tags: ['power=pole'], model: 'w_power_pole.gltf', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // slide
+	{ tags: ['power=tower'], model: 'w_power_tower.gltf', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // slide
+{ tags: ['recycling:plastic=yes'], model: 'w_recycling_plastic_yes.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Recycling container model for    
+{ tags: ['recycling:glass=yes'], model: 'w_recycling_glass_yes.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Recycling container model for    
+{ tags: ['recycling:organic=yes'], model: 'w_recycling_organic_yes.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Recycling container model for    
+{ tags: ['recycling:waste=yes'], model: 'w_recycling_waste_yes.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Recycling container model for    
+{ tags: ['recycling:paper=yes'], model: 'w_recycling_paper_yes.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Recycling container model for    
+   { tags: ['vending=parking_tickets'], model: 'w_vending_parking_tickets.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // slide
+	
     { tags: ['traffic_sign=ES:R2'], model: 'w_traffic_sign_ES_R2.gltf', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Could use forest model
     { tags: ['traffic_sign=ES:R101'], model: 'w_traffic_sign_ES_R101.gltf', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Could use forest model
         { tags: ['wikidata=Q575953'], model: 'ES_CAT_BCN_casa_batllo.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Casa Batlló
@@ -91,22 +128,34 @@ const modelMappings = [
     { tags: ['name=La Pedrera'], model: 'ES_CAT_BCN_casa_mila.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Casa Milà by name
     { tags: ['name=Casa Batlló'], model: 'ES_CAT_BCN_casa_batllo.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Casa Batlló by name
     { tags: ['name=Torre Mapfre'], model: 'ES_CAT_BCN_torre_mapfre.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Torre Mapfre by name
-    { tags: ['recycling_type=container'], model: 'w_recycling_type_container.glb', geometryType: 'point', config: { scale: 4.0, heightOffset: 0.0, rotation: [30, 40, 50] } },  // Recycling container model for recycling_type=container 
+    //{ tags: ['recycling_type=container'], model: 'w_recycling_type_container.glb', geometryType: 'point', config: { scale: 4.0, heightOffset: 0.0, rotation: [30, 40, 50] } },  // Recycling container model for recycling_type=container 
     
     // Area models (new functionality) - supports both actual polygons and ways tagged as areas
    //  { tags: ['area:highway=footway'], model: 'llamborda.jpg', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway area models
    { tags: ['highway=footway'], model: 'w_highway_footway.glb', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway area models
    { tags: ['highway=residential'], model: 'w_highway_residential.glb', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Residential area models
-   // { tags: ['building=residential'], model: 'w_highway_residential.glb', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Residential building areas
+   { tags: ['highway=motorway'], model: 'w_highway_residential.glb', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Residential area models
+   { tags: ['highway=motorway_link'], model: 'w_highway_residential.glb', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Residential area models
+      // { tags: ['building=residential'], model: 'w_highway_residential.glb', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Residential building areas
   // { tags: ['building'], model: 'w_highway_residential.glb', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Generic building areas
   { tags: ['amenity=parking', 'orientation=diagonal'], model: '', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Parking area models  
+  { tags: ['amenity=parking', 'orientation=parallel'], model: '', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Parking area models 
    { tags: ['amenity=parking_space'], model: '', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Parking area models  
     { tags: ['amenity=parking'], model: '', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Parking area models
-  { tags: ['area:barrier=kerb'], model: 'noimage.jpg', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway area texture
-  { tags: ['area:highway=cycleway'], model: 'noimage.jpg', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway area texture    
-  { tags: ['area:highway=footway', 'footway=sidewalk'], model: 'noimage.jpg', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway area texture
-  { tags: ['area:highway=footway', 'footway=crossing'], model: 'noimage.jpg', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway point models
+  { tags: ['area:barrier=kerb'], model: 'noimage.png', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway area texture
+  { tags: ['area:highway=cycleway'], model: 'noimage.png', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway area texture    
+  { tags: ['area:highway=footway', 'footway=sidewalk'], model: 'noimage.png', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway area texture
+  { tags: ['area:highway=footway', 'footway=crossing'], model: 'noimage.png', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway point models
 { tags: ['area:highway=residential'], model: 'i_asfalt.jpg', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Residential area-tagged ways
+// Tunnel/bridge carriageway areas. These ways carry ONLY area:highway (no
+// highway= key), so without an entry here getModelForTags() returns null and
+// BOTH entry points drop the feature before area_repetition.js is ever asked:
+// the geojson loader logs "No model mapping found for tags" and the overlay
+// menu's assignModelToFeature() simply returns. area_repetition.js already
+// had i_asfalt.jpg configs for these two tags - they were unreachable.
+{ tags: ['area:highway=motorway'], model: 'i_asfalt.jpg', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Motorway carriageway areas (tunnels, bridges)
+{ tags: ['area:highway=motorway_link'], model: 'i_asfalt.jpg', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Motorway link areas
+{ tags: ['area:highway=*'], model: 'i_asfalt.jpg', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Other area-tagged highways
 { tags: ['amenity=motorcycle_parking'], model: '', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Motorcycle parking model for amenity=motorcycle_parking   
 { tags: ['leisure=garden'], model: '', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Garden area models
    { tags: ['leisure=playground'], model: '', geometryType: 'area', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Playground area models
@@ -119,6 +168,10 @@ const modelMappings = [
   { tags: ['barrier=kerb'], model: 'w_barrier_kerb.gltf', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Kerb
   
   // Fence models for way repetition - comprehensive fence type support
+   { tags: ['road_markings=edge_line', 'stroke=solid'], model: 'w_stroke_solid.glb', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Kerb
+   { tags: ['road_markings=lane_divider', 'stroke=dashed'], model: 'w_stroke_dashed.glb', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Kerb
+ 
+ { tags: ['barrier=fence', 'fence_type=railing'], model: 'w_barrier_fence_type_railing.glb', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Wood fence
   { tags: ['barrier=fence', 'fence_type=wood'], model: 'w_barrier_fence_wood.gltf', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Wood fence
   { tags: ['barrier=fence', 'fence_type=metal'], model: 'w_barrier_fence_wood.gltf', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Metal fence
   { tags: ['barrier=fence', 'fence_type=chain_link'], model: 'w_barrier_fence_wood.gltf', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Chain link fence
@@ -130,16 +183,22 @@ const modelMappings = [
   { tags: ['fence_type=chain_link'], model: 'w_barrier_fence_wood.gltf', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Chain link fence by type only
   { tags: ['fence_type=wire'], model: 'w_barrier_fence_wood.gltf', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Wire fence by type only
   { tags: ['fence_type=pole'], model: 'w_barrier_fence_wood.gltf', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Pole fence by type only
-  { tags: ['highway=cycleway'], model: 'w_highway_cycleway.gltf', geometryType: 'line', config: { scale: 4.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Residential road line models 
-  { tags: ['highway=footway'], model: 'w_highway_footway.glb', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway line models
-    { tags: ['footway=sidewalk'], model: 'w_highway_footway.glb', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Sidewalk line models
-   { tags: ['highway=residential'], model: 'w_highway_residential.gltf', geometryType: 'line', config: { scale: 6.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Residential road line models
+  { tags: ['barrier=wall'], model: 'w_barrier_wall.glb', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Generic wall
+    { tags: ['highway=cycleway'], model: 'w_highway_cycleway.glb', geometryType: 'line', config: { scale: 4.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Residential road line models 
+  { tags: ['highway=footway'], model: 'w_highway_footway.glb', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, -Math.PI / 4, 0] } }, // Asset mesh has an authored 45° yaw
+    { tags: ['footway=sidewalk'], model: 'w_highway_footway.glb', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, -Math.PI / 4, 0] } }, // Asset mesh has an authored 45° yaw
+   { tags: ['highway=residential'], model: 'w_highway_residential.gltf', geometryType: 'line', config: { scale: 3.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Residential road line models
+   { tags: ['highway=motorway'], model: 'w_highway_residential.gltf', geometryType: 'line', config: { scale: 6.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Residential road line models
+   { tags: ['highway=motorway_link'], model: 'w_highway_residential.gltf', geometryType: 'line', config: { scale: 6.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Residential road line models 
    { tags: ['highway=path'], model: 'w_highway_track.gltf', geometryType: 'line', config: { scale: 2.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Residential road line models
    { tags: ['highway=track'], model: 'w_highway_track.gltf', geometryType: 'line', config: { scale: 6.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Residential road line models
    { tags: ['natural=beach'], model: 'w_natural_beach.gltf', geometryType: 'line', config: { scale: 12.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Residential road line models
    { tags: ['natural=coastline'], model: 'w_natural_beach.gltf', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Residential road line models
-   { tags: ['barrier=kerb'], model: 'w_barrier_kerb.gltf', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Kerb
-    { tags: ['waterway=drain'], model: 'w_waterway_stream.gltf', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Drain area models (closed drains)
+   { tags: ['railway=rail'], model: 'w_railway_rail.glb', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Railway rail
+      { tags: ['barrier=kerb'], model: 'w_barrier_kerb.gltf', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Kerb
+{ tags: ['barrier=guard_rail', 'bridge=yes'], model: 'w_barrier_guard_rail_bridge.glb', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // guard_rail   
+   { tags: ['barrier=guard_rail'], model: 'w_barrier_guard_rail.glb', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // guard_rail 
+   { tags: ['waterway=drain'], model: 'w_waterway_stream.gltf', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Drain area models (closed drains)
    
     //{ tags: ['area:highway=footway'], model: 'w_highway_footway.glb', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway line models
    
@@ -211,6 +270,38 @@ function calculateBearing(wayCoordinates, nodeIndex) {
 }
 
 /**
+ * Work out the bearing a model should be rotated by, in radians.
+ *
+ * A LineString is oriented by its OWN way, as before. A point is oriented by
+ * the street it stands in, resolved through the declarative rules in
+ * model_orientation.js — that is where "turn toward the way" vs "run along
+ * the way" vs "never turn" is decided.
+ *
+ * @returns {number|null} radians, or null for "no rotation"
+ */
+function resolveBearing(tags, wayCoordinates, nodeIndex, orientationContext) {
+    // Backward compatibility: a caller that already worked out a bearing.
+    if (!orientationContext && tags && tags._parentWayBearing !== undefined) {
+        return tags._parentWayBearing;
+    }
+    if (wayCoordinates && nodeIndex !== null) {
+        return calculateBearing(wayCoordinates, nodeIndex);
+    }
+    if (!orientationContext || !orientationContext.pointLonLat || !orientationContext.allFeatures) {
+        return null;
+    }
+    if (!window.modelOrientation) return null;
+
+    const rule = window.modelOrientation.resolveRule(tags);
+    const found = window.modelOrientation.bearingFor(
+        orientationContext.pointLonLat, orientationContext.allFeatures, {
+            facing: rule.facing,
+            against: rule.against
+        });
+    return found ? found.bearing : null;
+}
+
+/**
  * Adjust model config based on direction tags
  * @param {object} config - Original config object
  * @param {object} tags - OSM tags
@@ -222,7 +313,14 @@ function adjustConfigForDirection(config, tags, bearing) {
     // Use bearing from parameter, or from parent way, or default to 0
     const baseBearing = bearing !== null ? bearing : 
                        (tags._parentWayBearing !== undefined ? tags._parentWayBearing : 0);
-    adjustedConfig.rotation[1] = -baseBearing;
+
+    // rotation[1] as AUTHORED in the mapping is a constant OFFSET, added to the
+    // bearing instead of being overwritten by it. A glTF has its own idea of
+    // which way the model faces (forward may be +X, -Z, +Y...), so a model can
+    // come out 90 or 180 degrees out. Set rotation: [0, Math.PI/2, 0] on that
+    // mapping to correct it without touching any orientation code.
+    const offset = (Array.isArray(config.rotation) ? config.rotation[1] : 0) || 0;
+    adjustedConfig.rotation[1] = -baseBearing + offset;
     
     // Check for orientation tag (degrees) first, then direction tag
     const orientation = tags['orientation'];
@@ -231,7 +329,7 @@ function adjustConfigForDirection(config, tags, bearing) {
         // Convert orientation from degrees to radians and apply to Y-axis (heading)
         // Orientation: 0° = north, 90° = east, 180° = south, 270° = west
         const orientationRadians = parseFloat(orientation) * Math.PI / 180;
-        adjustedConfig.rotation[1] = -orientationRadians; // Negative for correct orientation
+        adjustedConfig.rotation[1] = -orientationRadians + offset; // Negative for correct orientation
         console.log(`🧭 Applied orientation ${orientation}° (${orientationRadians.toFixed(3)} rad) to rotation[1]: ${adjustedConfig.rotation[1].toFixed(3)}`);
         return adjustedConfig;
     }
@@ -244,7 +342,7 @@ function adjustConfigForDirection(config, tags, bearing) {
         // Convert direction from degrees to radians and apply to Y-axis (heading)
         // Direction: 0° = north, 90° = east, 180° = south, 270° = west
         const directionRadians = parseFloat(direction) * Math.PI / 180;
-        adjustedConfig.rotation[1] = -directionRadians; // Negative for correct orientation
+        adjustedConfig.rotation[1] = -directionRadians + offset; // Negative for correct orientation
         console.log(`🧭 Applied direction ${direction}° (${directionRadians.toFixed(3)} rad) to rotation[1]: ${adjustedConfig.rotation[1].toFixed(3)}`);
         return adjustedConfig;
     }
@@ -279,33 +377,146 @@ function adjustConfigForDirection(config, tags, bearing) {
  * @param {Array<Array<number>>|null} wayCoordinates - Array of [lon, lat] coordinates of the way, or null
  * @param {number|null} nodeIndex - Index of the node in the way coordinates, or null
  * @param {string} geometryType - The geometry type ('point', 'line', 'area')
+ * @param {{pointLonLat?:Array<number>, allFeatures?:Array}} [orientationContext] - where a POINT
+ *        feature sits, so it can be turned to face (or run along) the right
+ *        way. Which way, and whether it turns at all, comes from the
+ *        declarative rules in model_orientation.js.
  * @returns {object|null} Mapping object {tags, model, geometryType, config} or null if no mapping exists
  */
-function getModelForTags(tags, wayCoordinates = null, nodeIndex = null, geometryType = 'point') {
-    console.log(`🔍 Checking model mappings for tags:`, tags, `geometry type: ${geometryType}`);
-    for (const mapping of modelMappings) {
-        // Check if geometry type matches (default to 'point' for backward compatibility)
+// ---------------------------------------------------------------------------
+// Inverted lookup index
+// ---------------------------------------------------------------------------
+// getModelForTags() used to walk the WHOLE catalogue — all 76 mappings — for
+// EVERY feature, testing each mapping's tags one at a time. It also printed a
+// line per tag tested. For a city extract that is 3854 features x 76 mappings x
+// ~2 tags, i.e. hundreds of thousands of string comparisons and console lines
+// re-deriving the same answer over and over, which is most of what made
+// switching to 3D feel like it was hanging.
+//
+// The catalogue never changes at runtime, so the work does not belong per
+// feature. This builds the index ONCE, on first use:
+//
+//     geometryType -> firstTagKey -> firstTagValue -> [mappings, in catalogue order]
+//
+// A mapping can only ever match a feature if its FIRST tag matches, so a feature
+// that fails the first tag needs no further test. Looking a feature up is then
+// "which mappings could possibly apply to it", which is a hash lookup plus a
+// handful of confirmations instead of 76 scans.
+//
+// Two things are preserved exactly, because the order decides which model wins:
+//
+//   1. CATALOGUE ORDER. `amenity=parking_space` (specific) is listed before
+//      `amenity=parking` (generic) on purpose, and the first match is the one
+//      that applies. The buckets therefore keep their catalogue order and the
+//      confirmed candidates are re-sorted by that order before one is chosen.
+//
+//   2. FIRST MATCH WINS ACROSS BUCKETS. A mapping may name a tag the feature
+//      also has, so candidates arrive from several buckets at once; they are
+//      merged and ordered before the first hit is returned.
+//
+// Nothing about the returned object changes: same mapping, same adjusted config.
+let mappingIndex = null;
+
+function buildMappingIndex() {
+    const index = new Map();
+
+    modelMappings.forEach((mapping, order) => {
         const mappingGeometryType = mapping.geometryType || 'point';
-        if (mappingGeometryType !== geometryType) continue;
-        
+        let byKey = index.get(mappingGeometryType);
+        if (!byKey) {
+            byKey = new Map();
+            index.set(mappingGeometryType, byKey);
+        }
+
+        // Bucket on the FIRST tag only — that is the one that has to match for
+        // the mapping to be a candidate at all. `split('=')` is what the
+        // original test used, and keeping it means a tag with no '=' (value
+        // undefined) still lands in the same place it used to match.
+        const firstTag = mapping.tags[0];
+        const [key, value] = String(firstTag).split('=');
+
+        let byValue = byKey.get(key);
+        if (!byValue) {
+            byValue = new Map();
+            byKey.set(key, byValue);
+        }
+        let bucket = byValue.get(value);
+        if (!bucket) {
+            bucket = [];
+            byValue.set(value, bucket);
+        }
+        bucket.push({ order, mapping });
+    });
+
+    return index;
+}
+
+/** Drop the cached index. Only needed if modelMappings is ever mutated. */
+function invalidateMappingIndex() {
+    mappingIndex = null;
+}
+
+/**
+ * How many mappings the index holds, and how deep a lookup has to go.
+ * Handy for confirming the index was actually built.
+ */
+function getMappingIndexStats() {
+    if (!mappingIndex) mappingIndex = buildMappingIndex();
+    const stats = {};
+    mappingIndex.forEach((byKey, geometryType) => {
+        let mappings = 0;
+        byKey.forEach(byValue => { mappings += byValue.size; });
+        stats[geometryType] = { firstTagKeys: byKey.size, mappings };
+    });
+    return stats;
+}
+
+function getModelForTags(tags, wayCoordinates = null, nodeIndex = null, geometryType = 'point', orientationContext = null) {
+    if (!mappingIndex) mappingIndex = buildMappingIndex();
+
+    const byKey = mappingIndex.get(geometryType);
+    // Nothing in the catalogue is declared for this geometry type at all —
+    // e.g. asking for 'line' models on a file with no line mappings. One lookup,
+    // done, instead of 76 failed scans.
+    if (!byKey) return null;
+
+    // Gather every mapping whose FIRST tag this feature satisfies, then let the
+    // catalogue order decide between them (see the note at the top).
+    const candidates = [];
+    byKey.forEach((byValue, key) => {
+        const bucket = byValue.get(tags[key]);
+        if (bucket) {
+            for (let i = 0; i < bucket.length; i++) candidates.push(bucket[i]);
+        }
+        const wildcardBucket = byValue.get('*');
+        if (wildcardBucket) {
+            for (let i = 0; i < wildcardBucket.length; i++) candidates.push(wildcardBucket[i]);
+        }
+    });
+    if (candidates.length === 0) return null;
+    candidates.sort((a, b) => a.order - b.order);
+
+    for (let c = 0; c < candidates.length; c++) {
+        const mapping = candidates[c].mapping;
+
+        // Confirm the REMAINING tags. The first one already matched (that is
+        // what put this mapping in the bucket), but re-testing all of them keeps
+        // the rule identical to the original "every tag must match".
         const allMatch = mapping.tags.every(tag => {
             const [key, value] = tag.split('=');
-            // Handle compound keys like 'area:highway' - these are single tags, not combinations
-            const tagValue = tags[key];
-            const matches = tagValue === value;
-            console.log(`🔍 Checking tag ${key}=${value}, found value: ${tagValue}, matches: ${matches}`);
-            return matches;
+            return value === '*' ? tags[key] !== undefined : tags[key] === value;
         });
-        if (allMatch) {
-            console.log(`🔍 Found matching model ${mapping.model} for tags:`, mapping.tags, `geometry type: ${geometryType}`);
-            const bearing = wayCoordinates && nodeIndex !== null ? calculateBearing(wayCoordinates, nodeIndex) : null;
-            console.log(`🔍 For bench: bearing=${bearing}, wayCoordinates=${wayCoordinates ? wayCoordinates.length : 'null'}, nodeIndex=${nodeIndex}`);
-            const adjustedConfig = adjustConfigForDirection(mapping.config, tags, bearing);
-            console.log(`🔍 Final config for bench:`, adjustedConfig);
-            return { ...mapping, config: adjustedConfig };
-        }
+        if (!allMatch) continue;
+
+        // Line repetitions calculate a local bearing for each segment. Keep
+        // only the model-axis offset here; baking the whole-way bearing into
+        // the mapping rotation makes curved and multi-segment lines misalign.
+        const bearing = geometryType === 'line'
+            ? null
+            : resolveBearing(tags, wayCoordinates, nodeIndex, orientationContext);
+        const adjustedConfig = adjustConfigForDirection(mapping.config, tags, bearing);
+        return { ...mapping, config: adjustedConfig };
     }
-    console.log(`🔍 No model mapping found for tags:`, tags, `geometry type: ${geometryType}`);
     return null;
 }
 
@@ -325,6 +536,8 @@ window.models = {
     availableModels,
     modelMappings,
     getModelForTags,
+    invalidateMappingIndex,
+    getMappingIndexStats,
     modelExists,
     calculateBearing,
     isLineStringClosed

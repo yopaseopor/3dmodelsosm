@@ -3,6 +3,7 @@
  * Handles 3D model operations in Cesium scene, including area textures and point models
  */
 
+<<<<<<< HEAD
 const CESIUM_AREA_TEXTURE_MAX_CANVAS = 2048;
 const CESIUM_AREA_TEXTURE_JPEG_QUALITY = 0.78;
 
@@ -34,9 +35,24 @@ function getLayerVerticalOffsetMeters(tags) {
 const bridgeUseSingleHeight = false;
 const bridgeTextureHeight = 0;
 
+=======
+>>>>>>> 8c67cb33de1c99b8bb0be01bae09b51d91a90d30
 function cesiumModelsVerbose() {
     return typeof window !== 'undefined' && window.globalDebugConfig &&
         window.globalDebugConfig.cesiumModels && window.globalDebugConfig.cesiumModels.verbose;
+}
+
+function isUndergroundAreaTexture(tagsObj) {
+    const tunnel = String(tagsObj && tagsObj.tunnel || '').trim().toLowerCase();
+    const layer = parseFloat(String(tagsObj && tagsObj.layer || '').trim().replace(',', '.'));
+    return tunnel === 'yes' || (isFinite(layer) && layer === -1);
+}
+
+function shouldShowAreaTexture(tagsObj) {
+    const underground = !!(window.indoor &&
+        typeof window.indoor.isUndergroundEnabled === 'function' &&
+        window.indoor.isUndergroundEnabled());
+    return isUndergroundAreaTexture(tagsObj) === underground;
 }
 
 // Area texture management
@@ -166,6 +182,62 @@ class AreaTextureManager {
 
             if (cesiumModelsVerbose()) console.log(`🎨 Processing ${polygonSets.length} polygon set(s)`);
 
+            const bridgeTag = tagsObj.bridge;
+            const bridgeValue = typeof bridgeTag === 'string' ? bridgeTag.trim().toLowerCase() : '';
+            const isBridgeTexture = !(modelConfig && modelConfig.tunnelSurface) &&
+                (bridgeTag === true || bridgeTag === 1 ||
+                    (bridgeValue !== '' && !['no', 'false', '0'].includes(bridgeValue)));
+            const toWgs84 = (coord) => {
+                if (coord[0] >= -180 && coord[0] <= 180 && coord[1] >= -90 && coord[1] <= 90) {
+                    return coord;
+                }
+                return ol.proj.transform(coord, projection, 'EPSG:4326');
+            };
+            let bridgeSurfaceHeight = modelConfig &&
+                typeof modelConfig.fixedSurfaceHeight === 'number' &&
+                isFinite(modelConfig.fixedSurfaceHeight)
+                ? modelConfig.fixedSurfaceHeight
+                : null;
+            if (isBridgeTexture) {
+                bridgeSurfaceHeight = feature.get('bridgeRefHeight');
+                if (bridgeSurfaceHeight === undefined || bridgeSurfaceHeight === null || !isFinite(bridgeSurfaceHeight)) {
+                    const firstOuterRing = polygonSets[0] && normalizeRing(polygonSets[0][0]);
+                    if (!firstOuterRing || firstOuterRing.length === 0) {
+                        throw new Error('Bridge texture has no outer-ring coordinates');
+                    }
+                    const referencePosition = firstOuterRing.reduce((sum, coord) => {
+                        const lonLat = toWgs84(coord);
+                        sum[0] += lonLat[0];
+                        sum[1] += lonLat[1];
+                        return sum;
+                    }, [0, 0]).map(value => value / firstOuterRing.length);
+                    if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
+                        window.mapterhornTerrain.warmUp(referencePosition[0], referencePosition[1]);
+                    }
+                    if (typeof window.getBridgeReferenceHeight === 'function') {
+                        bridgeSurfaceHeight = window.getBridgeReferenceHeight(feature, referencePosition);
+                    } else {
+                        const localHeight = window.terrainManager && window.terrainManager.getElevation
+                            ? window.terrainManager.getElevation(referencePosition[0], referencePosition[1])
+                            : null;
+                        const terrainHeight = window.mapterhornTerrain && window.mapterhornTerrain.getElevation
+                            ? window.mapterhornTerrain.getElevation(referencePosition[0], referencePosition[1])
+                            : null;
+                        bridgeSurfaceHeight = localHeight !== null && localHeight !== undefined && isFinite(localHeight)
+                            ? localHeight
+                            : (terrainHeight !== null && terrainHeight !== undefined && isFinite(terrainHeight)
+                                ? terrainHeight
+                                : 0);
+                        feature.set('bridgeRefHeight', bridgeSurfaceHeight);
+                        feature.set('bridgeRefPosition', referencePosition);
+                    }
+                }
+            } else if (modelConfig &&
+                typeof modelConfig.underBridgeSurfaceHeight === 'number' &&
+                isFinite(modelConfig.underBridgeSurfaceHeight)) {
+                bridgeSurfaceHeight = modelConfig.underBridgeSurfaceHeight;
+            }
+
             const entities = [];
 
             for (let pIdx = 0; pIdx < polygonSets.length; pIdx++) {
@@ -188,6 +260,7 @@ class AreaTextureManager {
                     outerRing = outerRing.concat([outerRing[0]]);
                 }
 
+<<<<<<< HEAD
                 const toWgs84 = (coord) => {
                     if (coord[0] >= -180 && coord[0] <= 180 && coord[1] >= -90 && coord[1] <= 90) {
                         return coord; // Already WGS84
@@ -211,6 +284,20 @@ class AreaTextureManager {
                 const demSampler = (function() {
                     if (window.mapterhornTerrain && window.mapterhornTerrain.getElevation) {
                         return (lon, lat) => window.mapterhornTerrain.getElevation(lon, lat);
+=======
+                // Ordinary surfaces follow the terrain. A bridge surface uses
+                // one explicit height for every vertex so it cannot slope with
+                // the mountain beneath it.
+                const cesiumOuter = outerRing.map((coord, idx) => {
+                    try {
+                        const lonLat = toWgs84(coord);
+                        return bridgeSurfaceHeight === null
+                            ? Cesium.Cartesian3.fromDegrees(lonLat[0], lonLat[1])
+                            : Cesium.Cartesian3.fromDegrees(lonLat[0], lonLat[1], bridgeSurfaceHeight);
+                    } catch (e) {
+                        console.error(`🎨 Error transforming coordinate`, coord, ':', e.message);
+                        return null;
+>>>>>>> 8c67cb33de1c99b8bb0be01bae09b51d91a90d30
                     }
                     if (window.terrainManager && window.terrainManager.getElevation) {
                         return (lon, lat) => window.terrainManager.getElevation(lon, lat);
@@ -304,7 +391,9 @@ class AreaTextureManager {
                         const holePositions = closedHole.map((coord, hi) => {
                             try {
                                 const lonLat = toWgs84(coord);
-                                return Cesium.Cartesian3.fromDegrees(lonLat[0], lonLat[1]);
+                                return bridgeSurfaceHeight === null
+                                    ? Cesium.Cartesian3.fromDegrees(lonLat[0], lonLat[1])
+                                    : Cesium.Cartesian3.fromDegrees(lonLat[0], lonLat[1], bridgeSurfaceHeight);
                             } catch (e) {
                                 console.error(`🎨 Error transforming hole coordinate`, coord, ':', e.message);
                                 return null;
@@ -323,15 +412,41 @@ class AreaTextureManager {
                     ol.proj.transform(coord, projection, 'EPSG:4326')
                 );
                 const textureRotation = this.calculateTextureRotation(polygonCoords, imageUrl, tagsObj);
+                const textureBounds = polygonCoords.reduce((bounds, coord) => ({
+                    minLon: Math.min(bounds.minLon, coord[0]),
+                    maxLon: Math.max(bounds.maxLon, coord[0]),
+                    minLat: Math.min(bounds.minLat, coord[1]),
+                    maxLat: Math.max(bounds.maxLat, coord[1])
+                }), {
+                    minLon: Infinity, maxLon: -Infinity,
+                    minLat: Infinity, maxLat: -Infinity
+                });
+                const tileSizeMeters = modelConfig && Number.isFinite(modelConfig.scale) &&
+                    modelConfig.scale > 0 ? modelConfig.scale : 1;
+                const centerLat = (textureBounds.minLat + textureBounds.maxLat) / 2;
+                const repeatX = (textureBounds.maxLon - textureBounds.minLon) *
+                    111320 * Math.cos(centerLat * Math.PI / 180) / tileSizeMeters;
+                const repeatY = (textureBounds.maxLat - textureBounds.minLat) *
+                    111320 / tileSizeMeters;
 
-                // Create GroundPrimitive — same layer as GLTF models, drapes over DEM terrain
-                // No separate data source needed; primitives go into scene.primitives.
+                // Use a regular primitive for bridge polygons at their fixed
+                // height; GroundPrimitive remains appropriate for terrain-draped
+                // surfaces beneath bridges and elsewhere.
                 try {
-                    const gpTexture = new Cesium.GroundPrimitive({
+                    const texturePrimitive = bridgeSurfaceHeight === null
+                        ? Cesium.GroundPrimitive
+                        : Cesium.Primitive;
+                    const gpTexture = new texturePrimitive({
                         geometryInstances: new Cesium.GeometryInstance({
                             geometry: new Cesium.PolygonGeometry({
                                 polygonHierarchy: hierarchy,
+<<<<<<< HEAD
                                 vertexFormat: vertexFormat
+=======
+                                vertexFormat: Cesium.MaterialAppearance.MaterialSupport.TEXTURED.vertexFormat,
+                                stRotation: textureRotation,
+                                perPositionHeight: bridgeSurfaceHeight !== null
+>>>>>>> 8c67cb33de1c99b8bb0be01bae09b51d91a90d30
                             }),
                             attributes: {
                                 color: Cesium.ColorGeometryInstanceAttribute.fromColor(Cesium.Color.WHITE)
@@ -339,12 +454,23 @@ class AreaTextureManager {
                         }),
                         appearance: new Cesium.MaterialAppearance({
                             material: new Cesium.Material({
+<<<<<<< HEAD
                                 fabric: { type: 'Image', uniforms: { image: imageUrl, inclination: bridgeDeckInclination } }
+=======
+                                fabric: {
+                                    type: 'Image',
+                                    uniforms: {
+                                        image: imageUrl,
+                                        repeat: new Cesium.Cartesian2(repeatX, repeatY)
+                                    }
+                                }
+>>>>>>> 8c67cb33de1c99b8bb0be01bae09b51d91a90d30
                             }),
                             translucent: true
                         }),
                         asynchronous: false
                     });
+                    gpTexture.show = shouldShowAreaTexture(tagsObj);
                     // Add directly to scene primitives — same layer as 3D models
                     if (window.ol3d && window.ol3d.getCesiumScene) {
                         const scene = window.ol3d.getCesiumScene();
@@ -414,8 +540,15 @@ class AreaTextureManager {
     calculateTextureRotation(polygonCoordinates, textureName, tagsObj = {}) {
         if (cesiumModelsVerbose()) console.log(`🎨 calculateTextureRotation: ${textureName}`);
 
+        const textureTags = tagsObj || {};
+        const isFootwayArea = textureName.toLowerCase().includes('i_llamborda.jpg') && (
+            textureTags['area:highway'] === 'footway' ||
+            textureTags.highway === 'footway' ||
+            textureTags.footway === 'sidewalk'
+        );
+
         // Special case: disabled parking spaces should not be rotated to maintain proper orientation
-        if (tagsObj && tagsObj['parking_space'] === 'disabled') {
+        if (textureTags['parking_space'] === 'disabled') {
             if (cesiumModelsVerbose()) console.log(`🎨 disabled parking space: no rotation`);
             return 0;
         }
@@ -456,6 +589,15 @@ class AreaTextureManager {
 
             const isParkingTexture = textureName.toLowerCase().includes('i_parking');
             let sourceWays = nearbyWays;
+            if (isFootwayArea) {
+                sourceWays = nearbyWays.filter(feature =>
+                    feature.get && (
+                        feature.get('highway') === 'footway' ||
+                        feature.get('footway') === 'sidewalk' ||
+                        feature.get('area:highway') === 'footway'
+                    )
+                );
+            }
             if (isParkingTexture) {
                 const kerbWays = nearbyWays.filter(f => f.get && f.get('barrier') === 'kerb');
                 if (kerbWays.length > 0) {
@@ -465,6 +607,10 @@ class AreaTextureManager {
             }
 
             if (sourceWays.length === 0) {
+                if (isFootwayArea) {
+                    if (cesiumModelsVerbose()) console.log(`🎨 no nearby footway → 0`);
+                    return 0;
+                }
                 const closestFallbackSegment = this.findClosestWaySegmentToPolygon(
                     layers,
                     polygonCoordinates,
