@@ -738,9 +738,9 @@ function getInterpolatedBridgeHeight(feature, bridge, lonLatPosition) {
     }
     if (!closestPoint || closestDist > 1.0) return null;
 
-    // Sample DEM at 20-50m perpendicular distances on both sides
-    // This captures the medium ground height away from structure interference
-    const SAMPLE_DISTS = [20, 30, 40, 50];  // meters
+    // Sample DEM at 5m and 10m perpendicular distances on both sides
+    // This captures the middle ground height away from crossing interference
+    const SAMPLE_DISTS = [5, 10];  // meters - two points on each side
     const TOLERANCE = 1.0;  // max allowed difference between samples (meters)
 
     const perpDir1 = segmentAngle + Math.PI / 2;
@@ -754,18 +754,23 @@ function getInterpolatedBridgeHeight(feature, bridge, lonLatPosition) {
         return sampleGroundElevation(lonLatPosition[0] + lonOffset, lonLatPosition[1] + latOffset);
     }
 
-    // Sample at multiple distances on both sides
-    const samples = [];
-    for (const dist of SAMPLE_DISTS) {
-        const h1 = sampleAt(dist, perpDir1);
-        const h2 = sampleAt(dist, perpDir2);
-        if (h1 !== null) samples.push(h1);
-        if (h2 !== null) samples.push(h2);
-    }
+    // Sample at 5m and 10m on both sides of crossing
+    const h1_5m = sampleAt(5, perpDir1);
+    const h2_5m = sampleAt(5, perpDir2);
+    const h1_10m = sampleAt(10, perpDir1);
+    const h2_10m = sampleAt(10, perpDir2);
 
-    if (samples.length < 4) return null;
+    const samples = [h1_5m, h2_5m, h1_10m, h2_10m].filter(h => h !== null);
 
-    // Check consistency: if any pair differs by more than TOLERANCE, fall back to raw DEM
+    if (samples.length < 2) return null;
+
+    // Calculate median height
+    const sorted = samples.slice().sort((a, b) => a - b);
+    const medianHeight = sorted.length % 2 === 0
+        ? (sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2
+        : sorted[Math.floor(sorted.length / 2)];
+
+    // Check consistency
     const avgHeight = samples.reduce((a, b) => a + b, 0) / samples.length;
     let isConsistent = true;
     for (let i = 0; i < samples.length; i++) {
@@ -780,8 +785,8 @@ function getInterpolatedBridgeHeight(feature, bridge, lonLatPosition) {
         return null;
     }
 
-    console.log(`🔍 Crossing interp: ${samples.length} samples at 20-50m → ${avgHeight.toFixed(2)}m (dist=${closestDist.toFixed(2)}m)`);
-    return avgHeight;
+    console.log(`🔍 Crossing interp: ${samples.length} samples at 5-10m → median=${medianHeight.toFixed(2)}m (avg=${avgHeight.toFixed(2)}m, dist=${closestDist.toFixed(2)}m)`);
+    return medianHeight;
 }
 
 function getFeatureHeightOffset(feature) {
@@ -1680,9 +1685,8 @@ window.modelRenderer = {
         // Force ground elevation for barriers, ignore bridge tag
         const isActuallyBridge = isBridge && !isBarrier;
 
-        // For barriers: ALWAYS use ground level, never bridge deck height
-        const forceGround = isBarrier;
-
+        // For barriers: use crossing interpolation if near a crossing feature,
+        // otherwise use regular ground DEM (never bridge deck height)
         let terrainElevation;
         if (isTunnel) {
             terrainElevation = getTunnelElevation();
@@ -1690,13 +1694,20 @@ window.modelRenderer = {
             // Feature is UNDER a bridge: use cached ground height (same as textures)
             // This applies to ALL features under bridges, including barriers with bridge=yes
             terrainElevation = underBridge.height;
-        } else if (forceGround) {
-            // Barriers without bridge tag: ALWAYS use ground level
+        } else if (isBarrier) {
+            // Barriers without bridge tag: use crossing interpolation if near crossing,
+            // otherwise regular ground DEM
             if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
                 try { window.mapterhornTerrain.warmUp(lonLat[0], lonLat[1]); } catch (e) { /* no DEM yet */ }
             }
-            terrainElevation = sampleGroundElevation(lonLat[0], lonLat[1]);
-            console.log(`🔍 Barrier ground: ${feature.get('barrier')} at [${lonLat[0].toFixed(6)},${lonLat[1].toFixed(6)}] using DEM=${terrainElevation.toFixed(2)}m`);
+            const crossingHeight = getInterpolatedBridgeHeight(feature, bridgeAbove, lonLat);
+            if (crossingHeight !== null) {
+                terrainElevation = crossingHeight;
+                console.log(`🔍 Barrier crossing interp: ${feature.get('barrier')} using median=${terrainElevation.toFixed(2)}m`);
+            } else {
+                terrainElevation = sampleGroundElevation(lonLat[0], lonLat[1]);
+                console.log(`🔍 Barrier ground: ${feature.get('barrier')} using DEM=${terrainElevation.toFixed(2)}m`);
+            }
         } else if (isActuallyBridge) {
             // Feature is a BRIDGE (and not a barrier): use bridge reference height
             terrainElevation = getBridgeReferenceHeight(feature, lonLat);
@@ -2079,9 +2090,7 @@ window.modelRenderer = {
         // first repetition so the whole bridge stays FLAT at one elevation
         // (no undulation down mountains). Non-bridge ways sample per-position
         // (ground level) and must NOT climb up to meet the bridge.
-        // BARRIERS ALWAYS use ground level, never bridge deck height.
-        const forceGroundRep = repIsBarrier;
-
+        // BARRIERS use crossing interpolation if near crossing, otherwise ground DEM.
         let repTerrainElevation;
         if (repIsTunnel) {
             repTerrainElevation = getTunnelElevation();
@@ -2089,13 +2098,19 @@ window.modelRenderer = {
             // Feature is UNDER a bridge: use cached ground height (same as textures)
             // This applies to ALL features under bridges, including barriers with bridge=yes
             repTerrainElevation = underBridge.height;
-        } else if (forceGroundRep) {
-            // Barriers without bridge tag: ALWAYS use ground level
+        } else if (repIsBarrier) {
+            // Barriers without bridge tag: use crossing interpolation if near crossing
             if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
                 try { window.mapterhornTerrain.warmUp(repLonLat[0], repLonLat[1]); } catch (e) { /* no DEM yet */ }
             }
-            repTerrainElevation = sampleGroundElevation(repLonLat[0], repLonLat[1]);
-            console.log(`🔍 Rep Barrier ground: ${feature.get('barrier')} at [${repLonLat[0].toFixed(6)},${repLonLat[1].toFixed(6)}] using DEM=${repTerrainElevation.toFixed(2)}m`);
+            const crossingHeight = getInterpolatedBridgeHeight(feature, bridgeAbove, repLonLat);
+            if (crossingHeight !== null) {
+                repTerrainElevation = crossingHeight;
+                console.log(`🔍 Rep Barrier crossing interp: ${feature.get('barrier')} using median=${repTerrainElevation.toFixed(2)}m`);
+            } else {
+                repTerrainElevation = sampleGroundElevation(repLonLat[0], repLonLat[1]);
+                console.log(`🔍 Rep Barrier ground: ${feature.get('barrier')} using DEM=${repTerrainElevation.toFixed(2)}m`);
+            }
         } else if (repIsBridge && !repIsBarrier) {
             repTerrainElevation = getBridgeReferenceHeight(feature, repLonLat);
         } else {
