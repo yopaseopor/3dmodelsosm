@@ -14,7 +14,7 @@ const memoryConfig = {
     cameraUpdateThrottle: 100,       // Throttle camera updates (ms)
 
     // Hard ceiling on live Cesium primitives created by this renderer
-    // (GLTF models + repetition models + area-texture GroundPrimitives).
+    // (GLTF models + repetition models + area-texture primitives).
     //
     // This was `maxTotalModels: 400`, compared against `this.totalModelsAdded`
     // — a counter that NOTHING in the file ever incremented. Its only
@@ -62,6 +62,50 @@ const memoryConfig = {
 // nothing. OL's per-object uid is stable, unique and needs no arguments, so it
 // is what we cache here.
 const OSM3D_KEY_PROPERTY = 'osm3dKey';
+
+/** Parse a plain numeric OSM value (levels, layer) */
+function parseOsNumber(value) {
+    if (value === undefined || value === null || value === '') return NaN;
+    if (typeof value === 'number') return isFinite(value) ? value : NaN;
+    const match = String(value).trim().replace(',', '.').match(/(-?\d+(?:\.\d+)?)/);
+    return match ? parseFloat(match[1]) : NaN;
+}
+
+function isTunnelFeature(feature) {
+    if (!feature || typeof feature.get !== 'function') return false;
+    const tunnel = String(feature.get('tunnel') || '').trim().toLowerCase();
+    return tunnel === 'yes' && parseOsNumber(feature.get('layer')) === -1;
+}
+
+function isUndergroundFeature(feature) {
+    if (!feature || typeof feature.get !== 'function') return false;
+    const tunnel = String(feature.get('tunnel') || '').trim().toLowerCase();
+    return tunnel === 'yes' || parseOsNumber(feature.get('layer')) === -1;
+}
+
+function getTunnelElevation() {
+    // Treat OSM layer -1 as one storey below a flat, DEM-independent datum.
+    return -3;
+}
+
+function isUndergroundViewEnabled() {
+    return !!(window.indoor && typeof window.indoor.isUndergroundEnabled === 'function' &&
+        window.indoor.isUndergroundEnabled());
+}
+
+/**
+ * Check whether a feature has a positive OSM bridge value.
+ * @param {ol.Feature} feature - OpenLayers feature with OSM tags as properties
+ * @returns {boolean} True when the feature is tagged as a bridge
+ */
+function isBridgeFeature(feature) {
+    if (!feature || typeof feature.get !== 'function') return false;
+    const bridge = feature.get('bridge');
+    if (bridge === true || bridge === 1) return true;
+    if (typeof bridge !== 'string') return false;
+    const value = bridge.trim().toLowerCase();
+    return value !== '' && !['no', 'false', '0'].includes(value);
+}
 
 function getFeatureKey(feature) {
     if (!feature || typeof feature.get !== 'function') return null;
@@ -142,10 +186,6 @@ function areaCentroidLonLat(coordinates) {
     return n ? [lon / n, lat / n] : null;
 }
 
-/** Max canvas edge for rotated area textures (pixels); lower = less RAM / GPU upload */
-const AREA_TEXTURE_MAX_CANVAS = 2048;
-const AREA_TEXTURE_JPEG_QUALITY = 0.78;
-
 // Import centralized debug configuration
 if (typeof window !== 'undefined' && window.globalDebugConfig) {
     var debugConfig = window.globalDebugConfig.modelRenderer;
@@ -158,27 +198,6 @@ if (typeof window !== 'undefined' && window.globalDebugConfig) {
         logRepetitionModels: false,
         logTextureProcessing: false
     };
-}
-
-// Vertical stacking from OSM layer=* (shared with buildings.js).
-// Kept in model_renderer.js so both repetition/GLTF placement and area-texture
-// deck placement can apply the same vertical separation when layer is present.
-var LAYER_STACK_METERS = typeof window !== 'undefined' && window.LAYER_STACK_METERS ? window.LAYER_STACK_METERS : 0.5;
-var LAYER_STACK_CLAMP = typeof window !== 'undefined' && window.LAYER_STACK_CLAMP ? window.LAYER_STACK_CLAMP : 5;
-
-function parseNumberLayer(value) {
-    if (value === undefined || value === null || value === '') return NaN;
-    if (typeof value === 'number') return isFinite(value) ? value : NaN;
-    const str = String(value).trim().replace(',', '.');
-    const match = str.match(/(-?\d+(?:\.\d+)?)/);
-    return match ? parseFloat(match[1]) : NaN;
-}
-
-function getLayerVerticalOffsetMeters(tags) {
-    const layer = parseNumberLayer(tags && tags.layer);
-    if (!isFinite(layer) || layer === 0) return 0;
-    const clamped = Math.max(-LAYER_STACK_CLAMP, Math.min(LAYER_STACK_CLAMP, layer));
-    return clamped * LAYER_STACK_METERS;
 }
 
 function modelRendererTexLog() {
@@ -312,6 +331,467 @@ function sampleGroundElevation(lon, lat) {
         if (dem !== null && dem !== undefined && isFinite(dem)) return dem;
     }
     return 0;
+}
+
+const bridgeSurfaceFeatureCache = new WeakMap();
+const BRIDGE_SURFACE_MATCH_DISTANCE_METERS = 30;
+
+function findBridgeSurfaceFeature(feature, position) {
+    if (!feature || !position || !window.map || !window.modelRenderer) return feature;
+    const featureGeometry = feature.getGeometry && feature.getGeometry();
+    if (feature.get('highway') && featureGeometry &&
+        ['LineString', 'MultiLineString'].includes(featureGeometry.getType())) return feature;
+    const cached = bridgeSurfaceFeatureCache.get(feature);
+    if (cached) return cached;
+
+    const featureLayer = parseOsNumber(feature.get('layer'));
+    const featureLevel = isFinite(featureLayer) ? featureLayer : 0;
+    const projection = window.map.getView().getProjection();
+    let closest = null;
+    let closestDistance = BRIDGE_SURFACE_MATCH_DISTANCE_METERS;
+    const layers = window.modelRenderer.getAllMapLayers(window.map.getLayers().getArray());
+
+    for (const layer of layers) {
+        const source = layer && layer.getSource && layer.getSource();
+        if (!source || !source.getFeatures) continue;
+        for (const candidate of source.getFeatures()) {
+            if (candidate === feature || !isBridgeFeature(candidate) ||
+                !candidate.get('highway')) continue;
+            const candidateLayer = parseOsNumber(candidate.get('layer'));
+            if ((isFinite(candidateLayer) ? candidateLayer : 0) !== featureLevel) continue;
+
+            const geometry = candidate.getGeometry && candidate.getGeometry();
+            if (!geometry || !['LineString', 'MultiLineString'].includes(geometry.getType())) continue;
+            let distance = Infinity;
+            for (const line of getGeometryLines(geometry)) {
+                for (let i = 0; i < line.length - 1; i++) {
+                    const start = ol.proj.transform(line[i], projection, 'EPSG:4326');
+                    const end = ol.proj.transform(line[i + 1], projection, 'EPSG:4326');
+                    distance = Math.min(
+                        distance,
+                        window.modelRenderer.pointToSegmentDistanceMeters(position, start, end)
+                    );
+                    if (distance === 0) break;
+                }
+                if (distance === 0) break;
+            }
+            if (distance < closestDistance) {
+                closest = candidate;
+                closestDistance = distance;
+            }
+        }
+    }
+
+    if (closest) bridgeSurfaceFeatureCache.set(feature, closest);
+    return closest || feature;
+}
+
+// Find the closest highway/footway that this barrier runs alongside
+function findAdjacentHighway(feature, lonLat) {
+    const geometry = feature.getGeometry && feature.getGeometry();
+    if (!geometry) return null;
+    const featureLevel = parseOsNumber(feature.get('layer')) || 0;
+    const projection = window.map.getView().getProjection();
+    let closestFeature = null;
+    let closestDistance = Infinity;
+
+    const layers = window.modelRenderer.getAllMapLayers(window.map.getLayers().getArray());
+    for (const layer of layers) {
+        const source = layer && layer.getSource && layer.getSource();
+        if (!source || !source.getFeatures) continue;
+        for (const candidate of source.getFeatures()) {
+            if (candidate === feature) continue;
+            const candidateLevel = parseOsNumber(candidate.get('layer')) || 0;
+            // Must be at same level
+            if (Math.abs(candidateLevel - featureLevel) > 0.01) continue;
+            // Must be a highway, footway, or path
+            const highway = candidate.get('highway');
+            if (!highway || !['primary', 'secondary', 'tertiary', 'residential',
+                'unclassified', 'footway', 'path', 'cycleway', 'steps',
+                'living_street', 'pedestrian', 'track'].includes(highway)) continue;
+            const candidateGeometry = candidate.getGeometry && candidate.getGeometry();
+            if (!candidateGeometry) continue;
+            // First check bounding box overlap (fast filter)
+            if (!geometriesIntersect(geometry, candidateGeometry)) continue;
+            // Sample multiple points along the guard rail to find minimum distance
+            const featureCoords = getGeometryLines(geometry);
+            let minDist = Infinity;
+            for (const fLine of featureCoords) {
+                // Check at intervals along the line
+                for (let i = 0; i < fLine.length; i += Math.max(1, Math.floor(fLine.length / 10))) {
+                    const point = ol.proj.transform(fLine[i], projection, 'EPSG:4326');
+                    for (const cLine of getGeometryLines(candidateGeometry)) {
+                        for (let j = 0; j < cLine.length - 1; j++) {
+                            const start = ol.proj.transform(cLine[j], projection, 'EPSG:4326');
+                            const end = ol.proj.transform(cLine[j + 1], projection, 'EPSG:4326');
+                            const dist = window.modelRenderer.pointToSegmentDistanceMeters(point, start, end);
+                            minDist = Math.min(minDist, dist);
+                        }
+                    }
+                }
+            }
+            // Only consider if very close (within 10 meters)
+            if (minDist < 10 && minDist < closestDistance) {
+                closestFeature = candidate;
+                closestDistance = minDist;
+            }
+        }
+    }
+    return closestFeature;
+}
+
+function getBridgeReferenceHeight(feature, lonLat) {
+    const surfaceFeature = findBridgeSurfaceFeature(feature, lonLat);
+    const surfaceAnchor = surfaceFeature === feature
+        ? lonLat
+        : (getFeatureAnchorLonLat(surfaceFeature) || lonLat);
+    let referenceHeight = surfaceFeature.get('bridgeRefHeight');
+    if (referenceHeight === undefined || referenceHeight === null || !isFinite(referenceHeight)) {
+        if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
+            try { window.mapterhornTerrain.warmUp(surfaceAnchor[0], surfaceAnchor[1]); } catch (e) { /* no DEM yet */ }
+        }
+        referenceHeight = sampleGroundElevation(surfaceAnchor[0], surfaceAnchor[1]);
+        if (referenceHeight === null || !isFinite(referenceHeight)) referenceHeight = 0;
+        surfaceFeature.set('bridgeRefHeight', referenceHeight);
+        surfaceFeature.set('bridgeRefPosition', surfaceAnchor.slice(0, 2));
+    }
+    const referencePosition = surfaceFeature.get('bridgeRefPosition') || surfaceAnchor;
+    feature.set('bridgeRefHeight', referenceHeight);
+    feature.set('bridgeRefPosition', referencePosition.slice(0, 2));
+    return referenceHeight;
+}
+
+window.getBridgeReferenceHeight = getBridgeReferenceHeight;
+
+function getGeometryLines(geometry) {
+    if (!geometry || typeof geometry.getType !== 'function') return [];
+    const type = geometry.getType();
+    if (type === 'LineString') return [geometry.getCoordinates()];
+    if (type === 'MultiLineString' || type === 'Polygon') return geometry.getCoordinates();
+    if (type === 'MultiPolygon') return geometry.getCoordinates().flat();
+    if (type === 'GeometryCollection' && geometry.getGeometries) {
+        return geometry.getGeometries().flatMap(getGeometryLines);
+    }
+    return [];
+}
+
+function geometriesIntersect(first, second) {
+    if (!first || !second || !ol.extent.intersects(first.getExtent(), second.getExtent())) return false;
+    const firstLines = getGeometryLines(first);
+    const secondLines = getGeometryLines(second);
+    const intersectsCoordinate = (geometry, coordinate) => {
+        try {
+            return typeof geometry.intersectsCoordinate === 'function' &&
+                geometry.intersectsCoordinate(coordinate);
+        } catch (e) {
+            return false;
+        }
+    };
+
+    for (const line of firstLines) {
+        for (const coordinate of line) {
+            if (intersectsCoordinate(second, coordinate)) return true;
+        }
+    }
+    for (const line of secondLines) {
+        for (const coordinate of line) {
+            if (intersectsCoordinate(first, coordinate)) return true;
+        }
+    }
+    for (const firstLine of firstLines) {
+        for (let i = 0; i < firstLine.length - 1; i++) {
+            for (const secondLine of secondLines) {
+                for (let j = 0; j < secondLine.length - 1; j++) {
+                    if (window.modelRenderer.linesIntersect(
+                        firstLine[i], firstLine[i + 1], secondLine[j], secondLine[j + 1]
+                    )) return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+const underBridgeCandidateCache = new WeakMap();
+
+function findBridgeAboveFeature(feature, lonLatPosition = null) {
+    if (!feature || isBridgeFeature(feature) || !window.map || !window.modelRenderer) return null;
+    const geometry = feature.getGeometry && feature.getGeometry();
+    if (!geometry) return null;
+    const featureLayer = parseOsNumber(feature.get('layer'));
+    const featureLevel = isFinite(featureLayer) ? featureLayer : 0;
+    const projection = window.map.getView().getProjection();
+    const point = lonLatPosition
+        ? ol.proj.transform(lonLatPosition, 'EPSG:4326', projection)
+        : null;
+    const layers = window.modelRenderer.getAllMapLayers(window.map.getLayers().getArray());
+    const revision = layers.map((layer) => {
+        const source = layer && layer.getSource && layer.getSource();
+        return source && source.getRevision ? source.getRevision() : '';
+    }).join(':');
+    let cached = underBridgeCandidateCache.get(feature);
+    if (!cached || cached.revision !== revision) {
+        const candidates = [];
+        for (const layer of layers) {
+            const source = layer && layer.getSource && layer.getSource();
+            if (!source || !source.getFeatures) continue;
+            for (const bridge of source.getFeatures()) {
+                if (bridge === feature || !isBridgeFeature(bridge)) continue;
+                const bridgeGeometry = bridge.getGeometry && bridge.getGeometry();
+                if (!bridgeGeometry || !geometriesIntersect(geometry, bridgeGeometry)) continue;
+                const bridgeLayer = parseOsNumber(bridge.get('layer'));
+                const bridgeLevel = isFinite(bridgeLayer) ? bridgeLayer : 1;
+                if (bridgeLevel > featureLevel) candidates.push(bridge);
+            }
+        }
+        cached = { revision, candidates };
+        underBridgeCandidateCache.set(feature, cached);
+    }
+
+    for (const bridge of cached.candidates) {
+        if (!point) return bridge;
+        const bridgeGeometry = bridge.getGeometry();
+        for (const line of getGeometryLines(bridgeGeometry)) {
+            for (let i = 0; i < line.length - 1; i++) {
+                const start = ol.proj.transform(line[i], projection, 'EPSG:4326');
+                const end = ol.proj.transform(line[i + 1], projection, 'EPSG:4326');
+                if (window.modelRenderer.pointToSegmentDistanceMeters(lonLatPosition, start, end) <= 15) {
+                    return bridge;
+                }
+            }
+        }
+    }
+    return null;
+}
+
+function getFeatureAnchorLonLat(feature) {
+    const geometry = feature && feature.getGeometry && feature.getGeometry();
+    if (!geometry) return null;
+    const type = geometry.getType();
+    if (type === 'Point') return ol.proj.toLonLat(geometry.getCoordinates());
+    if (type === 'LineString') {
+        const coordinates = geometry.getCoordinates();
+        if (coordinates.length === 0) return null;
+        return ol.proj.toLonLat(coordinates[Math.floor(coordinates.length / 2)]);
+    }
+    const extent = geometry.getExtent();
+    return ol.proj.toLonLat(ol.extent.getCenter(extent));
+}
+
+/**
+ * Find ALL features whose geometry crosses the given feature's geometry,
+ * regardless of tags (bridge=*, layer=*, etc.). Returns the closest
+ * crossing feature by minimum point-to-segment distance.
+ */
+function findCrossingFeatures(feature, maxDistance = 15) {
+    const geometry = feature.getGeometry && feature.getGeometry();
+    if (!geometry || !window.map || !window.modelRenderer) return [];
+    const projection = window.map.getView().getProjection();
+    const featureLines = getGeometryLines(geometry);
+    const layers = window.modelRenderer.getAllMapLayers(window.map.getLayers().getArray());
+    const results = [];
+
+    for (const layer of layers) {
+        const source = layer && layer.getSource && layer.getSource();
+        if (!source || !source.getFeatures) continue;
+        for (const candidate of source.getFeatures()) {
+            if (candidate === feature) continue;
+            const candidateGeometry = candidate.getGeometry && candidate.getGeometry();
+            if (!candidateGeometry) continue;
+            if (!geometriesIntersect(geometry, candidateGeometry)) continue;
+
+            // Compute minimum distance between the two geometries
+            let minDist = Infinity;
+            for (const fLine of featureLines) {
+                for (let i = 0; i < fLine.length - 1; i++) {
+                    const fStart = ol.proj.transform(fLine[i], projection, 'EPSG:4326');
+                    const fEnd = ol.proj.transform(fLine[i + 1], projection, 'EPSG:4326');
+                    for (const cLine of getGeometryLines(candidateGeometry)) {
+                        for (let j = 0; j < cLine.length - 1; j++) {
+                            const cStart = ol.proj.transform(cLine[j], projection, 'EPSG:4326');
+                            const cEnd = ol.proj.transform(cLine[j + 1], projection, 'EPSG:4326');
+                            minDist = Math.min(minDist,
+                                window.modelRenderer.pointToSegmentDistanceMeters(fStart, cStart, cEnd),
+                                window.modelRenderer.pointToSegmentDistanceMeters(fEnd, cStart, cEnd),
+                                window.modelRenderer.pointToSegmentDistanceMeters(cStart, fStart, fEnd),
+                                window.modelRenderer.pointToSegmentDistanceMeters(cEnd, fStart, fEnd)
+                            );
+                        }
+                    }
+                }
+            }
+            if (minDist <= maxDistance) {
+                results.push({ feature: candidate, distance: minDist });
+            }
+        }
+    }
+    results.sort((a, b) => a.distance - b.distance);
+    return results;
+}
+
+function findUnderBridgeWayFeature(areaFeature, bridge, areaCentre) {
+    const areaGeometry = areaFeature.getGeometry && areaFeature.getGeometry();
+    if (!areaGeometry || !bridge) return null;
+    const projection = window.map.getView().getProjection();
+    const bridgeLayer = parseOsNumber(bridge.get('layer'));
+    const bridgeLevel = isFinite(bridgeLayer) ? bridgeLayer : 1;
+    let closestFeature = null;
+    let closestDistance = Infinity;
+    const layers = window.modelRenderer.getAllMapLayers(window.map.getLayers().getArray());
+
+    for (const layer of layers) {
+        const source = layer && layer.getSource && layer.getSource();
+        if (!source || !source.getFeatures) continue;
+        for (const candidate of source.getFeatures()) {
+            if (candidate === areaFeature || isBridgeFeature(candidate)) continue;
+            const geometry = candidate.getGeometry && candidate.getGeometry();
+            if (!geometry || !['LineString', 'MultiLineString'].includes(geometry.getType())) continue;
+            if (!geometriesIntersect(areaGeometry, geometry)) continue;
+            const candidateLayer = parseOsNumber(candidate.get('layer'));
+            if ((isFinite(candidateLayer) ? candidateLayer : 0) >= bridgeLevel) continue;
+            if (typeof getFeatureModelOptions === 'function' && !getFeatureModelOptions(candidate)) continue;
+
+            let distance = Infinity;
+            for (const line of getGeometryLines(geometry)) {
+                for (let i = 0; i < line.length - 1; i++) {
+                    const start = ol.proj.transform(line[i], projection, 'EPSG:4326');
+                    const end = ol.proj.transform(line[i + 1], projection, 'EPSG:4326');
+                    distance = Math.min(
+                        distance,
+                        window.modelRenderer.pointToSegmentDistanceMeters(areaCentre, start, end)
+                    );
+                }
+            }
+            if (distance < closestDistance) {
+                closestFeature = candidate;
+                closestDistance = distance;
+            }
+        }
+    }
+    return closestFeature;
+}
+
+function getUnderBridgeSurface(feature, bridge, lonLatPosition) {
+    const bridgeKey = getFeatureKey(bridge);
+    const cached = feature.get('underBridgeSurfaces') || {};
+    let surface = cached[bridgeKey];
+    if (!surface) {
+        if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
+            try { window.mapterhornTerrain.warmUp(lonLatPosition[0], lonLatPosition[1]); } catch (e) { /* no DEM yet */ }
+        }
+        surface = {
+            height: sampleGroundElevation(lonLatPosition[0], lonLatPosition[1]),
+            position: lonLatPosition.slice(0, 2),
+            smoothed: false // Flag to indicate if smoothing has been applied
+        };
+        cached[bridgeKey] = surface;
+        feature.set('underBridgeSurfaces', cached);
+    }
+    return { bridge, bridgeKey, feature, height: surface.height, position: surface.position };
+}
+
+/**
+ * When a feature is very close (<1m) to a bridge or crossing way
+ * but NOT tagged bridge=yes, sample DEM just outside the influence
+ * zone on both sides and interpolate. This avoids DEM artifacts
+ * right next to bridge structures (like mediana/median ground
+ * level fluctuations) while still placing the feature at the
+ * correct ground elevation.
+ *
+ * Also finds crossing features regardless of bridge/layer tags.
+ */
+function getInterpolatedBridgeHeight(feature, bridge, lonLatPosition) {
+    // Also look for ANY crossing feature (not just bridge=yes)
+    let crossingFeature = bridge;
+    if (!crossingFeature) {
+        const crossings = findCrossingFeatures(feature, 15);
+        if (crossings.length > 0) {
+            crossingFeature = crossings[0].feature;
+            console.log(`🔍 Crossing feature: ${crossingFeature.getId()} (${crossingFeature.get('highway') || crossingFeature.get('barrier') || 'unknown'}) at ${crossings[0].distance.toFixed(2)}m`);
+        }
+    }
+    if (!crossingFeature) return null;
+
+    const geometry = feature.getGeometry && feature.getGeometry();
+    if (!geometry || !crossingFeature) return null;
+    const projection = window.map.getView().getProjection();
+    const crossingGeom = crossingFeature.getGeometry();
+    const pos = ol.proj.transform(lonLatPosition, 'EPSG:4326', projection);
+
+    // Find the closest point on the crossing geometry
+    let closestDist = Infinity;
+    let closestPoint = null;
+    let segmentAngle = 0;
+    for (const line of getGeometryLines(crossingGeom)) {
+        for (let i = 0; i < line.length - 1; i++) {
+            const start = ol.proj.transform(line[i], projection, 'EPSG:4326');
+            const end = ol.proj.transform(line[i + 1], projection, 'EPSG:4326');
+            const dist = window.modelRenderer.pointToSegmentDistanceMeters(pos, start, end);
+            if (dist < closestDist) {
+                closestDist = dist;
+                const dx = end[0] - start[0], dy = end[1] - start[1];
+                segmentAngle = Math.atan2(dy, dx);
+                closestPoint = [start[0] + ((pos[0] - start[0]) * dx + (pos[1] - start[1]) * dy) / (dx*dx + dy*dy) * dx,
+                                start[1] + ((pos[0] - start[0]) * dx + (pos[1] - start[1]) * dy) / (dx*dx + dy*dy) * dy];
+            }
+        }
+    }
+    if (!closestPoint || closestDist > 1.0) return null;
+
+    // Sample DEM at 5m and 10m perpendicular distances on both sides
+    // This captures the middle ground height away from crossing interference
+    const SAMPLE_DISTS = [5, 10];  // meters - two points on each side
+    const TOLERANCE = 1.0;  // max allowed difference between samples (meters)
+
+    const perpDir1 = segmentAngle + Math.PI / 2;
+    const perpDir2 = segmentAngle - Math.PI / 2;
+
+    function sampleAt(offsetMeters, angle) {
+        const mPerDegLat = 111320;
+        const mPerDegLon = 111320 * Math.cos(lonLatPosition[1] * Math.PI / 180);
+        const latOffset = (offsetMeters * Math.sin(angle)) / mPerDegLat;
+        const lonOffset = (offsetMeters * Math.cos(angle)) / mPerDegLon;
+        return sampleGroundElevation(lonLatPosition[0] + lonOffset, lonLatPosition[1] + latOffset);
+    }
+
+    // Sample at 5m and 10m on both sides of crossing
+    const h1_5m = sampleAt(5, perpDir1);
+    const h2_5m = sampleAt(5, perpDir2);
+    const h1_10m = sampleAt(10, perpDir1);
+    const h2_10m = sampleAt(10, perpDir2);
+
+    const samples = [h1_5m, h2_5m, h1_10m, h2_10m].filter(h => h !== null);
+
+    if (samples.length < 2) return null;
+
+    // Calculate median height
+    const sorted = samples.slice().sort((a, b) => a - b);
+    const medianHeight = sorted.length % 2 === 0
+        ? (sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2
+        : sorted[Math.floor(sorted.length / 2)];
+
+    // Check consistency
+    const avgHeight = samples.reduce((a, b) => a + b, 0) / samples.length;
+    let isConsistent = true;
+    for (let i = 0; i < samples.length; i++) {
+        if (Math.abs(samples[i] - avgHeight) > TOLERANCE) {
+            isConsistent = false;
+            break;
+        }
+    }
+
+    if (!isConsistent) {
+        console.log(`⚠️ Crossing interp: inconsistent samples, using DEM`);
+        return null;
+    }
+
+    console.log(`🔍 Crossing interp: ${samples.length} samples at 5-10m → median=${medianHeight.toFixed(2)}m (avg=${avgHeight.toFixed(2)}m, dist=${closestDist.toFixed(2)}m)`);
+    return medianHeight;
+}
+
+function getFeatureHeightOffset(feature) {
+    const offset = feature && feature.get && feature.get('modelHeightOffset');
+    return typeof offset === 'number' && isFinite(offset) ? offset : 0;
 }
 
 window.modelRenderer = {
@@ -533,7 +1013,105 @@ window.modelRenderer = {
         const previous = this.loadedModels.get(key);
         this._trackLive(previous ? (previous.kind || 'model') : null, entry.kind || 'model');
         this.loadedModels.set(key, entry);
+        this.setUndergroundEntryVisibility(entry, isUndergroundViewEnabled());
+        this.setActiveLevelEntryVisibility(entry, window.indoor && window.indoor.isEnabled()
+            ? window.indoor.getActiveLevel() : null);
         return entry;
+    },
+
+    setUndergroundEntryVisibility: function(entry, undergroundVisible) {
+        if (!entry || !entry.feature) return;
+        const isUnderground = isUndergroundFeature(entry.feature);
+        const items = entry.kind === 'texture'
+            ? (Array.isArray(entry.primitives) ? entry.primitives : [entry.primitives])
+            : [entry.model];
+        items.forEach(function(item) {
+            if (item) item.show = isUnderground === !!undergroundVisible;
+        });
+    },
+
+    setUndergroundVisibility: function(undergroundVisible) {
+        if (!this.loadedModels) return;
+        this.loadedModels.forEach(function(entry) {
+            this.setUndergroundEntryVisibility(entry, undergroundVisible);
+        }, this);
+        const scene = window.ol3d && window.ol3d.getCesiumScene
+            ? window.ol3d.getCesiumScene()
+            : null;
+        if (scene && scene.requestRender) scene.requestRender();
+    },
+
+    setActiveLevelEntryVisibility: function(entry, activeLevel) {
+        if (!entry || !entry.feature || typeof entry.feature.get !== 'function') return;
+        const feature = entry.feature;
+        const underground = isUndergroundFeature(feature);
+        const undergroundVisible = isUndergroundViewEnabled();
+        let visible = underground === undergroundVisible;
+        if (activeLevel !== null && activeLevel !== undefined && activeLevel !== '') {
+            const levelTags = [feature.get('level'), feature.get('repeat_on')]
+                .filter(value => value !== undefined && value !== null && value !== '')
+                .map(String);
+            const hasLevelRange = feature.get('min_level') !== undefined ||
+                feature.get('max_level') !== undefined;
+            const floorFeature = !!(feature.get('indoor') || feature.get('door') ||
+                feature.get('window') || feature.get('highway') === 'steps' ||
+                feature.get('highway') === 'elevator');
+            if (levelTags.length || hasLevelRange || floorFeature) {
+                const selectedLabel = String(activeLevel).trim().toLowerCase();
+                const selectedNumbers = window.indoor && window.indoor.parseLevelList
+                    ? window.indoor.parseLevelList(activeLevel) : null;
+                const selectedNumber = selectedNumbers && selectedNumbers.length
+                    ? selectedNumbers[0] : parseOsNumber(activeLevel);
+                const taggedLevels = [];
+                levelTags.forEach(value => {
+                    if (window.indoor && window.indoor.parseLevelList) {
+                        const parsed = window.indoor.parseLevelList(value);
+                        if (parsed) taggedLevels.push.apply(taggedLevels, parsed);
+                    }
+                    value.split(/[;,]/).forEach(tagged => {
+                        if (tagged.trim()) taggedLevels.push(tagged.trim().toLowerCase());
+                    });
+                });
+                const hasExplicitLevels = levelTags.length > 0;
+                const matchesExplicit = taggedLevels.some(tagged => {
+                    if (typeof tagged === 'number' && isFinite(selectedNumber)) return tagged === selectedNumber;
+                    if (String(tagged) === selectedLabel) return true;
+                    const number = parseOsNumber(tagged);
+                    return isFinite(number) && isFinite(selectedNumber) && number === selectedNumber;
+                });
+                let matchesRange = false;
+                if (hasLevelRange && isFinite(selectedNumber)) {
+                    const minimum = window.indoor && window.indoor.parseLevelList
+                        ? window.indoor.parseLevelList(feature.get('min_level')) : null;
+                    const maximum = window.indoor && window.indoor.parseLevelList
+                        ? window.indoor.parseLevelList(feature.get('max_level')) : null;
+                    if (minimum && maximum && minimum.length && maximum.length) {
+                        matchesRange = selectedNumber >= Math.min.apply(null, minimum) &&
+                            selectedNumber <= Math.max.apply(null, maximum);
+                    }
+                }
+                const defaultGroundLevel = !hasExplicitLevels && !hasLevelRange && floorFeature &&
+                    (selectedLabel === '0' || selectedLabel === 'g' || selectedLabel === 'ground');
+                visible = visible && (matchesExplicit || matchesRange || defaultGroundLevel);
+            }
+        }
+        const items = entry.kind === 'texture'
+            ? (Array.isArray(entry.primitives) ? entry.primitives : [entry.primitives])
+            : [entry.model];
+        items.forEach(item => {
+            if (item) item.show = visible;
+        });
+    },
+
+    setActiveLevelVisibility: function(activeLevel) {
+        if (!this.loadedModels) return;
+        this.loadedModels.forEach(function(entry) {
+            this.setActiveLevelEntryVisibility(entry, activeLevel);
+        }, this);
+        const scene = window.ol3d && window.ol3d.getCesiumScene
+            ? window.ol3d.getCesiumScene()
+            : null;
+        if (scene && scene.requestRender) scene.requestRender();
     },
 
     /** Stop counting `key` and forget it. Does NOT destroy the primitive. */
@@ -956,29 +1534,34 @@ window.modelRenderer = {
     placeFeature: function(feature, fidx, cesiumScene, layer) {
         const model = getFeatureModelOptions(feature);
         const hasRepetitions = feature.get('repetition_0');
+        const hasAreaTextureRepetition = feature.get('repetition_0_type') === 'polygon_texture';
         const geometry = feature.getGeometry();
+        const hasLineRepetitions = !!hasRepetitions && geometry && geometry.getType &&
+            (geometry.getType() === 'LineString' || geometry.getType() === 'MultiLineString');
 
         if (geometry && geometry.getType && (geometry.getType() === 'Polygon' || geometry.getType() === 'MultiPolygon')) {
-            if (model && model.uri && /\.(jpg|jpeg|png|gif|bmp|tiff|tif)$/i.test(model.uri)) {
+            const hasImageModel = model && model.uri && /\.(jpg|jpeg|png|gif|bmp|tiff|tif)$/i.test(model.uri);
+            if (hasImageModel && !hasAreaTextureRepetition) {
                 if (debugConfig.enabled) console.log(`🎯 Feature ${fidx} has area texture: ${model.uri}`);
                 this.addAreaTextureForFeature(feature, model, fidx, cesiumScene);
             } else {
-                if (model && typeof model === 'object' && model.uri) {
+                if (model && typeof model === 'object' && model.uri && !hasImageModel && !hasAreaTextureRepetition) {
                     this.addModelForFeature(feature, fidx, cesiumScene, layer);
                 }
                 this.addRepetitionModels(feature, cesiumScene);
                 // Neither model nor texture: drape the outline on the terrain
                 // instead of letting ol-cesium draw it at sea level.
-                if (!model) this.addPlainResult(feature, fidx, cesiumScene, layer);
+                if (!model && !hasAreaTextureRepetition) this.addPlainResult(feature, fidx, cesiumScene, layer);
             }
         } else {
-            if (model && typeof model === 'object' && model.uri) {
+            if (model && typeof model === 'object' && model.uri &&
+                !hasAreaTextureRepetition && !hasLineRepetitions) {
                 this.addModelForFeature(feature, fidx, cesiumScene, layer);
             }
             this.addRepetitionModels(feature, cesiumScene);
             // No model for this result: draw it as a marker/line that follows
             // the ground (see addPlainResult).
-            if (!model) this.addPlainResult(feature, fidx, cesiumScene, layer);
+            if (!model && !hasAreaTextureRepetition) this.addPlainResult(feature, fidx, cesiumScene, layer);
         }
     },
 
@@ -1079,29 +1662,116 @@ window.modelRenderer = {
         // Create model matrix for positioning BEFORE setting on model
         const heightOffset = feature.get('modelHeightOffset') || 0.0;
 
-        // Prime the DEM tile for this point BEFORE sampling it. Without this the
-        // first sample of a session almost always returns 0 (tile still decoding),
-        // the model is built at sea level, and the only thing that could pull it
-        // back down is the re-seat hook below. Warming here also guarantees the
-        // hook has a tile to fire on for this position.
-        if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
-            try { window.mapterhornTerrain.warmUp(lonLat[0], lonLat[1]); } catch (e) { /* no DEM yet */ }
+        // Bridge / layer awareness:
+        // - Bridge ways: keep their models at one sampled terrain height so
+        //   they do not undulate along the way.
+        // - Non-bridge ways (including everything UNDER a bridge): stay at
+        //   ground level per-position DEM height, independently of the bridge.
+        //   Barriers (guard rails, fences, walls) must ALWAYS be on the ground
+        //   level, even if they have bridge=yes (inherited from the road they
+        //   run alongside).
+        const isTunnel = isTunnelFeature(feature);
+        const isBridge = !isTunnel && isBridgeFeature(feature);
+        const isBarrier = feature.get('barrier') || feature.get('fence_type') || feature.get('wall_type') || feature.get('wall');
+
+        // Check for bridges above this feature. All features (except tunnels) check
+        // for bridge overhead. Barriers must detect bridges above them to stay
+        // on ground (not bridge deck), even if they have bridge=yes inherited.
+        const bridgeAbove = isTunnel ? null : findBridgeAboveFeature(feature, lonLat);
+        const underBridge = bridgeAbove
+            ? getUnderBridgeSurface(feature, bridgeAbove, lonLat)
+            : null;
+
+        // For barriers: find bridge crossing height ONCE and use it for all segments
+        let barrierBridgeHeight = null;
+        if (isBarrier && !underBridge) {
+            // Try to find a crossing bridge feature
+            const crossings = findCrossingFeatures(feature, 15);
+            const crossingBridge = crossings.find(c => isBridgeFeature(c.feature));
+            if (crossingBridge) {
+                barrierBridgeHeight = getBridgeReferenceHeight(crossingBridge.feature, lonLat);
+                console.log(`🔍 Barrier bridge ref: found crossing bridge ${crossingBridge.feature.getId()}, height=${barrierBridgeHeight.toFixed(2)}m`);
+            } else if (bridgeAbove) {
+                barrierBridgeHeight = getBridgeReferenceHeight(bridgeAbove, lonLat);
+                console.log(`🔍 Barrier bridge ref: found bridgeAbove ${bridgeAbove.getId()}, height=${barrierBridgeHeight.toFixed(2)}m`);
+            }
         }
 
-        // Get terrain elevation. Exact bilinear DEM sample — the same
-        // interpolated surface buildings use and the terrain renders from.
-        // (Neighborhood averaging was tried and ELEVATED models on convex
-        // ground: the probe average rides above the true surface.)
-        const terrainElevation = sampleGroundElevation(lonLat[0], lonLat[1]);
-        
+        // Force ground elevation for barriers, ignore bridge tag
+        const isActuallyBridge = isBridge && !isBarrier;
+
+        // For barriers: use crossing interpolation if near a crossing feature,
+        // otherwise use regular ground DEM (never bridge deck height)
+        let terrainElevation;
+        if (isTunnel) {
+            terrainElevation = getTunnelElevation();
+        } else if (underBridge) {
+            // Feature is UNDER a bridge: use cached ground height (same as textures)
+            // This applies to ALL features under bridges, including barriers with bridge=yes
+            terrainElevation = underBridge.height;
+        } else if (isBarrier) {
+            // Barriers without bridge tag:
+            // - If we found a crossing bridge earlier, use its height
+            // - If running alongside a highway: use highway's exact height
+            // - Otherwise: use ground DEM
+            if (barrierBridgeHeight !== null) {
+                terrainElevation = barrierBridgeHeight;
+                console.log(`🔍 Barrier using pre-found bridge height=${terrainElevation.toFixed(2)}m`);
+            } else {
+                const adjHighway = findAdjacentHighway(feature, lonLat);
+                console.log(`🔍 Barrier: barrier=${feature.get('barrier')}, bridge=${feature.get('bridge')}, adjHighway=${adjHighway ? adjHighway.getId() : 'null'}`);
+
+                if (adjHighway && adjHighway !== feature) {
+                    // Barrier runs alongside a highway - use highway's exact height
+                    const highwayAnchor = getFeatureAnchorLonLat(adjHighway) || lonLat;
+                    const highwayRefHeight = adjHighway.get('bridgeRefHeight');
+                    console.log(`🔍 Highway ${adjHighway.getId()}: highway=${adjHighway.get('highway')}, bridge=${adjHighway.get('bridge')}, anchor=[${highwayAnchor[0].toFixed(6)},${highwayAnchor[1].toFixed(6)}], refHeight=${highwayRefHeight}`);
+                    if (highwayRefHeight !== undefined && isFinite(highwayRefHeight)) {
+                        terrainElevation = highwayRefHeight;
+                    } else {
+                        terrainElevation = getBridgeReferenceHeight(adjHighway, highwayAnchor);
+                        console.log(`🔍 Barrier using highway refHeight=${terrainElevation.toFixed(2)}m`);
+                    }
+                } else {
+                    // Regular ground
+                    if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
+                        try { window.mapterhornTerrain.warmUp(lonLat[0], lonLat[1]); } catch (e) { /* no DEM yet */ }
+                    }
+                    terrainElevation = sampleGroundElevation(lonLat[0], lonLat[1]);
+                    console.log(`🔍 Barrier: no highway/bridge found, using ground=${terrainElevation.toFixed(2)}m`);
+                }
+            }
+        } else if (isActuallyBridge) {
+            // Feature is a BRIDGE (and not a barrier): use bridge reference height
+            terrainElevation = getBridgeReferenceHeight(feature, lonLat);
+        } else {
+            // Non-bridge way: use ground elevation (sampleGroundElevation).
+            // If very close to a crossing feature (<1m), interpolate instead
+            // of using DEM (avoids artifacts near structures).
+            const nearCrossingHeight = !isTunnel && !underBridge
+                ? getInterpolatedBridgeHeight(feature, bridgeAbove, lonLat)
+                : null;
+            if (nearCrossingHeight !== null) {
+                terrainElevation = nearCrossingHeight;
+            } else {
+                if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
+                    try { window.mapterhornTerrain.warmUp(lonLat[0], lonLat[1]); } catch (e) { /* no DEM yet */ }
+                }
+                terrainElevation = sampleGroundElevation(lonLat[0], lonLat[1]);
+            }
+        }
+
+        // Clamp to ground only when under a bridge or not a bridge feature.
+        // Barriers on bridges should be at bridge deck elevation (like the highway).
+        const clampToGround = underBridge || (!isBridge && !isBarrier);
+
         const totalHeight = heightOffset + terrainElevation;
         let modelMatrix = Cesium.Transforms.eastNorthUpToFixedFrame(
-            Cesium.Cartesian3.fromDegrees(lonLat[0], lonLat[1], totalHeight)
+            Cesium.Cartesian3.fromDegrees(lonLat[0], lonLat[1], clampToGround ? 0 : totalHeight)
         );
-        
-        // Tilt the model to follow the terrain slope so it stands correctly
-        // inclined on mountains (MapTerhorn DEM surface normal)
-        if (window.mapterhornTerrain && window.mapterhornTerrain.applySlopeTilt) {
+
+        // Tilt the model to follow the terrain slope
+        if (!isTunnel && !isBridge && (!underBridge || isBarrier) && window.mapterhornTerrain && window.mapterhornTerrain.applySlopeTilt) {
             try {
                 modelMatrix = window.mapterhornTerrain.applySlopeTilt(modelMatrix, lonLat[0], lonLat[1]);
             } catch (e) { /* no DEM data yet */ }
@@ -1139,26 +1809,9 @@ window.modelRenderer = {
         // Update pooled model with ALL properties at once to prevent flashing
         pooledModel.model.modelMatrix = modelMatrix;
         pooledModel.model.scale = model.scale || 1.0;
-        // We own the height here — do NOT delegate to Cesium's ground clamp.
-        //
-        // This used to be CLAMP_TO_GROUND, and it is the single reason models
-        // flew. Cesium implements that clamp for a Model primitive via
-        // sampleClampToHeightMostDetailed(), which requires the terrain provider
-        // to expose `availability`. Our MapterhornTerrainProvider returns
-        // `undefined` for it (no tile-availability index exists for a raster
-        // heightmap), so the clamp silently degrades to a no-op and the model
-        // keeps whatever height the matrix was built with — 0 while the DEM
-        // tile is still decoding, i.e. hanging in mid-air over the hillside.
-        //
-        // Worse, the constant still *read* as CLAMP_TO_GROUND, so
-        // repositionModelsOnDem() believed the primitive was self-maintaining
-        // and skipped it — the one code path that could re-seat the model on the
-        // real surface. That left the floating models stranded until a reload.
-        //
-        // So: heightReference NONE (we set the height ourselves, from the same
-        // DEM the globe renders) + the re-seat hook keeps it exact as tiles
-        // refine. Rotation and slope tilt stay baked into the matrix.
-        pooledModel.model.heightReference = Cesium.HeightReference.NONE;
+        // Keep the sampled height explicit. Ground-clamping can snap an
+        // under-bridge way onto the bridge surface, unless it's a barrier.
+        pooledModel.model.heightReference = isBarrier ? Cesium.HeightReference.CLAMP_TO_GROUND : Cesium.HeightReference.NONE;
         pooledModel.model.show = true; // Ensure it's visible
 
         // Track loaded model for the current 3D session only
@@ -1170,9 +1823,14 @@ window.modelRenderer = {
             // Recorded explicitly: the re-seat hook must not depend on the
             // feature property still being readable at re-seat time.
             heightOffset: heightOffset,
+            isBridge: isBridge,
+            isUnderBridge: !!underBridge,
+            underBridgeKey: underBridge && underBridge.bridgeKey,
+            surfacePosition: underBridge && underBridge.position,
             lon: lonLat[0],
             lat: lonLat[1],
             elevation: terrainElevation,
+            isTunnel: isTunnel,
             distance: distance,
             lodLevel: lodLevel,
             modelUrl: modelUrl,
@@ -1279,9 +1937,8 @@ window.modelRenderer = {
                     if (built && built.sessionId === this._session3dId) return;
                 }
 
-                // Same range gate as every other primitive. Area textures are
-                // built on a canvas up to AREA_TEXTURE_MAX_CANVAS square, so
-                // an ungated one is not cheap.
+                // Same range gate as every other primitive; repeated image
+                // textures still allocate a GPU primitive.
                 const centre = areaCentroidLonLat(polygonCoordinates);
                 if (centre) {
                     const texDistance = this.getDistanceFromCamera(centre[0], centre[1], cesiumScene);
@@ -1289,24 +1946,70 @@ window.modelRenderer = {
                     if (texDistance > memoryConfig.loadDistance * memoryConfig.placementRangeFactor && !texVisible) return;
                 }
                 if (!this.ensureBudget(cesiumScene)) return;
+                let flatSurfaceHeight = null;
+                let flatSurfacePosition = null;
+                let surfaceHeightOffset = 0;
+                let underBridgeKey = null;
+                let underBridgeFeature = null;
+                if (isTunnelFeature(feature)) {
+                    flatSurfaceHeight = getTunnelElevation();
+                } else if (centre) {
+                    // Check for bridges above FIRST (before bridge feature check)
+                    // so barriers under bridges use ground height, not bridge deck height
+                    const bridgeAbove = findBridgeAboveFeature(feature, centre);
+                    if (bridgeAbove) {
+                        underBridgeFeature = findUnderBridgeWayFeature(feature, bridgeAbove, centre) || feature;
+                        const surfacePosition = underBridgeFeature === feature
+                            ? centre
+                            : getFeatureAnchorLonLat(underBridgeFeature);
+                        const underBridge = getUnderBridgeSurface(underBridgeFeature, bridgeAbove, surfacePosition);
+                        surfaceHeightOffset = getFeatureHeightOffset(underBridgeFeature);
+                        flatSurfaceHeight = underBridge.height + surfaceHeightOffset;
+                        flatSurfacePosition = underBridge.position;
+                        underBridgeKey = underBridge.bridgeKey;
+                    } else if (isBridgeFeature(feature)) {
+                        if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
+                            try { window.mapterhornTerrain.warmUp(centre[0], centre[1]); } catch (e) { /* no DEM yet */ }
+                        }
+                        flatSurfaceHeight = getBridgeReferenceHeight(feature, centre);
+                        flatSurfacePosition = feature.get('bridgeRefPosition');
+                    }
+                }
 
-                // Force recalculation of rotation instead of using stored value
-                const polygonCoords4326 = polygonCoordinates.map(coord => 
-                    ol.proj.transform(coord, window.map.getView().getProjection(), 'EPSG:4326')
-                );
-                const recalculatedRotation = this.calculateTextureRotation(polygonCoords4326, imageUri);
-                if (modelRendererTexLog()) console.log(`🖼️ Recalculated repetition rotation ${repIndex}: ${(recalculatedRotation * 180 / Math.PI).toFixed(1)}° ${imageUri}`);
+                // Area repetitions store polygon coordinates and their bearing
+                // in WGS84 when generated. Preserve that bearing instead of
+                // transforming the already-geographic coordinates a second time.
+                const textureRotation = Number.isFinite(repModel.rotation)
+                    ? repModel.rotation
+                    : this.calculateTextureRotation(
+                        polygonCoordinates,
+                        imageUri,
+                        feature.getProperties ? feature.getProperties() : {}
+                    );
+                if (modelRendererTexLog()) console.log(`🖼️ Using stored repetition rotation ${repIndex}: ${(textureRotation * 180 / Math.PI).toFixed(1)}° ${imageUri}`);
                 
-                if (debugConfig.enabled) console.log(`🖼️ Adding polygon texture for ${repIndex} with ${polygonCoordinates.length} coordinates and recalculated rotation: ${(recalculatedRotation * 180 / Math.PI).toFixed(1)}°`);
+                if (debugConfig.enabled) console.log(`🖼️ Adding polygon texture for ${repIndex} with ${polygonCoordinates.length} coordinates and rotation: ${(textureRotation * 180 / Math.PI).toFixed(1)}°`);
                 const created = this.addAreaTexture(
                     {
                         outer: polygonCoordinates,
                         holes: polygonHoles
                     },
                     imageUri,
-                    { spacing: spacing, rotation: recalculatedRotation, scale: repModel.scale },
-                    cesiumScene,
-                    feature
+                    {
+                        spacing: spacing,
+                        rotation: textureRotation,
+                        textureRotationOffsetDegrees: repModel.textureRotationOffsetDegrees,
+                        scale: repModel.scale,
+                        bridgeSurfaceHeight: isTunnelFeature(feature) ? null : flatSurfaceHeight,
+                        fixedSurfaceHeight: isTunnelFeature(feature) ? getTunnelElevation() : null,
+                        undergroundFeature: feature,
+                        bridgeFeature: !isTunnelFeature(feature) && isBridgeFeature(feature) ? feature : null,
+                        underBridgeFeature: underBridgeFeature,
+                        underBridgeKey: underBridgeKey,
+                        surfaceHeightOffset: surfaceHeightOffset,
+                        underBridgeSurfaceHeightOffset: surfaceHeightOffset
+                    },
+                    cesiumScene
                 );
                 // addAreaTexture used to return nothing, so these primitives
                 // were unreachable: nothing could count them, destroy them, or
@@ -1316,7 +2019,14 @@ window.modelRenderer = {
                         kind: 'texture',
                         primitives: created,
                         feature: feature,
+                        isTunnel: isTunnelFeature(feature),
+                        surfaceFeature: underBridgeFeature,
                         sessionId: this._session3dId,
+                        bridgeSurfaceHeight: isTunnelFeature(feature) ? null : flatSurfaceHeight,
+                        isUnderBridge: underBridgeKey !== null,
+                        underBridgeKey: underBridgeKey,
+                        surfaceHeightOffset: surfaceHeightOffset,
+                        surfacePosition: flatSurfacePosition,
                         lon: centre ? centre[0] : undefined,
                         lat: centre ? centre[1] : undefined,
                         elevation: 0,
@@ -1342,7 +2052,7 @@ window.modelRenderer = {
             return;
         }
         
-        // The repPosition is already in lon/lat format (from footway_repetition.js)
+        // The repPosition is already in lon/lat format (from line_repetition.js)
         // No need to convert again
         const repLonLat = repPosition;
 
@@ -1377,188 +2087,138 @@ window.modelRenderer = {
         const isRepImageFile = modelUri && (modelUri.toLowerCase().endsWith('.png') || modelUri.toLowerCase().endsWith('.jpg') || modelUri.toLowerCase().endsWith('.jpeg'));
         
         if (isRepImageFile) {
-            // Handle image files using billboards.
-            //
-            // When this repetition is on a bridge deck, do NOT drape the
-            // texture to the terrain under the bridge. Use the SAME straight
-            // ramp the deck uses (DEM sampled only at the stored bridge chord
-            // endpoints, linear interpolation in between) so the texture is
-            // horizontal and the road under the bridge is not inclined to the
-            // road on the bridge.
-            const repFeatureTags = feature.getProperties();
-            const isBridgeRepetition =
-                repFeatureTags &&
-                ((repFeatureTags.bridge === 'yes' || repFeatureTags.bridge === true ||
-                  repFeatureTags['bridge'] === 'yes' ||
-                  repFeatureTags['bridge'] === true) ||
-                 (repFeatureTags['bridge'] && repFeatureTags['bridge'] !== 'no' &&
-                  repFeatureTags['bridge'] !== false));
-
-            let imageHeight;
-            if (isBridgeRepetition) {
-                const bridgeOuterCoords = (
-                    feature.get('repetition_0_polygonCoordinates') ||
-                    feature.get('bridgeGeometryCoordinates') ||
-                    null
-                );
-                if (bridgeOuterCoords && bridgeOuterCoords.length >= 2) {
-                    const demSampler = (function() {
-                        if (window.mapterhornTerrain && window.mapterhornTerrain.getElevation) {
-                            return (lon, lat) => window.mapterhornTerrain.getElevation(lon, lat);
-                        }
-                        if (window.terrainManager && window.terrainManager.getElevation) {
-                            return (lon, lat) => window.terrainManager.getElevation(lon, lat);
-                        }
-                        return () => 0;
-                    })();
-                    const hStart = (demSampler(bridgeOuterCoords[0][0], bridgeOuterCoords[0][1]) || 0);
-                    const hEnd   = (demSampler(bridgeOuterCoords[bridgeOuterCoords.length - 1][0],
-                                                bridgeOuterCoords[bridgeOuterCoords.length - 1][1])   || 0);
-                    const dx = bridgeOuterCoords[bridgeOuterCoords.length - 1][0] - bridgeOuterCoords[0][0];
-                    const dy = bridgeOuterCoords[bridgeOuterCoords.length - 1][1] - bridgeOuterCoords[0][1];
-                    const chordDeg2 = dx * dx + dy * dy;
-                    let t = 0;
-                    if (chordDeg2 > 0) {
-                        const cdx = repLonLat[0] - bridgeOuterCoords[0][0];
-                        const cdy = repLonLat[1] - bridgeOuterCoords[0][1];
-                        t = Math.max(0, Math.min(1, (cdx * dx + cdy * dy) / chordDeg2));
-                    }
-                    imageHeight = hStart + (hEnd - hStart) * t;
-                } else {
-                    imageHeight = sampleGroundElevation(repLonLat[0], repLonLat[1]);
-                }
-            } else {
-                imageHeight = sampleGroundElevation(repLonLat[0], repLonLat[1]);
-            }
-
-            if (debugConfig.enabled) {
-                console.log(`🚶 Loading image file as billboard on bridge chord: ${modelUri} at ${imageHeight.toFixed(1)}m`);
-            }
-            this.addImageBillboard(repLonLat, modelUri, repModel, cesiumScene, imageHeight);
+            // Handle image files using billboards
+            if (debugConfig.enabled) console.log(`🚶 Loading image file as billboard: ${modelUri}`);
+            this.addImageBillboard(repLonLat, modelUri, repModel, cesiumScene);
             return;
         }
         
+        // Keep bridge repetitions level with one sampled terrain height.
+        const repIsTunnel = isTunnelFeature(feature);
+        const repIsBridge = !repIsTunnel && isBridgeFeature(feature);
+        const repIsBarrier = feature.get('barrier') || feature.get('fence_type') || feature.get('wall_type') || feature.get('wall');
+
+        if (repIsBarrier) {
+            console.log(`🔍 Rep barrier feature ${feature.getId()}: barrier=${feature.get('barrier')}, bridge=${feature.get('bridge')}, layer=${feature.get('layer')}, repIsTunnel=${repIsTunnel}, repIsBridge=${repIsBridge}, repLonLat=[${repLonLat[0].toFixed(6)},${repLonLat[1].toFixed(6)}]`);
+        }
+
+        // Check for bridges above this feature. All features (except tunnels) check
+        // for bridge overhead.
+        const bridgeAbove = repIsTunnel ? null : findBridgeAboveFeature(feature, repLonLat);
+        const underBridge = bridgeAbove
+            ? getUnderBridgeSurface(feature, bridgeAbove, repLonLat)
+            : null;
+
         // Create model matrix for repetition model - GROUND LEVEL (like footway)
         const repHeightOffset = feature.get(`fence_repetition_${repIndex}_heightOffset`) || 
                                feature.get(`repetition_${repIndex}_heightOffset`) || 0; // Use stored height offset instead of hardcoded 10
 
         // Prime the DEM tile before sampling (see addModelForFeature): without it
         // repetitions placed early in a session are built at elevation 0.
-        if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
+        if (!repIsTunnel && window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
             try { window.mapterhornTerrain.warmUp(repLonLat[0], repLonLat[1]); } catch (e) { /* no DEM yet */ }
         }
         
-        // Get terrain elevation for this repetition model position.
-        //
-        // When the feature is a bridge (bridge=yes/true etc.) every model along
-        // the deck must follow the SAME straight ramp from the start of the
-        // bridge segment to its end — DEM heights are sampled ONLY at the two
-        // endpoints of the bridge geometry, and each model instance gets a
-        // height by linear interpolation along that chord. The DEM in the
-        // middle of the span is ignored, so the road under the bridge does
-        // not undulate with the terrain it crosses.
-        //
-        // Non-bridge repetitions keep the usual per-position DEM sample.
-        const repFeatureTags = feature.getProperties();
-        const isBridgeRepetition =
-            repFeatureTags &&
-            ((repFeatureTags.bridge === 'yes' || repFeatureTags.bridge === true ||
-              repFeatureTags['bridge'] === 'yes' ||
-              repFeatureTags['bridge'] === true) ||
-             (repFeatureTags['bridge'] && repFeatureTags['bridge'] !== 'no' &&
-              repFeatureTags['bridge'] !== false));
-
+        // Get terrain elevation. For bridges: cache reference DEM height on
+        // first repetition so the whole bridge stays FLAT at one elevation
+        // (no undulation down mountains). Non-bridge ways sample per-position
+        // (ground level) and must NOT climb up to meet the bridge.
+        // BARRIERS use exact highway height when adjacent.
         let repTerrainElevation;
-        if (isBridgeRepetition) {
-            // Bridge: straight-ramp height at this model position.
-            // We need the full bridge geometry to do the chord projection.
-            // Retrieve it from the feature's stored polygon coordinates (set by
-            // area_repetition when the bridge was treated as an area) OR fall
-            // back to the LineString geometry itself.
-            const bridgeOuterCoords = (
-                feature.get('repetition_0_polygonCoordinates') ||
-                feature.get('bridgeGeometryCoordinates') ||
-                null
-            );
+        if (repIsTunnel) {
+            repTerrainElevation = getTunnelElevation();
+        } else if (underBridge) {
+            // Feature is UNDER a bridge: use cached ground height (same as textures)
+            // This applies to ALL features under bridges, including barriers with bridge=yes
+            repTerrainElevation = underBridge.height;
+        } else if (repIsBarrier) {
+            // Barriers without bridge tag:
+            // - If crossing a bridge: use bridge deck height
+            // - If running alongside a highway: use highway's exact height
+            const adjHighway = findAdjacentHighway(feature, repLonLat);
+            console.log(`🔍 Rep Barrier: barrier=${feature.get('barrier')}, bridge=${feature.get('bridge')}, adjHighway=${adjHighway ? adjHighway.getId() : 'null'}`);
 
-            if (bridgeOuterCoords && bridgeOuterCoords.length >= 2) {
-                // Use the stored polygon/line coordinates as the bridge chord.
-                const startCoord = bridgeOuterCoords[0];
-                const endCoord = bridgeOuterCoords[bridgeOuterCoords.length - 1];
-
-                const demSampler = (function() {
-                    if (window.mapterhornTerrain && window.mapterhornTerrain.getElevation) {
-                        return (lon, lat) => window.mapterhornTerrain.getElevation(lon, lat);
-                    }
-                    if (window.terrainManager && window.terrainManager.getElevation) {
-                        return (lon, lat) => window.terrainManager.getElevation(lon, lat);
-                    }
-                    return () => 0;
-                })();
-
-                const hStart = (demSampler(startCoord[0], startCoord[1]) || 0);
-                const hEnd   = (demSampler(endCoord[0],   endCoord[1])   || 0);
-
-                const dx = endCoord[0] - startCoord[0];
-                const dy = endCoord[1] - startCoord[1];
-                const chordDeg2 = dx * dx + dy * dy;
-
-                let t = 0;
-                if (chordDeg2 > 0) {
-                    const cdx = repLonLat[0] - startCoord[0];
-                    const cdy = repLonLat[1] - startCoord[1];
-                    t = Math.max(0, Math.min(1, (cdx * dx + cdy * dy) / chordDeg2));
+            if (adjHighway && adjHighway !== feature) {
+                // Barrier runs alongside a highway - use highway's exact height
+                const highwayAnchor = getFeatureAnchorLonLat(adjHighway) || repLonLat;
+                const highwayRefHeight = adjHighway.get('bridgeRefHeight');
+                console.log(`🔍 Rep Highway ${adjHighway.getId()}: highway=${adjHighway.get('highway')}, bridge=${adjHighway.get('bridge')}, anchor=[${highwayAnchor[0].toFixed(6)},${highwayAnchor[1].toFixed(6)}], refHeight=${highwayRefHeight}`);
+                if (highwayRefHeight !== undefined && isFinite(highwayRefHeight)) {
+                    repTerrainElevation = highwayRefHeight;
+                } else {
+                    repTerrainElevation = getBridgeReferenceHeight(adjHighway, highwayAnchor);
+                    console.log(`🔍 Rep Barrier using highway refHeight=${repTerrainElevation.toFixed(2)}m`);
                 }
-                repTerrainElevation = hStart + (hEnd - hStart) * t;
             } else {
-                // No stored bridge geometry: fall back to per-position DEM
-                // sample (should not normally happen — the geometry should have
-                // been captured when the bridge polygon was built).
+                // No adjacent highway found - check if crossing ANY bridge feature
+                // Use findCrossingFeatures to find bridges regardless of layer tags
+                const crossings = findCrossingFeatures(feature, 15);
+                const crossingBridge = crossings.find(c => isBridgeFeature(c.feature));
+                if (crossingBridge) {
+                    repTerrainElevation = getBridgeReferenceHeight(crossingBridge.feature, repLonLat);
+                    console.log(`🔍 Rep Barrier crossing bridge feature ${crossingBridge.feature.getId()}, using bridge height=${repTerrainElevation.toFixed(2)}m`);
+                } else if (bridgeAbove) {
+                    repTerrainElevation = getBridgeReferenceHeight(bridgeAbove, repLonLat);
+                    console.log(`🔍 Rep Barrier crossing bridge (bridgeAbove), using bridge height=${repTerrainElevation.toFixed(2)}m`);
+                } else {
+                    // Fallback: search ALL features for any crossing bridge
+                    const allLayers = window.modelRenderer.getAllMapLayers(window.map.getLayers().getArray());
+                    let foundBridge = false;
+                    for (const layer of allLayers) {
+                        const source = layer && layer.getSource && layer.getSource();
+                        if (!source || !source.getFeatures) continue;
+                        for (const candidate of source.getFeatures()) {
+                            if (candidate === feature || !isBridgeFeature(candidate)) continue;
+                            const candidateGeom = candidate.getGeometry && candidate.getGeometry();
+                            if (!candidateGeom) continue;
+                            if (!geometriesIntersect(geometry, candidateGeom)) continue;
+                            repTerrainElevation = getBridgeReferenceHeight(candidate, repLonLat);
+                            console.log(`🔍 Rep Barrier: found crossing bridge feature ${candidate.getId()}, using bridge height=${repTerrainElevation.toFixed(2)}m`);
+                            foundBridge = true;
+                            break;
+                        }
+                        if (foundBridge) break;
+                    }
+                    if (!foundBridge) {
+                        if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
+                            try { window.mapterhornTerrain.warmUp(repLonLat[0], repLonLat[1]); } catch (e) { /* no DEM yet */ }
+                        }
+                        repTerrainElevation = sampleGroundElevation(repLonLat[0], repLonLat[1]);
+                        console.log(`🔍 Rep Barrier: no highway/bridge found, using ground=${repTerrainElevation.toFixed(2)}m`);
+                    }
+                }
+            }
+        } else if (repIsBridge && !repIsBarrier) {
+            repTerrainElevation = getBridgeReferenceHeight(feature, repLonLat);
+        } else {
+            // Non-bridge way: use ground elevation, but if very close to a
+            // crossing feature (<1m), interpolate instead of DEM.
+            const nearCrossingHeight = !repIsTunnel && !underBridge
+                ? getInterpolatedBridgeHeight(feature, bridgeAbove, repLonLat)
+                : null;
+            if (nearCrossingHeight !== null) {
+                repTerrainElevation = nearCrossingHeight;
+            } else {
+                if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
+                    try { window.mapterhornTerrain.warmUp(repLonLat[0], repLonLat[1]); } catch (e) { /* no DEM yet */ }
+                }
                 repTerrainElevation = sampleGroundElevation(repLonLat[0], repLonLat[1]);
             }
-        } else {
-            // Non-bridge: usual per-position DEM sample.
-            repTerrainElevation = sampleGroundElevation(repLonLat[0], repLonLat[1]);
-        }            const repTotalHeight = repHeightOffset + repTerrainElevation;
-        
-        // Bridge repetition models: one straight ramp between the chord endpoints,
-        // with the deck tilted to that ramp instead of the terrain under the bridge.
-        // Vertical separation for overlapping features (OSM layer=*).
-        // A feature on layer=1 sits above layer=0 ground features, which keeps
-        // stacked roads (bridge above the road under it) visually separated in 3D.
-        const layerOffset = getLayerVerticalOffsetMeters(feature.getProperties());
-        const repTotalHeightWithLayer = repTotalHeight + layerOffset;
+        }
 
+        const repClampToGround = underBridge || (!repIsBridge && !repIsBarrier);
+
+        const repTotalHeight = repHeightOffset + repTerrainElevation;
         let repModelMatrix = Cesium.Transforms.eastNorthUpToFixedFrame(
-            Cesium.Cartesian3.fromDegrees(repLonLat[0], repLonLat[1], repTotalHeightWithLayer)
-        );                if (isBridgeRepetition && window.mapterhornTerrain && window.mapterhornTerrain.applySlopeTilt) {
-                    // Apply bridge ramp tilt to the deck so the deck follows the bridge's
-                    // own medium incline instead of staying flat and the road under the
-                    // bridge being inclined to the road on top of the bridge.
-                    //
-                    // bridgeUseBridgeInclination is set here so createAreaEntity can use
-                    // the same inclination for the area texture on the bridge deck.
-                    try {
-                        window.bridgeUseBridgeInclination = true;
-                        repModelMatrix = window.mapterhornTerrain.applySlopeTilt(repModelMatrix, repLonLat[0], repLonLat[1]);
-                    } catch (e) { /* no DEM data yet */ }
-                } else if (!isBridgeRepetition &&
-                           window.mapterhornTerrain &&
-                           window.mapterhornTerrain.applySlopeTilt) {
-                    try {
-                        repModelMatrix = window.mapterhornTerrain.applySlopeTilt(repModelMatrix, repLonLat[0], repLonLat[1]);
-                    } catch (e) { /* no DEM data yet */ }
-                }
+            Cesium.Cartesian3.fromDegrees(repLonLat[0], repLonLat[1], repClampToGround ? 0 : repTotalHeight)
+        );
 
-                // Apply the same layer=* vertical offset to the model matrix so stacked
-                // 3D features (bridge above the road under it) do not touch each other.
-                if (layerOffset !== 0) {
-                    repModelMatrix = Cesium.Matrix4.multiplyByTranslation(
-                        repModelMatrix,
-                        new Cesium.Cartesian3(0, 0, layerOffset),
-                        new Cesium.Matrix4()
-                    );
-                }
+        // Follow terrain slope so poles/fences stand perpendicular to the ground
+        if (!repIsTunnel && !repIsBridge && (!underBridge || repIsBarrier) && window.mapterhornTerrain && window.mapterhornTerrain.applySlopeTilt) {
+            try {
+                repModelMatrix = window.mapterhornTerrain.applySlopeTilt(repModelMatrix, repLonLat[0], repLonLat[1]);
+            } catch (e) { /* no DEM data yet */ }
+        }
         
         if (debugConfig.enabled && repTerrainElevation > 0) {
             console.log(`🚶 Repetition model ${repIndex} positioned at terrain elevation: ${repTerrainElevation.toFixed(1)}m + offset: ${repHeightOffset.toFixed(1)}m = ${repTotalHeight.toFixed(1)}m`);
@@ -1610,11 +2270,10 @@ window.modelRenderer = {
             show: true
         }));
         
-        // We own the height: Cesium's ground clamp is a no-op against the custom
-        // MapTerhorn provider (no `availability`), so it left repetitions hanging
-        // at the elevation the matrix was built with. Keep the matrix height and
-        // let repositionModelsOnDem() refine it as tiles arrive.
-        repCesiumModel.heightReference = Cesium.HeightReference.NONE;
+        // Keep the sampled height explicit for non-barriers (to avoid ground-clamp
+        // snapping under-bridge ways onto the bridge surface). Barriers under bridges
+        // should use CLAMP_TO_GROUND so they stay on the terrain, not at bridge height.
+        repCesiumModel.heightReference = repIsBarrier ? Cesium.HeightReference.CLAMP_TO_GROUND : Cesium.HeightReference.NONE;
 
         // Track repetition models so the DEM re-seat hook can re-ground them
         // when terrain tiles refine AFTER placement (without this, kerbs,
@@ -1627,12 +2286,17 @@ window.modelRenderer = {
             feature: feature,
             sessionId: this._session3dId,
             heightOffset: repHeightOffset,
+            isBridge: repIsBridge,
+            isUnderBridge: !!underBridge,
+            underBridgeKey: underBridge && underBridge.bridgeKey,
+            surfacePosition: underBridge && underBridge.position,
             lon: repLonLat[0],
             lat: repLonLat[1],
             elevation: repTerrainElevation,
             distance: repDistance,
             lodLevel: 'rep',
             modelUrl: repModel.uri,
+            isTunnel: repIsTunnel,
             lastUpdate: Date.now()
         });
         
@@ -1669,6 +2333,22 @@ window.modelRenderer = {
         // regardless of where it was, and it could push the scene past the
         // budget no matter how many were already resident.
         const areaCentre = areaGeometryCentreLonLat(geometry);
+        const isTunnel = isTunnelFeature(feature);
+        const bridgeAbove = isTunnel || !areaCentre
+            ? null
+            : findBridgeAboveFeature(feature, areaCentre);
+        const underBridgeFeature = bridgeAbove
+            ? (findUnderBridgeWayFeature(feature, bridgeAbove, areaCentre) || feature)
+            : null;
+        const underBridgePosition = underBridgeFeature && underBridgeFeature !== feature
+            ? getFeatureAnchorLonLat(underBridgeFeature)
+            : areaCentre;
+        const underBridge = bridgeAbove
+            ? getUnderBridgeSurface(underBridgeFeature, bridgeAbove, underBridgePosition)
+            : null;
+        const underBridgeHeightOffset = underBridge
+            ? getFeatureHeightOffset(underBridgeFeature)
+            : 0;
         if (areaCentre) {
             const areaDistance = this.getDistanceFromCamera(areaCentre[0], areaCentre[1], cesiumScene);
             const areaVisible = this.isPositionVisible(areaCentre[0], areaCentre[1], cesiumScene);
@@ -1695,40 +2375,31 @@ window.modelRenderer = {
         }
 
         // Use the area texture manager to create the entity
-        // Pass the feature (with its tags) through so createAreaEntity can also
-        // detect bridge=yes/true and build the deck as a single straight ramp
-        // (DEM sampled only at the first and last vertex, the rest interpolated
-        // along the chord) instead of per-vertex ground clamping.
         try {
+            const textureModel = isTunnel
+                ? Object.assign({}, model, {
+                    fixedSurfaceHeight: getTunnelElevation(),
+                    tunnelSurface: true
+                })
+                : (underBridge
+                    ? Object.assign({}, model, {
+                        underBridgeSurfaceHeight: underBridge.height + underBridgeHeightOffset,
+                        underBridgeSurfacePosition: underBridge.position,
+                        underBridgeBridgeKey: underBridge.bridgeKey,
+                        underBridgeSurfaceHeightOffset: underBridgeHeightOffset,
+                        underBridgeSurfaceFeature: underBridgeFeature
+                    })
+                    : model);
             const areaEntity = window.areaTextureManager.createAreaEntity(
                 feature,
                 model.uri, // This is the texture filename
-                model, // Pass the model config
+                textureModel,
                 tagsObj,
                 properties
             );
 
             if (areaEntity) {
                 if (debugConfig.enabled) console.log(`🎨 Successfully created area texture entity for feature ${fidx}`);
-
-                // If this area feature is a bridge and already carries its polygon
-                // coordinates stored by the repetition layer, make sure the feature
-                // we handed to createAreaEntity/ addAreaTexture sees them, so the
-                // straight-ramp chord height path is used for every interior vertex.
-                const propsNow = feature.getProperties();
-                const isBridgeNow =
-                    propsNow.bridge === 'yes' || propsNow.bridge === true ||
-                    (propsNow['bridge'] && propsNow['bridge'] !== 'no' &&
-                     propsNow['bridge'] !== false);
-                if (isBridgeNow && !feature.get('bridgeGeometryCoordinates')) {
-                    const storedCoords =
-                        feature.get('repetition_0_polygonCoordinates') ||
-                        feature.get('bridgeGeometryCoordinates') ||
-                        null;
-                    if (storedCoords && storedCoords.length >= 2) {
-                        feature.set('bridgeGeometryCoordinates', storedCoords);
-                    }
-                }
                 // createAreaEntity() does its own "already has one" early-return,
                 // so this cannot double-build; it just makes the primitive
                 // visible to the census and to the unload path.
@@ -1743,7 +2414,20 @@ window.modelRenderer = {
                         kind: 'texture',
                         primitives: areaEntity,
                         feature: feature,
+                        isTunnel: isTunnel,
+                        surfaceFeature: underBridgeFeature,
                         sessionId: this._session3dId,
+                        bridgeSurfaceHeight: isBridgeFeature(feature)
+                            ? feature.get('bridgeRefHeight')
+                            : (underBridge
+                                ? underBridge.height + underBridgeHeightOffset
+                                : null),
+                        isUnderBridge: !!underBridge,
+                        underBridgeKey: underBridge && underBridge.bridgeKey,
+                        surfaceHeightOffset: underBridgeHeightOffset,
+                        surfacePosition: isBridgeFeature(feature)
+                            ? (feature.get('bridgeRefPosition') || areaCentre)
+                            : (underBridge ? underBridge.position : null),
                         lon: areaCentre ? areaCentre[0] : undefined,
                         lat: areaCentre ? areaCentre[1] : undefined,
                         elevation: 0,
@@ -1760,32 +2444,18 @@ window.modelRenderer = {
         }
     },
 
-    // Add image billboard (PNG/JPG) for a single position.
-    //
-    // `imageHeight` is optional. When supplied (e.g. from a bridge chord
-    // height), the billboard is placed at that explicit height rather than
-    // draped to the terrain, so the image stays horizontal and does not inherit
-    // the DEM under the bridge.
-    //
-    // The current implementation is a no-op stub: repetition image models are
-    // handled via the area-texture / GroundPrimitive path elsewhere, and this
-    // billboard helper is kept as a safe fallback. When the caller passes an
-    // explicit height we acknowledge it and log it, but we do not build a
-    // billboard here because the scene does not own that primitive path yet.
-    addImageBillboard: function(position, imageUri, repModel, cesiumScene, imageHeight) {
+    // Add image billboard for PNG/JPG files
+    addImageBillboard: function(position, imageUri, repModel, cesiumScene) {
         if (debugConfig.enabled) {
             console.warn('🖼️ addImageBillboard is deprecated; use addAreaTexture for polygon coverage');
-            if (imageHeight !== undefined && imageHeight !== null) {
-                console.log(`🖼️ addImageBillboard called with explicit height: ${imageHeight.toFixed(1)}m`);
-            }
         }
     },
 
     // Add textured polygon for area coverage
-    addAreaTexture: function(polygonData, imageUri, repModel, cesiumScene, feature) {
-        // Returns the GroundPrimitive(s) it created, so the caller can record
-        // them. It used to return nothing at all, which is why nothing in this
-        // file could ever count, evict or destroy an area texture.
+    addAreaTexture: function(polygonData, imageUri, repModel, cesiumScene) {
+        // Returns the area texture primitives it created, so the caller can
+        // record them. It used to return nothing at all, which is why nothing
+        // in this file could ever count, evict or destroy an area texture.
         const created = [];
         const polygonCoordinates = Array.isArray(polygonData) ? polygonData : polygonData.outer;
         const polygonHoles = Array.isArray(polygonData) ? [] : (polygonData.holes || []);
@@ -1795,116 +2465,32 @@ window.modelRenderer = {
 
         const sceneToUse = cesiumScene || window.ol3d.getCesiumScene();
 
-        // ── Bridge handling ──────────────────────────────────────────────────
-        // When the feature is tagged bridge=yes/true the deck must be a single
-        // straight ramp from the start vertex to the end vertex: DEM heights
-        // are sampled ONLY at the two endpoints, and every interior vertex gets
-        // a height by linear interpolation along that chord. The DEM in the
-        // middle of the span is ignored so the bridge does not undulate with
-        // the terrain it crosses.
-        //
-        // Bridge detection: look at the supplied feature's tags (bridge=yes or
-        // bridge=true) and at the polygonData.tags bag when the caller passes
-        // one.
-        const bridgeTags = (feature && feature.getProperties) ? feature.getProperties() : null;
-        const isBridge =
-            bridgeTags &&
-            ((bridgeTags.bridge === 'yes' || bridgeTags.bridge === true ||
-              bridgeTags['bridge'] === 'yes' /* OSM string form */ ||
-              bridgeTags['bridge'] === true) ||
-             (bridgeTags['bridge'] && bridgeTags['bridge'] !== 'no' && bridgeTags['bridge'] !== false));
-
-        // Build the Cartesian3 position list.
-        //
-        //   • Non-bridge (and holes): ground-clamped positions at ellipsoid 0
-        //     — Cesium drapes them over the DEM automatically.
-        //   • Bridge outer ring: per-vertex Cartesian3 with explicit heights.
-        //     Endpoints sample the DEM; interior vertices are linearly
-        //     interpolated between the two endpoint heights so the deck is a
-        //     single straight ramp.
-        const cartesianPositions = (function() {
-            if (!isBridge) {
-                // Non-bridge: no explicit heights — ground-clamped draping.
-                return polygonCoordinates.map(coord =>
-                    Cesium.Cartesian3.fromDegrees(coord[0], coord[1]));
-            }
-
-            // Bridge: compute straight-ramp heights.
-            // We need the DEM sampler. Prefer mapterhornTerrain if available,
-            // fall back to the generic terrain managers.
-            const demSampler = (function() {
-                if (window.mapterhornTerrain && window.mapterhornTerrain.getElevation) {
-                    return (lon, lat) => window.mapterhornTerrain.getElevation(lon, lat);
-                }
-                if (window.terrainManager && window.terrainManager.getElevation) {
-                    return (lon, lat) => window.terrainManager.getElevation(lon, lat);
-                }
-                // Last resort: ellipsoid height 0 (flat bridge at sea level).
-                return () => 0;
-            })();
-
-            // Endpoint DEM heights (start = first vertex, end = last vertex).
-            const startCoord = polygonCoordinates[0];
-            const endCoord = polygonCoordinates[polygonCoordinates.length - 1];
-            const hStart = (demSampler(startCoord[0], startCoord[1]) || 0);
-            const hEnd   = (demSampler(endCoord[0],   endCoord[1])   || 0);
-
-            // Linear interpolation helper: t in [0,1] along the chord.
-            const lerpHeight = (t) => hStart + (hEnd - hStart) * Math.max(0, Math.min(1, t));
-
-            // Horizontal chord length (metres) for the t parameter.
-            const dx = endCoord[0] - startCoord[0];
-            const dy = endCoord[1] - startCoord[1];
-            const chordDeg = Math.sqrt(dx * dx + dy * dy);
-            const chordM = chordDeg * 111320 * Math.cos(Cesium.Math.toRadians((startCoord[1] + endCoord[1]) / 2));
-
-            // Deck inclination: the bridge's OWN ramp, not the ground under it.
-            // Used to tilt the texture to follow the deck instead of the terrain under
-            // the bridge.
-            const deckInclination = chordM > 0 ? Math.atan2(hEnd - hStart, chordM) : 0;
-
-            return polygonCoordinates.map((coord, idx) => {
-                let t;
-                if (chordM <= 0) {
-                    // Degenerate (single-point / zero-length ring): flat deck.
-                    t = 0;
-                } else {
-                    // Distance along chord from start, as a fraction of chord length.
-                    const cdx = coord[0] - startCoord[0];
-                    const cdy = coord[1] - startCoord[1];
-                    // Project onto the chord direction, clamp to [0,1] so
-                    // off-axis vertices still get a sensible ramp height.
-                    const along = (cdx * dx + cdy * dy) / (chordDeg * chordDeg || 1);
-                    t = Math.max(0, Math.min(1, along));
-                }
-                const h = lerpHeight(t);
-                return Cesium.Cartesian3.fromDegrees(coord[0], coord[1], h);
-            });
-        })();
-
-        const cartesianHoleHierarchies = polygonHoles.map(holeRing =>
-            new Cesium.PolygonHierarchy(holeRing.map(coord =>
-                Cesium.Cartesian3.fromDegrees(coord[0], coord[1]))));
-
-        // For bridge decks we use per-vertex positions with explicit heights
-        // (already embedded in cartesianPositions above). For non-bridge areas
-        // the positions are at ellipsoid height 0 and Cesium drapes them.
-        // When heights ARE present the vertex format must include positions.
-        const hasHeights = isBridge;
-        const vertexFormat = hasHeights
-            ? Cesium.VertexFormat.POSITION_NORMAL_AND_ST
-            : Cesium.MaterialAppearance.MaterialSupport.TEXTURED.vertexFormat;
-
-        // Bridge deck inclination (from the chord ramp, not the ground under it).
-        // Used to tilt the texture to follow the deck instead of the terrain under
-        // the bridge.
-        const deckInclination = hasHeights
-            ? Math.atan2(hEnd - hStart, chordM > 0 ? chordM : 1)
-            : 0;
-
-
-
-
+        // Convert polygon coordinates to Cartesian3 WITHOUT explicit heights:
+        // the polygon is ground-clamped (see entity below), so Cesium drapes it
+        // over the rendered terrain (MapTerhorn DEM) and the base imagery
+        // exactly — no step edges, no z-fighting, always aligned with ways on
+        // slopes. (Per-vertex heights were tried here and broke rendering:
+        // sparse OSM vertices made the triangulation cut into convex terrain.)
+        let bridgeSurfaceHeight = repModel && isFinite(repModel.bridgeSurfaceHeight)
+            ? repModel.bridgeSurfaceHeight
+            : null;
+        if (repModel && isFinite(repModel.fixedSurfaceHeight)) {
+            bridgeSurfaceHeight = repModel.fixedSurfaceHeight;
+        }
+        const bridgeFeature = repModel && repModel.bridgeFeature;
+        const createPolygonHierarchy = (surfaceHeight) => {
+            const positions = polygonCoordinates.map(coord =>
+                surfaceHeight === null
+                ? Cesium.Cartesian3.fromDegrees(coord[0], coord[1])
+                    : Cesium.Cartesian3.fromDegrees(coord[0], coord[1], surfaceHeight)
+            );
+            const holeHierarchies = polygonHoles.map(holeRing =>
+                new Cesium.PolygonHierarchy(holeRing.map(coord =>
+                    surfaceHeight === null
+                    ? Cesium.Cartesian3.fromDegrees(coord[0], coord[1])
+                        : Cesium.Cartesian3.fromDegrees(coord[0], coord[1], surfaceHeight))));
+            return new Cesium.PolygonHierarchy(positions, holeHierarchies);
+        };
 
         // Calculate bounding box in degrees
         let minLon = Infinity, maxLon = -Infinity, minLat = Infinity, maxLat = -Infinity;
@@ -1928,7 +2514,11 @@ window.modelRenderer = {
             textureRotation = repModel.rotation;
             if (modelRendererTexLog()) console.log(`🖼️ Using provided rotation from repModel: ${(textureRotation * 180 / Math.PI).toFixed(1)}°`);
         } else {
-            textureRotation = this.calculateTextureRotation(polygonCoordinates, imageUri);
+            textureRotation = this.calculateTextureRotation(
+                polygonCoordinates,
+                imageUri,
+                repModel && repModel.featureTags ? repModel.featureTags : {}
+            );
             if (modelRendererTexLog()) console.log(`🖼️ Calculated texture rotation: ${(textureRotation * 180 / Math.PI).toFixed(1)}°`);
         }
 
@@ -1937,168 +2527,111 @@ window.modelRenderer = {
         let texturedPolygon; // Declare for scope
 
         img.onload = () => {
-            const imageWidth = img.width;
-            const imageHeight = img.height;
-            const imageAspectRatio = imageWidth / imageHeight;
-            const polygonAspectRatio = widthMeters / heightMeters;
-
-            // Calculate desired texture size in meters (how large the texture should appear in real world)
-            // For pavement/parking textures, typically 1 meter tiles
-            const baseTextureSizeMeters = repModel.spacing || 1.0; // Use spacing from config, default 1m
-            const textureScale = repModel.scale || 1.0; // Use scale from config, default 1
-            const desiredTextureSizeMeters = baseTextureSizeMeters * textureScale; // Scale affects texture size
-
-            // Calculate how many times to repeat texture to fill the polygon
-            const textureRepeatX = widthMeters / desiredTextureSizeMeters;
-            const textureRepeatY = heightMeters / desiredTextureSizeMeters;
-
-            // Texture repeat is baked into the canvas tiling (GroundPrimitive approach)
-
-            if (debugConfig.enabled) console.log(`🖼️ Fixed texture repeat: ${textureRepeatX.toFixed(2)} x ${textureRepeatY.toFixed(2)} (polygon ${widthMeters.toFixed(1)}m x ${heightMeters.toFixed(1)}m, desired tile size ${desiredTextureSizeMeters}m)`);
-
-            if (modelRendererTexLog()) console.log(`🖼️ textureRotation: ${(textureRotation * 180 / Math.PI).toFixed(1)}°`);
-            if (textureRotation !== 0) {
-                if (modelRendererTexLog()) console.log(`🖼️ Creating rotated texture canvas: ${(textureRotation * 180 / Math.PI).toFixed(1)}°`);
-                
-                const imageWidth = img.width;
-                const imageHeight = img.height;
-                // Use actual image dimensions, not minimum
-                const tileWidth = imageWidth;
-                const tileHeight = imageHeight;
-                const tileSize = Math.min(imageWidth, imageHeight); // For spacing calculation
-                
-                // Calculate canvas size based on polygon dimensions
-                const baseTextureSizeMeters = repModel.spacing || 1.0;
-                const textureScale = repModel.scale || 1.0;
-                const desiredTextureSizeMeters = baseTextureSizeMeters * textureScale;
-                const pixelsPerMeter = tileSize / desiredTextureSizeMeters;
-                let canvasWidth = Math.floor(widthMeters * pixelsPerMeter);
-                let canvasHeight = Math.floor(heightMeters * pixelsPerMeter);
-                
-                const scale = Math.min(1, AREA_TEXTURE_MAX_CANVAS / Math.max(canvasWidth, canvasHeight));
-                canvasWidth = Math.floor(canvasWidth * scale);
-                canvasHeight = Math.floor(canvasHeight * scale);
-                const scaledTileWidth = Math.floor(tileWidth * scale);
-                const scaledTileHeight = Math.floor(tileHeight * scale);
-                
-                if (modelRendererTexLog()) console.log(`🖼️ Canvas: ${canvasWidth}x${canvasHeight}px, tile: ${scaledTileWidth}x${scaledTileHeight}px`);
-                
-                const canvas = document.createElement('canvas');
-                canvas.width = canvasWidth;
-                canvas.height = canvasHeight;
-                const ctx = canvas.getContext('2d');
-                
-                // Rotate context around center - apply different offsets based on texture type and orientation
-                ctx.translate(canvasWidth / 2, canvasHeight / 2);
-                const isCrossingTexture = imageUri.toLowerCase().includes('i_crossing.png') ||
-                                        imageUri.toLowerCase().includes('crossing');
-                const isParkingTexture = imageUri.toLowerCase().includes('i_parking');
-                
-                let finalRotation;
-                if (isCrossingTexture) {
-                    finalRotation = textureRotation + (45 * Math.PI / 180); // Add 45 degrees for crossings
-                } else if (isParkingTexture) {
-                    // For parking textures, apply different offsets based on street orientation
-                    const bearingDegrees = ((textureRotation * 180 / Math.PI) + 360) % 360; // Normalize to 0-360
-                    const isNorthSouth = (bearingDegrees >= 315 || bearingDegrees < 45) || // North (0° ± 45°)
-                                       (bearingDegrees >= 135 && bearingDegrees < 225); // South (180° ± 45°)
-                    const isEastWest = (bearingDegrees >= 45 && bearingDegrees < 135) || // East (90° ± 45°)
-                                     (bearingDegrees >= 225 && bearingDegrees < 315); // West (270° ± 45°)
-                    
-                    if (isNorthSouth) {
-                        finalRotation = textureRotation + (35 * Math.PI / 180); // Add 35 degrees for north-south parking
-                        if (modelRendererTexLog()) {
-                            console.log(`🖼️ North-South parking detected (bearing: ${bearingDegrees.toFixed(1)}°), applying 35° offset`);
-                        }
-                    } else if (isEastWest) {
-                        finalRotation = textureRotation + (45 * Math.PI / 180); // Add 45 degrees for east-west parking
-                        if (modelRendererTexLog()) {
-                            console.log(`🖼️ East-West parking detected (bearing: ${bearingDegrees.toFixed(1)}°), applying 45° offset`);
-                        }
-                    } else {
-                        finalRotation = textureRotation; // Fallback: no offset
-                    }
-                } else {
-                    finalRotation = textureRotation; // Use direct rotation for other textures
+            if (bridgeFeature) {
+                const refinedHeight = bridgeFeature.get('bridgeRefHeight');
+                if (refinedHeight !== undefined && refinedHeight !== null && isFinite(refinedHeight)) {
+                    bridgeSurfaceHeight = refinedHeight;
+                    polygonHierarchy = createPolygonHierarchy(bridgeSurfaceHeight);
                 }
-                
-                if (modelRendererTexLog()) {
-                    console.log(`🖼️ ${isCrossingTexture ? 'Crossing' : (isParkingTexture ? 'Parking' : 'Other')} texture - base: ${(textureRotation * 180 / Math.PI).toFixed(1)}°, final: ${(finalRotation * 180 / Math.PI).toFixed(1)}°`);
-                }
-                
-                ctx.rotate(finalRotation);
-                
-                // Calculate how many tiles needed to cover area when rotated
-                const diagonal = Math.sqrt(canvasWidth * canvasWidth + canvasHeight * canvasHeight);
-                const tilesX = Math.ceil(diagonal / scaledTileWidth) + 2;
-                const tilesY = Math.ceil(diagonal / scaledTileHeight) + 2;
-                
-                // Draw tiles covering entire area
-                for (let x = 0; x < tilesX; x++) {
-                    for (let y = 0; y < tilesY; y++) {
-                        ctx.drawImage(img, 
-                            -diagonal / 2 - scaledTileWidth + x * scaledTileWidth,
-                            -diagonal / 2 - scaledTileHeight + y * scaledTileHeight,
-                            scaledTileWidth,
-                            scaledTileHeight);
-                    }
-                }
-                
-                // Create data URL
-                const rotatedImageDataUrl = canvas.toDataURL('image/jpeg', AREA_TEXTURE_JPEG_QUALITY);
-                
-                // Create GroundPrimitive with rotated canvas — same layer as GLTF models
-                const _sceneRT = cesiumScene || (window.ol3d && window.ol3d.getCesiumScene ? window.ol3d.getCesiumScene() : null);
-                if (_sceneRT && polygonHierarchy) {
-                    try {
-                        const gpRot = new Cesium.GroundPrimitive({                                geometryInstances: new Cesium.GeometryInstance({
-                                geometry: new Cesium.PolygonGeometry({
-                                    polygonHierarchy: polygonHierarchy,
-                                    vertexFormat: vertexFormat
-                                })
-                            }),
-                            appearance: new Cesium.MaterialAppearance({
-                                material: new Cesium.Material({ fabric: { type: 'Image',
-                                    uniforms: { image: rotatedImageDataUrl,
-                                        inclination: deckInclination } } }),
-                                translucent: true
-                            }),
-                            asynchronous: false
-                        });
-                        _sceneRT.primitives.add(gpRot);
-                        created.push(gpRot);
-                        if (modelRendererTexLog()) console.log(`🖼️ Created GroundPrimitive with rotated texture`);
-                    } catch (e) { if (debugConfig.enabled) console.warn('GroundPrimitive creation error:', e); }
+            } else if (repModel && repModel.underBridgeFeature && repModel.underBridgeKey) {
+                const surfaces = repModel.underBridgeFeature.get('underBridgeSurfaces') || {};
+                const surface = surfaces[repModel.underBridgeKey];
+                if (surface && isFinite(surface.height)) {
+                    bridgeSurfaceHeight = surface.height + (repModel.underBridgeSurfaceHeightOffset || 0);
+                    polygonHierarchy = createPolygonHierarchy(bridgeSurfaceHeight);
                 }
             }
-
-
-            // No-rotation case: create GroundPrimitive with original image
-            if (textureRotation === 0) {
-                const _sceneNR = cesiumScene || (window.ol3d && window.ol3d.getCesiumScene ? window.ol3d.getCesiumScene() : null);
-                if (_sceneNR && polygonHierarchy) {
-                    try {
-                        const gpNr = new Cesium.GroundPrimitive({                                geometryInstances: new Cesium.GeometryInstance({
-                                geometry: new Cesium.PolygonGeometry({
-                                    polygonHierarchy: polygonHierarchy,
-                                    vertexFormat: vertexFormat
-                                })
-                            }),
-                            appearance: new Cesium.MaterialAppearance({
-                                material: new Cesium.Material({ fabric: { type: 'Image', uniforms: { image: imageUri,
-                                        inclination: deckInclination } } }),
-                                translucent: true
-                            }),
-                            asynchronous: false
-                        });
-                        _sceneNR.primitives.add(gpNr);
-                        created.push(gpNr);
-                        if (modelRendererTexLog()) console.log(`🖼️ Created GroundPrimitive with original texture`);
-                    } catch (e) { if (debugConfig.enabled) console.warn('GroundPrimitive creation error:', e); }
-                }
+            const imageWidth = img.naturalWidth || img.width;
+            const imageHeight = img.naturalHeight || img.height;
+            if (!imageWidth || !imageHeight) {
+                console.error(`🖼️ Texture ${imageUri} has invalid dimensions: ${imageWidth}x${imageHeight}`);
+                return;
             }
 
-            if (debugConfig.enabled) console.log(`🖼️ Fixed texture repeat: ${textureRepeatX.toFixed(2)} x ${textureRepeatY.toFixed(2)} (polygon ${widthMeters.toFixed(1)}m x ${heightMeters.toFixed(1)}m, desired tile size ${desiredTextureSizeMeters}m)`);
+            // Repeat the original texture on the GPU. The short image side maps
+            // to the configured tile size; the other side follows its aspect.
+            const baseTextureSizeMeters = repModel.spacing || 1.0;
+            const textureScale = repModel.scale || 1.0;
+            const desiredTileSize = baseTextureSizeMeters * textureScale;
+            if (!Number.isFinite(desiredTileSize) || desiredTileSize <= 0) {
+                throw new RangeError('Area texture tile size must be a positive number');
+            }
+            const shortImageSide = Math.min(imageWidth, imageHeight);
+            const tileWidthMeters = desiredTileSize * imageWidth / shortImageSide;
+            const tileHeightMeters = desiredTileSize * imageHeight / shortImageSide;
+            const textureRotationOffsetDegrees = Number.isFinite(repModel.textureRotationOffsetDegrees)
+                ? repModel.textureRotationOffsetDegrees
+                : 0;
+            const finalRotation = textureRotation;
+
+            if (debugConfig.enabled) {
+                console.log(`🖼️ Native-resolution repeat: ${tileWidthMeters.toFixed(2)}m x ${tileHeightMeters.toFixed(2)}m tiles across ${widthMeters.toFixed(2)}m x ${heightMeters.toFixed(2)}m area`);
+            }
+
+            const textureScene = cesiumScene ||
+                (window.ol3d && window.ol3d.getCesiumScene ? window.ol3d.getCesiumScene() : null);
+            if (textureScene && polygonHierarchy) {
+                try {
+                    const texturePrimitive = bridgeSurfaceHeight === null
+                        ? Cesium.GroundPrimitive
+                        : Cesium.Primitive;
+                    // PolygonGeometry clamps stRotation against its unrotated
+                    // bounds. Rotate in meter space in the material instead,
+                    // so angled tiles keep the same dimensions without clipping.
+                    const primitive = new texturePrimitive({
+                        geometryInstances: new Cesium.GeometryInstance({
+                            geometry: new Cesium.PolygonGeometry({
+                                polygonHierarchy,
+                                vertexFormat: Cesium.MaterialAppearance.MaterialSupport.TEXTURED.vertexFormat,
+                                perPositionHeight: bridgeSurfaceHeight !== null
+                            })
+                        }),
+                        appearance: new Cesium.MaterialAppearance({
+                            material: new Cesium.Material({
+                                fabric: {
+                                    type: 'WorldScaleImage',
+                                    uniforms: {
+                                        image: imageUri,
+                                        areaSizeMeters: new Cesium.Cartesian2(widthMeters, heightMeters),
+                                        tileSizeMeters: new Cesium.Cartesian2(tileWidthMeters, tileHeightMeters),
+                                        textureRotation: -finalRotation +
+                                            textureRotationOffsetDegrees * Math.PI / 180
+                                    },
+                                    source: `
+                                        czm_material czm_getMaterial(czm_materialInput materialInput) {
+                                            czm_material material = czm_getDefaultMaterial(materialInput);
+                                            vec2 localPosition = (materialInput.st - vec2(0.5)) * areaSizeMeters;
+                                            float cosine = cos(textureRotation);
+                                            float sine = sin(textureRotation);
+                                            vec2 rotatedPosition = vec2(
+                                                cosine * localPosition.x - sine * localPosition.y,
+                                                sine * localPosition.x + cosine * localPosition.y
+                                            );
+                                            vec2 textureSt = rotatedPosition / tileSizeMeters;
+                                            vec4 texel = texture2D(image, fract(textureSt));
+                                            material.diffuse = czm_gammaCorrect(texel.rgb);
+                                            material.alpha = texel.a;
+                                            return material;
+                                        }
+                                    `
+                                }
+                            }),
+                            translucent: true
+                        }),
+                        asynchronous: false
+                    });
+                    if (repModel && repModel.undergroundFeature) {
+                        primitive.show = isUndergroundFeature(repModel.undergroundFeature) === isUndergroundViewEnabled();
+                    }
+                    textureScene.primitives.add(primitive);
+                    created.push(primitive);
+                    if (modelRendererTexLog()) {
+                        console.log(`🖼️ Created repeated texture with rotation ${(finalRotation * 180 / Math.PI).toFixed(1)}°`);
+                    }
+                } catch (error) {
+                    console.error('🖼️ Failed to create repeated area texture:', error);
+                }
+            }
         };
 
         // Everything the onload handler needs is built BEFORE `img.src` is
@@ -2113,23 +2646,14 @@ window.modelRenderer = {
         // try/catch, so it is swallowed and the area texture silently never
         // appears. Building it first removes the ordering dependency entirely.
 
-        // Initial repeat (will be updated when image loads) - apply scale here too
-        const textureScale = repModel ? (repModel.scale || 1.0) : 1.0;
-        const initialRepeatX = widthMeters / textureScale;
-        const initialRepeatY = heightMeters / textureScale;
-
-        // Calculate polygon center for entity rotation
-        const centerLon = (minLon + maxLon) / 2;
-        const centerPosition = Cesium.Cartesian3.fromDegrees(centerLon, centerLat);
-
-        const polygonHierarchy = new Cesium.PolygonHierarchy(cartesianPositions, cartesianHoleHierarchies);
+        // Create polygon hierarchy
+        let polygonHierarchy = createPolygonHierarchy(bridgeSurfaceHeight);
 
         img.src = imageUri;
 
-        // Area textures are now rendered as GroundPrimitive on scene.primitives
-        // (same layer as GLTF models) — avoids flying textures and keeps everything
-        // on a single rendering layer. The primitive is created inside img.onload
-        // above, once the texture image has loaded.
+        // Terrain-following textures use GroundPrimitive; bridge surfaces use
+        // a flat Primitive at their reference height. Both are created inside
+        // img.onload above, once the texture image has loaded.
         //
         // `created` is returned by reference and filled in by the handler when
         // the image arrives, so the caller's array ends up holding every
@@ -2143,11 +2667,19 @@ window.modelRenderer = {
      * @param {string} textureName - Name of the texture file
      * @returns {number} Rotation angle in radians (0 if no rotation needed)
      */
-    calculateTextureRotation: function(polygonCoordinates, textureName) {
+    calculateTextureRotation: function(polygonCoordinates, textureName, tagsObj = {}) {
         if (modelRendererTexLog()) console.log(`🖼️ calculateTextureRotation: ${textureName}`);
 
+        const isFootwayTexture = textureName.toLowerCase().includes('i_llamborda.jpg');
+        const textureTags = tagsObj || {};
+        const isFootwayArea = isFootwayTexture && (
+            textureTags['area:highway'] === 'footway' ||
+            textureTags.highway === 'footway' ||
+            textureTags.footway === 'sidewalk'
+        );
         const isCrossingTexture = textureName.toLowerCase().includes('i_crossing.png') ||
                                 textureName.toLowerCase().includes('crossing');
+        const isParkingTexture = textureName.toLowerCase().includes('i_parking');
 
         if (modelRendererTexLog()) console.log(`🖼️ isCrossingTexture: ${isCrossingTexture}`);
 
@@ -2173,7 +2705,7 @@ window.modelRenderer = {
 
             if (modelRendererTexLog()) console.log(`🖼️ isLimitTexture: ${isLimitTexture}`);
 
-            if (isLimitTexture) {
+            if (isLimitTexture && !isFootwayArea && !isParkingTexture) {
                 if (modelRendererTexLog()) console.log(`🖼️ limit/adjacent texture path (polygon longest edge)`);
                 const limitRotation = this.calculateCrossingTextureRotation(polygonCoordinates, textureName);
                 if (modelRendererTexLog()) console.log(`🖼️ limit rotation: ${limitRotation}`);
@@ -2212,8 +2744,17 @@ window.modelRenderer = {
 
             if (modelRendererTexLog()) console.log(`🖼️ nearby ways: ${nearbyWays.length}`);
 
-            const isParkingTexture = textureName.toLowerCase().includes('i_parking');
             let sourceWays = nearbyWays;
+            if (isFootwayArea) {
+                const footwayWays = nearbyWays.filter(feature =>
+                    feature.get && (
+                        feature.get('highway') === 'footway' ||
+                        feature.get('footway') === 'sidewalk' ||
+                        feature.get('area:highway') === 'footway'
+                    )
+                );
+                sourceWays = footwayWays;
+            }
             if (isParkingTexture) {
                 const kerbWays = nearbyWays.filter(f => f.get && f.get('barrier') === 'kerb');
                 if (kerbWays.length > 0) {
@@ -2223,6 +2764,13 @@ window.modelRenderer = {
             }
 
             if (sourceWays.length === 0) {
+                if (isFootwayArea) {
+                    const polygonRotation = this.calculateCrossingTextureRotation(
+                        polygonCoordinates,
+                        textureName
+                    );
+                    if (polygonRotation !== null) return polygonRotation;
+                }
                 const closestFallbackSegment = this.findClosestWaySegmentToPolygon(
                     layers,
                     polygonCoordinates,
@@ -3109,13 +3657,53 @@ window.modelRenderer = {
         let updated = 0;
         this.loadedModels.forEach((entry) => {
             try {
-                if (!entry.model || !entry.feature) return;
-                // GroundPrimitive area textures are clamped to the terrain by
-                // Cesium and carry no modelMatrix: there is nothing to re-seat.
-                if (entry.kind === 'texture') return;
+                if (!entry.feature) return;
                 // Skip entries from older 3D sessions — their primitives were
                 // destroyed with the previous scene and must not be touched.
                 if (entry.sessionId !== undefined && entry.sessionId !== this._session3dId) return;
+                if (isTunnelFeature(entry.feature)) return;
+                if (entry.kind === 'texture') {
+                    if (typeof entry.bridgeSurfaceHeight !== 'number' ||
+                        !isFinite(entry.bridgeSurfaceHeight) || !entry.surfacePosition) return;
+                    const surfacePosition = entry.surfacePosition;
+                    const groundHeight = sampleGroundElevation(surfacePosition[0], surfacePosition[1]);
+                    if (!isFinite(groundHeight)) return;
+                    const refinedHeight = groundHeight + (entry.surfaceHeightOffset || 0);
+                    const delta = refinedHeight - entry.bridgeSurfaceHeight;
+                    if (Math.abs(delta) < 0.5) return;
+
+                    const primitives = Array.isArray(entry.primitives)
+                        ? entry.primitives
+                        : (entry.primitives ? [entry.primitives] : []);
+                    if (primitives.length > 0) {
+                        const anchor = Cesium.Cartesian3.fromDegrees(surfacePosition[0], surfacePosition[1]);
+                        const up = Cesium.Ellipsoid.WGS84.geodeticSurfaceNormal(anchor, new Cesium.Cartesian3());
+                        const translation = Cesium.Matrix4.fromTranslation(
+                            Cesium.Cartesian3.multiplyByScalar(up, delta, new Cesium.Cartesian3())
+                        );
+                        primitives.forEach((primitive) => {
+                            if (!primitive || !primitive.modelMatrix) return;
+                            primitive.modelMatrix = Cesium.Matrix4.multiply(
+                                translation,
+                                primitive.modelMatrix,
+                                new Cesium.Matrix4()
+                            );
+                        });
+                    }
+                    entry.bridgeSurfaceHeight = refinedHeight;
+                    if (entry.isUnderBridge && entry.underBridgeKey) {
+                        const surfaceFeature = entry.surfaceFeature || entry.feature;
+                        const surfaces = surfaceFeature.get('underBridgeSurfaces') || {};
+                        const surface = surfaces[entry.underBridgeKey];
+                        if (surface) surface.height = groundHeight;
+                        surfaceFeature.set('underBridgeSurfaces', surfaces);
+                    } else {
+                        entry.feature.set('bridgeRefHeight', refinedHeight);
+                    }
+                    updated++;
+                    return;
+                }
+                if (!entry.model) return;
                 // Nothing is skipped here any more. Models used to be marked
                 // CLAMP_TO_GROUND and skipped on that basis, but the clamp is a
                 // no-op with the MapTerhorn provider (it exposes no
@@ -3126,13 +3714,28 @@ window.modelRenderer = {
                 const heightOffset = (entry.heightOffset !== undefined && entry.heightOffset !== null)
                     ? entry.heightOffset
                     : (entry.feature.get('modelHeightOffset') || 0.0);
+                const isBridge = (entry.isBridge !== undefined) ? entry.isBridge : isBridgeFeature(entry.feature);
+
                 // Sample exactly the same way placement did. Reading
                 // mapterhornTerrain directly here fought the placement path,
                 // which prefers terrainManager (local GeoTIFF) when one is
                 // loaded: the two sources disagreed and the model was dragged
                 // between them on every tile callback. Same sampler, same answer.
-                const demHeight = sampleGroundElevation(lon, lat);
+                const referencePosition = isBridge
+                    ? (entry.feature.get('bridgeRefPosition') || [lon, lat])
+                    : (entry.isUnderBridge && entry.surfacePosition
+                        ? entry.surfacePosition
+                        : [lon, lat]);
+                const demHeight = sampleGroundElevation(referencePosition[0], referencePosition[1]);
                 if (demHeight === null || demHeight === undefined || !isFinite(demHeight)) return;
+                if (isBridge) entry.feature.set('bridgeRefHeight', demHeight);
+                if (entry.isUnderBridge && entry.underBridgeKey) {
+                    const surfaceFeature = entry.surfaceFeature || entry.feature;
+                    const surfaces = surfaceFeature.get('underBridgeSurfaces') || {};
+                    const surface = surfaces[entry.underBridgeKey];
+                    if (surface) surface.height = demHeight;
+                    surfaceFeature.set('underBridgeSurfaces', surfaces);
+                }
                 const totalHeight = heightOffset + demHeight;
 
                 const matrix = entry.model.modelMatrix;
