@@ -2141,7 +2141,6 @@ window.modelRenderer = {
                     console.log(`🔍 Rep Barrier using highway refHeight=${repTerrainElevation.toFixed(2)}m`);
                 }
             } else {
-            } else {
                 // No adjacent highway found - check if crossing ANY bridge feature
                 const crossings = findCrossingFeatures(feature, 15);
                 const crossingBridge = crossings.find(c => isBridgeFeature(c.feature));
