@@ -1715,6 +1715,7 @@ window.modelRenderer = {
                 }
             } else {
                 // No adjacent highway found - check if crossing ANY bridge feature
+                // Use findCrossingFeatures to find bridges regardless of layer tags
                 const crossings = findCrossingFeatures(feature, 15);
                 const crossingBridge = crossings.find(c => isBridgeFeature(c.feature));
                 if (crossingBridge) {
@@ -1722,14 +1723,33 @@ window.modelRenderer = {
                     console.log(`🔍 Barrier crossing bridge feature ${crossingBridge.feature.getId()}, using bridge height=${terrainElevation.toFixed(2)}m`);
                 } else if (bridgeAbove) {
                     terrainElevation = getBridgeReferenceHeight(bridgeAbove, lonLat);
-                    console.log(`🔍 Barrier crossing bridge, using bridge height=${terrainElevation.toFixed(2)}m`);
+                    console.log(`🔍 Barrier crossing bridge (bridgeAbove), using bridge height=${terrainElevation.toFixed(2)}m`);
                 } else {
-                    // Regular ground
-                    if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
-                        try { window.mapterhornTerrain.warmUp(lonLat[0], lonLat[1]); } catch (e) { /* no DEM yet */ }
+                    // Fallback: search ALL features for any crossing bridge
+                    const allLayers = window.modelRenderer.getAllMapLayers(window.map.getLayers().getArray());
+                    let foundBridge = false;
+                    for (const layer of allLayers) {
+                        const source = layer && layer.getSource && layer.getSource();
+                        if (!source || !source.getFeatures) continue;
+                        for (const candidate of source.getFeatures()) {
+                            if (candidate === feature || !isBridgeFeature(candidate)) continue;
+                            const candidateGeom = candidate.getGeometry && candidate.getGeometry();
+                            if (!candidateGeom) continue;
+                            if (!geometriesIntersect(geometry, candidateGeom)) continue;
+                            terrainElevation = getBridgeReferenceHeight(candidate, lonLat);
+                            console.log(`🔍 Barrier: found crossing bridge feature ${candidate.getId()}, using bridge height=${terrainElevation.toFixed(2)}m`);
+                            foundBridge = true;
+                            break;
+                        }
+                        if (foundBridge) break;
                     }
-                    terrainElevation = sampleGroundElevation(lonLat[0], lonLat[1]);
-                    console.log(`🔍 Barrier: no highway/bridge found, using ground=${terrainElevation.toFixed(2)}m`);
+                    if (!foundBridge) {
+                        if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
+                            try { window.mapterhornTerrain.warmUp(lonLat[0], lonLat[1]); } catch (e) { /* no DEM yet */ }
+                        }
+                        terrainElevation = sampleGroundElevation(lonLat[0], lonLat[1]);
+                        console.log(`🔍 Barrier: no highway/bridge found, using ground=${terrainElevation.toFixed(2)}m`);
+                    }
                 }
             }
         } else if (isActuallyBridge) {
@@ -2142,6 +2162,7 @@ window.modelRenderer = {
                 }
             } else {
                 // No adjacent highway found - check if crossing ANY bridge feature
+                // Use findCrossingFeatures to find bridges regardless of layer tags
                 const crossings = findCrossingFeatures(feature, 15);
                 const crossingBridge = crossings.find(c => isBridgeFeature(c.feature));
                 if (crossingBridge) {
@@ -2149,13 +2170,33 @@ window.modelRenderer = {
                     console.log(`🔍 Rep Barrier crossing bridge feature ${crossingBridge.feature.getId()}, using bridge height=${repTerrainElevation.toFixed(2)}m`);
                 } else if (bridgeAbove) {
                     repTerrainElevation = getBridgeReferenceHeight(bridgeAbove, repLonLat);
-                    console.log(`🔍 Rep Barrier crossing bridge, using bridge height=${repTerrainElevation.toFixed(2)}m`);
+                    console.log(`🔍 Rep Barrier crossing bridge (bridgeAbove), using bridge height=${repTerrainElevation.toFixed(2)}m`);
                 } else {
-                    if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
-                        try { window.mapterhornTerrain.warmUp(repLonLat[0], repLonLat[1]); } catch (e) { /* no DEM yet */ }
+                    // Fallback: search ALL features for any crossing bridge
+                    const allLayers = window.modelRenderer.getAllMapLayers(window.map.getLayers().getArray());
+                    let foundBridge = false;
+                    for (const layer of allLayers) {
+                        const source = layer && layer.getSource && layer.getSource();
+                        if (!source || !source.getFeatures) continue;
+                        for (const candidate of source.getFeatures()) {
+                            if (candidate === feature || !isBridgeFeature(candidate)) continue;
+                            const candidateGeom = candidate.getGeometry && candidate.getGeometry();
+                            if (!candidateGeom) continue;
+                            if (!geometriesIntersect(geometry, candidateGeom)) continue;
+                            repTerrainElevation = getBridgeReferenceHeight(candidate, repLonLat);
+                            console.log(`🔍 Rep Barrier: found crossing bridge feature ${candidate.getId()}, using bridge height=${repTerrainElevation.toFixed(2)}m`);
+                            foundBridge = true;
+                            break;
+                        }
+                        if (foundBridge) break;
                     }
-                    repTerrainElevation = sampleGroundElevation(repLonLat[0], repLonLat[1]);
-                    console.log(`🔍 Rep Barrier: no highway/bridge found, using ground=${repTerrainElevation.toFixed(2)}m`);
+                    if (!foundBridge) {
+                        if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
+                            try { window.mapterhornTerrain.warmUp(repLonLat[0], repLonLat[1]); } catch (e) { /* no DEM yet */ }
+                        }
+                        repTerrainElevation = sampleGroundElevation(repLonLat[0], repLonLat[1]);
+                        console.log(`🔍 Rep Barrier: no highway/bridge found, using ground=${repTerrainElevation.toFixed(2)}m`);
+                    }
                 }
             }
         } else if (repIsBridge && !repIsBarrier) {
