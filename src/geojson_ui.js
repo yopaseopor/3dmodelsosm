@@ -12,12 +12,9 @@ class GeoJSONUI {
         this.statusPanel = null;
         this.downloadButton = null;
         this.downloadStatus = null;
-<<<<<<< HEAD
-=======
         this.downloadResult = null;
         this.downloadObjectUrl = null;
         this.downloadFile = null;
->>>>>>> 8c67cb33de1c99b8bb0be01bae09b51d91a90d30
     }
 
     /**
@@ -138,24 +135,18 @@ class GeoJSONUI {
 
         this.downloadButton = document.getElementById('geojson-download-btn');
         this.downloadStatus = document.getElementById('geojson-download-status');
-<<<<<<< HEAD
-=======
         this.downloadResult = document.getElementById('geojson-download-result');
->>>>>>> 8c67cb33de1c99b8bb0be01bae09b51d91a90d30
         if (this.downloadButton) {
             this.downloadButton.addEventListener('click', () => {
                 this.downloadVisibleArea();
             });
         }
-<<<<<<< HEAD
-=======
 
         window.addEventListener('beforeunload', () => {
             if (this.downloadObjectUrl) {
                 URL.revokeObjectURL(this.downloadObjectUrl);
             }
         });
->>>>>>> 8c67cb33de1c99b8bb0be01bae09b51d91a90d30
     }
 
     /**
@@ -168,15 +159,6 @@ class GeoJSONUI {
             return;
         }
 
-<<<<<<< HEAD
-        const view = map.getView();
-        if (view.getZoom() < 20) {
-            this.setDownloadStatus('Zoom to level 20 or higher to download.');
-            return;
-        }
-
-        const size = map.getSize();
-=======
         const mobileMenu = document.querySelector('.menu.menu-visible');
         if (mobileMenu && window.innerWidth <= 599) {
             mobileMenu.classList.remove('menu-visible');
@@ -205,7 +187,6 @@ class GeoJSONUI {
                 }
             }
         }
->>>>>>> 8c67cb33de1c99b8bb0be01bae09b51d91a90d30
         if (!size || !size[0] || !size[1]) {
             this.setDownloadStatus('Map extent is unavailable.');
             return;
@@ -228,11 +209,7 @@ class GeoJSONUI {
         const lonLatExtent = ol.proj.transformExtent(extent, view.getProjection(), 'EPSG:4326');
         const [west, south, east, north] = lonLatExtent;
         const bbox = `${south},${west},${north},${east}`;
-<<<<<<< HEAD
-        const query = `[out:xml][timeout:${timeoutSeconds}];(nwr(${bbox}););out body geom;`;
-=======
         const query = `[out:xml][timeout:${timeoutSeconds}];way(${bbox})->.visibleWays;node(${bbox})->.visibleNodes;(.visibleWays;.visibleNodes;)->.visibleElements;.visibleElements out body geom;rel(bw.visibleWays)->.wayRelations;rel(bn.visibleNodes)->.nodeRelations;(.wayRelations;.nodeRelations;)->.visibleRelations;.visibleRelations out body;`;
->>>>>>> 8c67cb33de1c99b8bb0be01bae09b51d91a90d30
         const xhr = new XMLHttpRequest();
 
         if (this.downloadButton) {
@@ -267,28 +244,6 @@ class GeoJSONUI {
                 throw new Error(`Overpass error: ${remark.textContent.trim()}`);
             }
 
-<<<<<<< HEAD
-            const features = new ol.format.OSMXML().readFeatures(xmlDocument, {
-                featureProjection: view.getProjection()
-            });
-            const geoJSON = new ol.format.GeoJSON().writeFeaturesObject(features, {
-                dataProjection: 'EPSG:4326',
-                featureProjection: view.getProjection()
-            });
-            const blob = new Blob([JSON.stringify(geoJSON, null, 2)], {
-                type: 'application/geo+json'
-            });
-            const objectUrl = URL.createObjectURL(blob);
-            const link = document.createElement('a');
-            const center = ol.proj.transform(view.getCenter(), view.getProjection(), 'EPSG:4326');
-            link.href = objectUrl;
-            link.download = `overpass_${center[1].toFixed(5)}_${center[0].toFixed(5)}.geojson`;
-            document.body.appendChild(link);
-            link.click();
-            link.remove();
-            window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
-            this.setDownloadStatus(`Downloaded ${features.length} feature(s) as GeoJSON.`);
-=======
             const { geoJSON, featureCount, relationWarnings } = this.convertOSMXMLToGeoJSON(xmlDocument);
             const blob = new Blob([JSON.stringify(geoJSON, null, 2)], {
                 type: 'application/geo+json'
@@ -305,7 +260,6 @@ class GeoJSONUI {
                 ? ` ${relationWarnings} relation(s) had incomplete member geometry.`
                 : '';
             this.setDownloadStatus(`GeoJSON ready: ${featureCount} on-screen feature(s).${warningMessage} Tap Save GeoJSON.`);
->>>>>>> 8c67cb33de1c99b8bb0be01bae09b51d91a90d30
         } catch (error) {
             console.error('📍 Error downloading GeoJSON from Overpass:', error);
             this.setDownloadStatus(`Download failed: ${error.message}`);
@@ -316,8 +270,6 @@ class GeoJSONUI {
         }
     }
 
-<<<<<<< HEAD
-=======
     convertOSMXMLToGeoJSON(xmlDocument) {
         if (typeof window.osmtogeojson !== 'function') {
             throw new Error('OSM-to-GeoJSON converter is unavailable.');
@@ -338,13 +290,10 @@ class GeoJSONUI {
         };
     }
 
->>>>>>> 8c67cb33de1c99b8bb0be01bae09b51d91a90d30
     setDownloadStatus(message) {
         if (this.downloadStatus) {
             this.downloadStatus.textContent = message;
         }
-<<<<<<< HEAD
-=======
     }
 
     showDownloadActions(filename) {
@@ -361,7 +310,6 @@ class GeoJSONUI {
         saveLink.style.cssText = 'display: inline-block; margin: 4px; padding: 10px 14px; background: #4CAF50; color: white; border-radius: 4px; font-weight: bold; text-decoration: none; touch-action: manipulation;';
         this.downloadResult.appendChild(saveLink);
 
->>>>>>> 8c67cb33de1c99b8bb0be01bae09b51d91a90d30
     }
 
     /**
