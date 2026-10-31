@@ -1907,6 +1907,10 @@ window.modelRenderer = {
         const repIsBridge = !repIsTunnel && isBridgeFeature(feature);
         const repIsBarrier = feature.get('barrier') || feature.get('fence_type') || feature.get('wall_type') || feature.get('wall');
 
+        if (repIsBarrier) {
+            console.log(`🔍 Rep barrier feature ${feature.getId()}: barrier=${feature.get('barrier')}, bridge=${feature.get('bridge')}, layer=${feature.get('layer')}, repIsTunnel=${repIsTunnel}, repIsBridge=${repIsBridge}, repLonLat=[${repLonLat[0].toFixed(6)},${repLonLat[1].toFixed(6)}]`);
+        }
+
         // Check for bridges above this feature. All features (except tunnels) check
         // for bridge overhead.
         const bridgeAbove = repIsTunnel ? null : findBridgeAboveFeature(feature, repLonLat);
@@ -1933,21 +1937,26 @@ window.modelRenderer = {
             repTerrainElevation = getTunnelElevation();
         } else if (underBridge) {
             // Feature is UNDER a bridge: use cached ground height (same as textures)
+            // This applies to ALL features under bridges, including barriers with bridge=yes
             repTerrainElevation = underBridge.height;
         } else if (repIsBarrier && repIsBridge) {
             // Barrier with bridge=yes (inherited): find adjacent highway and use its height
             const adjHighway = findAdjacentHighway(feature, repLonLat);
+            console.log(`🔍 Rep Guardrail: barrier=${feature.get('barrier')}, bridge=${feature.get('bridge')}, adjHighway=${adjHighway ? adjHighway.getId() : 'null'}`);
             if (adjHighway && adjHighway !== feature) {
                 // Use highway's reference height - calculate at highway's anchor point
                 const highwayAnchor = getFeatureAnchorLonLat(adjHighway) || repLonLat;
                 const highwayRefHeight = adjHighway.get('bridgeRefHeight');
+                console.log(`🔍 Rep Highway ${adjHighway.getId()}: highway=${adjHighway.get('highway')}, bridge=${adjHighway.get('bridge')}, anchor=[${highwayAnchor[0].toFixed(6)},${highwayAnchor[1].toFixed(6)}], refHeight=${highwayRefHeight}`);
                 if (highwayRefHeight !== undefined && isFinite(highwayRefHeight)) {
                     repTerrainElevation = highwayRefHeight;
                 } else {
                     repTerrainElevation = getBridgeReferenceHeight(adjHighway, highwayAnchor);
+                    console.log(`🔍 Rep Guardrail using highway refHeight=${repTerrainElevation.toFixed(2)}m`);
                 }
             } else {
                 repTerrainElevation = sampleGroundElevation(repLonLat[0], repLonLat[1]);
+                console.log(`🔍 Rep Guardrail: no highway found, using ground=${repTerrainElevation.toFixed(2)}m`);
             }
         } else if (repIsBridge && !repIsBarrier) {
             repTerrainElevation = getBridgeReferenceHeight(feature, repLonLat);
