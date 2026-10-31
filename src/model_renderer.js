@@ -1539,17 +1539,18 @@ window.modelRenderer = {
             // Feature is UNDER a bridge: use cached ground height (same as textures)
             terrainElevation = underBridge.height;
         } else if (isBarrier && isBridge) {
-            // Barrier with bridge=yes (inherited): find adjacent highway and use its height
+            // Barrier with bridge=yes (inherited): find adjacent highway and use ITS height
             const adjHighway = findAdjacentHighway(feature, lonLat);
             if (debugConfig.enabled) console.log(`🔍 Guardrail bridge: barrier=true, isBridge=true, adjHighway=${adjHighway ? 'found' : 'null'}`);
             if (adjHighway && adjHighway !== feature) {
-                // Use the highway's reference height if it has one, otherwise ground
+                // Use highway's reference height - calculate at highway's anchor point
+                const highwayAnchor = getFeatureAnchorLonLat(adjHighway) || lonLat;
                 const highwayRefHeight = adjHighway.get('bridgeRefHeight');
-                if (debugConfig.enabled) console.log(`🔍 Highway refHeight=${highwayRefHeight}`);
+                if (debugConfig.enabled) console.log(`🔍 Highway anchor: ${highwayAnchor}, refHeight=${highwayRefHeight}`);
                 if (highwayRefHeight !== undefined && isFinite(highwayRefHeight)) {
                     terrainElevation = highwayRefHeight;
                 } else {
-                    terrainElevation = getBridgeReferenceHeight(adjHighway, lonLat);
+                    terrainElevation = getBridgeReferenceHeight(adjHighway, highwayAnchor);
                     if (debugConfig.enabled) console.log(`🔍 Calculated refHeight=${terrainElevation}`);
                 }
             } else {
@@ -1936,11 +1937,13 @@ window.modelRenderer = {
             // Barrier with bridge=yes (inherited): find adjacent highway and use its height
             const adjHighway = findAdjacentHighway(feature, repLonLat);
             if (adjHighway && adjHighway !== feature) {
+                // Use highway's reference height - calculate at highway's anchor point
+                const highwayAnchor = getFeatureAnchorLonLat(adjHighway) || repLonLat;
                 const highwayRefHeight = adjHighway.get('bridgeRefHeight');
                 if (highwayRefHeight !== undefined && isFinite(highwayRefHeight)) {
                     repTerrainElevation = highwayRefHeight;
                 } else {
-                    repTerrainElevation = getBridgeReferenceHeight(adjHighway, repLonLat);
+                    repTerrainElevation = getBridgeReferenceHeight(adjHighway, highwayAnchor);
                 }
             } else {
                 repTerrainElevation = sampleGroundElevation(repLonLat[0], repLonLat[1]);
