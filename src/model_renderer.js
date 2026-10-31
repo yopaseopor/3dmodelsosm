@@ -637,6 +637,51 @@ function findAdjacentHighway(feature, position) {
     return nearestHighway;
 }
 
+/**
+ * Calculate smooth transition height between bridge and ground level
+ * @param {Object} bridge - The bridge feature
+ * @param {Array} position - [lon, lat] position
+ * @param {Function} groundElevationFn - Function to get ground elevation
+ * @returns {number} Smoothed elevation value
+ */
+function getSmoothTransitionHeight(bridge, position, groundElevationFn) {
+    // Calculate distance to bridge edge
+    const bridgeGeometry = bridge.getGeometry();
+    if (!bridgeGeometry) return groundElevationFn(position[0], position[1]);
+
+    // Find closest point on bridge to our position
+    const bridgeLines = getGeometryLines(bridgeGeometry);
+    let minDistance = Infinity;
+
+    for (const line of bridgeLines) {
+        for (let i = 0; i < line.length - 1; i++) {
+            const start = line[i];
+            const end = line[i + 1];
+
+            // Calculate distance from point to line segment
+            const dist = window.modelRenderer.pointToSegmentDistanceMeters(
+                position,
+                start,
+                end
+            );
+            minDistance = Math.min(minDistance, dist);
+        }
+    }
+
+    // Get bridge height
+    const bridgeHeight = getBridgeReferenceHeight(bridge, position);
+    const groundHeight = groundElevationFn(position[0], position[1]);
+
+    // Smooth transition over 20 meters
+    const transitionDistance = 20;
+    const normalizedDist = Math.min(minDistance / transitionDistance, 1);
+
+    // Use smooth interpolation (ease-out curve)
+    const t = 1 - Math.pow(1 - normalizedDist, 2);
+
+    return bridgeHeight * t + groundHeight * (1 - t);
+}
+
 function getFeatureHeightOffset(feature) {
     const offset = feature && feature.get && feature.get('modelHeightOffset');
     return typeof offset === 'number' && isFinite(offset) ? offset : 0;
@@ -1515,9 +1560,8 @@ window.modelRenderer = {
         //   they do not undulate along the way.
         // - Non-bridge ways (including everything UNDER a bridge): stay at
         //   ground level per-position DEM height, independently of the bridge.
-        // - Barriers (guard rails, fences, walls) must ALWAYS be on the ground
-        //   level, even if they have bridge=yes (inherited from the road they
-        //   run alongside).
+        // - Barriers with bridge=yes: use bridge deck height (they're ON the bridge)
+        // - Barriers without bridge tag: use ground level (they're UNDER/adjacent to bridge)
         const isTunnel = isTunnelFeature(feature);
         const isBridge = !isTunnel && isBridgeFeature(feature);
         const isBarrier = feature.get('barrier') || feature.get('fence_type') || feature.get('wall_type') || feature.get('wall');
@@ -1536,8 +1580,8 @@ window.modelRenderer = {
         } else if (underBridge) {
             // Feature is UNDER a bridge: use cached ground height (same as textures)
             terrainElevation = underBridge.height;
-        } else if (isBarrier) {
-            // Barriers without bridge tag: use ground level or adjacent highway height
+        } else if (isBarrier && !isBridge) {
+            // Barrier WITHOUT bridge tag: use ground level or adjacent highway height
             const adjHighway = findAdjacentHighway(feature, lonLat);
             if (adjHighway && adjHighway !== feature) {
                 const highwayAnchor = getFeatureAnchorLonLat(adjHighway) || lonLat;
@@ -1548,7 +1592,8 @@ window.modelRenderer = {
                     terrainElevation = getBridgeReferenceHeight(adjHighway, highwayAnchor);
                 }
             } else if (bridgeAbove) {
-                terrainElevation = getBridgeReferenceHeight(bridgeAbove, lonLat);
+                // Apply smooth transition if near bridge edge
+                terrainElevation = getSmoothTransitionHeight(bridgeAbove, lonLat, sampleGroundElevation);
             } else {
                 if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
                     try { window.mapterhornTerrain.warmUp(lonLat[0], lonLat[1]); } catch (e) { /* no DEM yet */ }
@@ -1918,14 +1963,14 @@ window.modelRenderer = {
         // first repetition so the whole bridge stays FLAT at one elevation
         // (no undulation down mountains). Non-bridge ways sample per-position
         // (ground level) and must NOT climb up to meet the bridge.
-        // Barriers always use ground level, even if they inherit bridge=yes.
+        // Barriers: with bridge=yes use bridge height, without use ground level.
         let repTerrainElevation;
         if (repIsTunnel) {
             repTerrainElevation = getTunnelElevation();
         } else if (underBridge) {
             repTerrainElevation = underBridge.height;
-        } else if (repIsBarrier) {
-            // Barriers: use ground level or adjacent highway height
+        } else if (repIsBarrier && !repIsBridge) {
+            // Barrier WITHOUT bridge tag: use ground level or adjacent highway height
             const adjHighway = findAdjacentHighway(feature, repLonLat);
             if (adjHighway && adjHighway !== feature) {
                 const highwayAnchor = getFeatureAnchorLonLat(adjHighway) || repLonLat;
@@ -1936,7 +1981,8 @@ window.modelRenderer = {
                     repTerrainElevation = getBridgeReferenceHeight(adjHighway, highwayAnchor);
                 }
             } else if (bridgeAbove) {
-                repTerrainElevation = getBridgeReferenceHeight(bridgeAbove, repLonLat);
+                // Apply smooth transition if near bridge edge
+                repTerrainElevation = getSmoothTransitionHeight(bridgeAbove, repLonLat, sampleGroundElevation);
             } else {
                 if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
                     try { window.mapterhornTerrain.warmUp(repLonLat[0], repLonLat[1]); } catch (e) { /* no DEM yet */ }
