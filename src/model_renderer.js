@@ -1677,6 +1677,12 @@ window.modelRenderer = {
             ? getUnderBridgeSurface(feature, bridgeAbove, lonLat)
             : null;
 
+        // Force ground elevation for barriers, ignore bridge tag
+        const isActuallyBridge = isBridge && !isBarrier;
+
+        // For barriers: ALWAYS use ground level, never bridge deck height
+        const forceGround = isBarrier;
+
         let terrainElevation;
         if (isTunnel) {
             terrainElevation = getTunnelElevation();
@@ -1684,31 +1690,18 @@ window.modelRenderer = {
             // Feature is UNDER a bridge: use cached ground height (same as textures)
             // This applies to ALL features under bridges, including barriers with bridge=yes
             terrainElevation = underBridge.height;
-        } else if (isBarrier && isBridge) {
-            // Barrier with bridge=yes (inherited): find adjacent highway and use ITS height
-            const adjHighway = findAdjacentHighway(feature, lonLat);
-            console.log(`🔍 Guardrail: barrier=${feature.get('barrier')}, bridge=${feature.get('bridge')}, adjHighway=${adjHighway ? adjHighway.getId() : 'null'}`);
-            if (adjHighway && adjHighway !== feature) {
-                // Use highway's reference height - calculate at highway's anchor point
-                const highwayAnchor = getFeatureAnchorLonLat(adjHighway) || lonLat;
-                const highwayRefHeight = adjHighway.get('bridgeRefHeight');
-                console.log(`🔍 Highway ${adjHighway.getId()}: highway=${adjHighway.get('highway')}, bridge=${adjHighway.get('bridge')}, anchor=[${highwayAnchor[0].toFixed(6)},${highwayAnchor[1].toFixed(6)}], refHeight=${highwayRefHeight}`);
-                if (highwayRefHeight !== undefined && isFinite(highwayRefHeight)) {
-                    terrainElevation = highwayRefHeight;
-                } else {
-                    terrainElevation = getBridgeReferenceHeight(adjHighway, highwayAnchor);
-                    console.log(`🔍 Guardrail using highway refHeight=${terrainElevation.toFixed(2)}m`);
-                }
-            } else {
-                terrainElevation = sampleGroundElevation(lonLat[0], lonLat[1]);
-                console.log(`🔍 Guardrail: no highway found, using ground=${terrainElevation.toFixed(2)}m`);
+        } else if (forceGround) {
+            // Barriers without bridge tag: ALWAYS use ground level
+            if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
+                try { window.mapterhornTerrain.warmUp(lonLat[0], lonLat[1]); } catch (e) { /* no DEM yet */ }
             }
-        } else if (isBridge && !isBarrier) {
+            terrainElevation = sampleGroundElevation(lonLat[0], lonLat[1]);
+            console.log(`🔍 Barrier ground: ${feature.get('barrier')} at [${lonLat[0].toFixed(6)},${lonLat[1].toFixed(6)}] using DEM=${terrainElevation.toFixed(2)}m`);
+        } else if (isActuallyBridge) {
             // Feature is a BRIDGE (and not a barrier): use bridge reference height
             terrainElevation = getBridgeReferenceHeight(feature, lonLat);
         } else {
-            // Non-bridge way, or barrier (even if it has bridge=yes):
-            // use ground elevation (sampleGroundElevation).
+            // Non-bridge way: use ground elevation (sampleGroundElevation).
             // If very close to a crossing feature (<1m), interpolate instead
             // of using DEM (avoids artifacts near structures).
             const nearCrossingHeight = !isTunnel && !underBridge
@@ -2086,6 +2079,9 @@ window.modelRenderer = {
         // first repetition so the whole bridge stays FLAT at one elevation
         // (no undulation down mountains). Non-bridge ways sample per-position
         // (ground level) and must NOT climb up to meet the bridge.
+        // BARRIERS ALWAYS use ground level, never bridge deck height.
+        const forceGroundRep = repIsBarrier;
+
         let repTerrainElevation;
         if (repIsTunnel) {
             repTerrainElevation = getTunnelElevation();
@@ -2093,25 +2089,13 @@ window.modelRenderer = {
             // Feature is UNDER a bridge: use cached ground height (same as textures)
             // This applies to ALL features under bridges, including barriers with bridge=yes
             repTerrainElevation = underBridge.height;
-        } else if (repIsBarrier && repIsBridge) {
-            // Barrier with bridge=yes (inherited): find adjacent highway and use its height
-            const adjHighway = findAdjacentHighway(feature, repLonLat);
-            console.log(`🔍 Rep Guardrail: barrier=${feature.get('barrier')}, bridge=${feature.get('bridge')}, adjHighway=${adjHighway ? adjHighway.getId() : 'null'}`);
-            if (adjHighway && adjHighway !== feature) {
-                // Use highway's reference height - calculate at highway's anchor point
-                const highwayAnchor = getFeatureAnchorLonLat(adjHighway) || repLonLat;
-                const highwayRefHeight = adjHighway.get('bridgeRefHeight');
-                console.log(`🔍 Rep Highway ${adjHighway.getId()}: highway=${adjHighway.get('highway')}, bridge=${adjHighway.get('bridge')}, anchor=[${highwayAnchor[0].toFixed(6)},${highwayAnchor[1].toFixed(6)}], refHeight=${highwayRefHeight}`);
-                if (highwayRefHeight !== undefined && isFinite(highwayRefHeight)) {
-                    repTerrainElevation = highwayRefHeight;
-                } else {
-                    repTerrainElevation = getBridgeReferenceHeight(adjHighway, highwayAnchor);
-                    console.log(`🔍 Rep Guardrail using highway refHeight=${repTerrainElevation.toFixed(2)}m`);
-                }
-            } else {
-                repTerrainElevation = sampleGroundElevation(repLonLat[0], repLonLat[1]);
-                console.log(`🔍 Rep Guardrail: no highway found, using ground=${repTerrainElevation.toFixed(2)}m`);
+        } else if (forceGroundRep) {
+            // Barriers without bridge tag: ALWAYS use ground level
+            if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
+                try { window.mapterhornTerrain.warmUp(repLonLat[0], repLonLat[1]); } catch (e) { /* no DEM yet */ }
             }
+            repTerrainElevation = sampleGroundElevation(repLonLat[0], repLonLat[1]);
+            console.log(`🔍 Rep Barrier ground: ${feature.get('barrier')} at [${repLonLat[0].toFixed(6)},${repLonLat[1].toFixed(6)}] using DEM=${repTerrainElevation.toFixed(2)}m`);
         } else if (repIsBridge && !repIsBarrier) {
             repTerrainElevation = getBridgeReferenceHeight(feature, repLonLat);
         } else {
