@@ -1695,11 +1695,14 @@ window.modelRenderer = {
             // This applies to ALL features under bridges, including barriers with bridge=yes
             terrainElevation = underBridge.height;
         } else if (isBarrier) {
-            // Barriers without bridge tag: find adjacent highway and use ITS exact height
-            // This ensures guard rails match the bridge deck height of the road they border
+            // Barriers without bridge tag:
+            // - If crossing a bridge: use bridge deck height (or slightly below)
+            // - If running alongside a highway: use highway's exact height
             const adjHighway = findAdjacentHighway(feature, lonLat);
             console.log(`🔍 Barrier: barrier=${feature.get('barrier')}, bridge=${feature.get('bridge')}, adjHighway=${adjHighway ? adjHighway.getId() : 'null'}`);
+
             if (adjHighway && adjHighway !== feature) {
+                // Barrier runs alongside a highway - use highway's exact height
                 const highwayAnchor = getFeatureAnchorLonLat(adjHighway) || lonLat;
                 const highwayRefHeight = adjHighway.get('bridgeRefHeight');
                 console.log(`🔍 Highway ${adjHighway.getId()}: highway=${adjHighway.get('highway')}, bridge=${adjHighway.get('bridge')}, anchor=[${highwayAnchor[0].toFixed(6)},${highwayAnchor[1].toFixed(6)}], refHeight=${highwayRefHeight}`);
@@ -1710,11 +1713,19 @@ window.modelRenderer = {
                     console.log(`🔍 Barrier using highway refHeight=${terrainElevation.toFixed(2)}m`);
                 }
             } else {
-                if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
-                    try { window.mapterhornTerrain.warmUp(lonLat[0], lonLat[1]); } catch (e) { /* no DEM yet */ }
+                // No adjacent highway found - barrier is crossing something
+                // Check if it's crossing a bridge and use bridge height
+                if (bridgeAbove) {
+                    terrainElevation = getBridgeReferenceHeight(bridgeAbove, lonLat);
+                    console.log(`🔍 Barrier crossing bridge, using bridge height=${terrainElevation.toFixed(2)}m`);
+                } else {
+                    // Regular ground
+                    if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
+                        try { window.mapterhornTerrain.warmUp(lonLat[0], lonLat[1]); } catch (e) { /* no DEM yet */ }
+                    }
+                    terrainElevation = sampleGroundElevation(lonLat[0], lonLat[1]);
+                    console.log(`🔍 Barrier: no highway/bridge found, using ground=${terrainElevation.toFixed(2)}m`);
                 }
-                terrainElevation = sampleGroundElevation(lonLat[0], lonLat[1]);
-                console.log(`🔍 Barrier: no highway found, using ground=${terrainElevation.toFixed(2)}m`);
             }
         } else if (isActuallyBridge) {
             // Feature is a BRIDGE (and not a barrier): use bridge reference height
@@ -2107,10 +2118,14 @@ window.modelRenderer = {
             // This applies to ALL features under bridges, including barriers with bridge=yes
             repTerrainElevation = underBridge.height;
         } else if (repIsBarrier) {
-            // Barriers without bridge tag: find adjacent highway and use ITS exact height
+            // Barriers without bridge tag:
+            // - If crossing a bridge: use bridge deck height
+            // - If running alongside a highway: use highway's exact height
             const adjHighway = findAdjacentHighway(feature, repLonLat);
             console.log(`🔍 Rep Barrier: barrier=${feature.get('barrier')}, bridge=${feature.get('bridge')}, adjHighway=${adjHighway ? adjHighway.getId() : 'null'}`);
+
             if (adjHighway && adjHighway !== feature) {
+                // Barrier runs alongside a highway - use highway's exact height
                 const highwayAnchor = getFeatureAnchorLonLat(adjHighway) || repLonLat;
                 const highwayRefHeight = adjHighway.get('bridgeRefHeight');
                 console.log(`🔍 Rep Highway ${adjHighway.getId()}: highway=${adjHighway.get('highway')}, bridge=${adjHighway.get('bridge')}, anchor=[${highwayAnchor[0].toFixed(6)},${highwayAnchor[1].toFixed(6)}], refHeight=${highwayRefHeight}`);
@@ -2121,11 +2136,17 @@ window.modelRenderer = {
                     console.log(`🔍 Rep Barrier using highway refHeight=${repTerrainElevation.toFixed(2)}m`);
                 }
             } else {
-                if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
-                    try { window.mapterhornTerrain.warmUp(repLonLat[0], repLonLat[1]); } catch (e) { /* no DEM yet */ }
+                // No adjacent highway found - barrier is crossing something
+                if (bridgeAbove) {
+                    repTerrainElevation = getBridgeReferenceHeight(bridgeAbove, repLonLat);
+                    console.log(`🔍 Rep Barrier crossing bridge, using bridge height=${repTerrainElevation.toFixed(2)}m`);
+                } else {
+                    if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
+                        try { window.mapterhornTerrain.warmUp(repLonLat[0], repLonLat[1]); } catch (e) { /* no DEM yet */ }
+                    }
+                    repTerrainElevation = sampleGroundElevation(repLonLat[0], repLonLat[1]);
+                    console.log(`🔍 Rep Barrier: no highway/bridge found, using ground=${repTerrainElevation.toFixed(2)}m`);
                 }
-                repTerrainElevation = sampleGroundElevation(repLonLat[0], repLonLat[1]);
-                console.log(`🔍 Rep Barrier: no highway found, using ground=${repTerrainElevation.toFixed(2)}m`);
             }
         } else if (repIsBridge && !repIsBarrier) {
             repTerrainElevation = getBridgeReferenceHeight(feature, repLonLat);
