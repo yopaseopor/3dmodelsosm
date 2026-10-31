@@ -2159,7 +2159,6 @@ window.modelRenderer = {
                     console.log(`🔍 Rep Barrier: no highway/bridge found, using ground=${repTerrainElevation.toFixed(2)}m`);
                 }
             }
-            }
         } else if (repIsBridge && !repIsBarrier) {
             repTerrainElevation = getBridgeReferenceHeight(feature, repLonLat);
         } else {
