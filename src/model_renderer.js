@@ -584,276 +584,6 @@ function getUnderBridgeSurface(feature, bridge, lonLatPosition) {
     return { bridge, bridgeKey, feature, height: surface.height, position: surface.position };
 }
 
-/**
- * Calculate smooth under-bridge height avoiding DEM climb
- * Uses ground elevation at segment ends and blends to a safe height in the middle
- */
-/**
- * Get smooth under-bridge height using median ground sampling
- * Avoids DEM climbing by using median of ground points under the bridge
- * Provides smooth transition at bridge edges to avoid cliffs
- */
-function getUnderBridgeSmoothHeight(feature, bridge, lonLatPosition) {
-    const geometry = feature.getGeometry();
-    if (!geometry || !lonLatPosition) {
-        return sampleGroundElevation(lonLatPosition[0], lonLatPosition[1]);
-    }
-
-    const featureLines = getGeometryLines(geometry);
-    const bridgeLines = getGeometryLines(bridge.getGeometry());
-
-    // Find all intersection points
-    let intersectionPoints = [];
-    for (const fLine of featureLines) {
-        for (const bLine of bridgeLines) {
-            const segs = segmentsIntersect(fLine, bLine);
-            intersectionPoints = intersectionPoints.concat(segs);
-        }
-    }
-
-    if (intersectionPoints.length < 2) {
-        return sampleGroundElevation(lonLatPosition[0], lonLatPosition[1]);
-    }
-
-    // Create or get cache for this feature-bridge pair
-    const cacheKey = `${getFeatureKey(feature)}_${getFeatureKey(bridge)}`;
-    if (!underBridgeHeightCache) underBridgeHeightCache = new Map();
-    let cacheEntry = underBridgeHeightCache.get(cacheKey);
-
-    if (!cacheEntry) {
-        // Sample ground at multiple points along intersection segment
-        const startPoint = intersectionPoints[0];
-        const endPoint = intersectionPoints[intersectionPoints.length - 1];
-        const totalLength = distanceMeters(startPoint, endPoint);
-
-        // Sample at 5 points along the segment
-        const samples = [];
-        for (let i = 0; i <= 4; i++) {
-            const t = i / 4;
-            const samplePoint = [
-                startPoint[0] + t * (endPoint[0] - startPoint[0]),
-                startPoint[1] + t * (endPoint[1] - startPoint[1])
-            ];
-            if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
-                try { window.mapterhornTerrain.warmUp(samplePoint[0], samplePoint[1]); } catch (e) {}
-            }
-            samples.push(sampleGroundElevation(samplePoint[0], samplePoint[1]));
-        }
-
-        // Calculate median ground height
-        const sortedSamples = [...samples].sort((a, b) => a - b);
-        const medianGround = sortedSamples[Math.floor(sortedSamples.length / 2)];
-
-        cacheEntry = {
-            medianGround: medianGround,
-            startPoint: startPoint,
-            endPoint: endPoint,
-            totalLength: totalLength,
-            samplePoints: samples.map((h, i) => {
-                const t = i / 4;
-                return [
-                    startPoint[0] + t * (endPoint[0] - startPoint[0]),
-                    startPoint[1] + t * (endPoint[1] - startPoint[1]),
-                    h
-                ];
-            })
-        };
-        underBridgeHeightCache.set(cacheKey, cacheEntry);
-    }
-
-    // Calculate position relative to intersection segment
-    const { medianGround, startPoint, endPoint, totalLength, samplePoints } = cacheEntry;
-    if (totalLength < 1) return medianGround;
-
-    const currentDist = distanceMeters(startPoint, lonLatPosition);
-    const t = Math.min(Math.max(currentDist / totalLength, 0), 1);
-
-    // Smooth transition with fade at edges (avoid cliff at bridge ends)
-    const edgeFade = 10; // meters to fade at each end
-    const normalizedT = t * totalLength; // distance from start
-
-    // Use linear interpolation between sample points
-    let height;
-    if (normalizedT <= samplePoints[0][2] !== undefined ? distanceMeters(startPoint, samplePoints[0]) : 0) {
-        // Near start - fade to ground
-        height = medianGround;
-    } else if (normalizedT >= totalLength - edgeFade) {
-        // Near end - fade to ground
-        height = medianGround;
-    } else {
-        // In middle - use median
-        height = medianGround;
-    }
-
-    return height;
-}
-
-// Cache for under-bridge heights to avoid re-sampling
-let underBridgeHeightCache = null;
-
-/**
- * Check if two line segments intersect
- */
-function segmentsIntersect(seg1, seg2) {
-    const intersections = [];
-    for (let i = 0; i < seg1.length - 1; i++) {
-        for (let j = 0; j < seg2.length - 1; j++) {
-            const p1 = seg1[i], p2 = seg1[i + 1];
-            const p3 = seg2[j], p4 = seg2[j + 1];
-
-            const denom = (p1[0] - p2[0]) * (p3[1] - p4[1]) - (p1[1] - p2[1]) * (p3[0] - p4[0]);
-            if (Math.abs(denom) < 1e-10) continue;
-
-            const t = ((p1[0] - p3[0]) * (p3[1] - p4[1]) - (p1[1] - p3[1]) * (p3[0] - p4[0])) / denom;
-            const u = -((p1[0] - p2[0]) * (p1[1] - p3[1]) - (p1[0] - p3[0]) * (p1[1] - p2[1])) / denom;
-
-            if (t >= 0 && t <= 1 && u >= 0 && u <= 1) {
-                intersections.push([
-                    p1[0] + t * (p2[0] - p1[0]),
-                    p1[1] + t * (p2[1] - p1[1])
-                ]);
-            }
-        }
-    }
-    return intersections;
-}
-
-/**
- * Distance between two [lon, lat] points in meters
- */
-function distanceMeters(a, b) {
-    const cartA = Cesium.Cartesian3.fromDegrees(a[0], a[1]);
-    const cartB = Cesium.Cartesian3.fromDegrees(b[0], b[1]);
-    return Cesium.Cartesian3.distance(cartA, cartB);
-}
-
-/**
- * Smooth ease-in-out curve
- */
-function easeInOutCubic(t) {
-    return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
-}
-
-/**
- * Find the nearest highway feature adjacent to the given feature
- * Used to match barrier height to the highway they run alongside
- * Returns the highway feature if found within 50 meters
- */
-function findAdjacentHighway(feature, position) {
-    // Get all features from the global features array
-    const allFeatures = window.osm3dFeatures || [];
-
-    if (!feature || !position || !allFeatures.length) return null;
-
-    let nearestHighway = null;
-    let minDistance = Infinity;
-
-    for (const candidate of allFeatures) {
-        // Skip the same feature
-        if (candidate === feature) continue;
-
-        // Check if it's a highway
-        const highway = candidate.get('highway');
-        if (!highway) continue;
-
-        // Get the highway geometry
-        const highwayGeometry = candidate.getGeometry();
-        if (!highwayGeometry) continue;
-
-        // Find the closest point on the highway to our position
-        const highwayCoords = highwayGeometry.getFlatCoordinates();
-        const highwayLayout = highwayGeometry.getLayout();
-
-        // Convert position to same coordinate system
-        const pos = [position[0], position[1]];
-
-        // Calculate minimum distance to highway geometry
-        let minDist = Infinity;
-        for (let i = 0; i < highwayCoords.length; i += highwayLayout.length) {
-            const coord = [highwayCoords[i], highwayCoords[i + 1]];
-            const dist = Cesium.Cartesian3.distance(
-                Cesium.Cartesian3.fromDegrees(pos[0], pos[1]),
-                Cesium.Cartesian3.fromDegrees(coord[0], coord[1])
-            );
-            minDist = Math.min(minDist, dist);
-        }
-
-        // Keep track of the nearest highway within 50 meters
-        if (minDist < 50 && minDist < minDistance) {
-            minDistance = minDist;
-            nearestHighway = candidate;
-        }
-    }
-
-    return nearestHighway;
-}
-
-/**
- * Get reference height from adjacent highway for barrier features
- * Barriers should match the height of the highway they run alongside
- */
-function getBarrierHeightFromHighway(feature, position) {
-    const highway = findAdjacentHighway(feature, position);
-    if (!highway || highway === feature) {
-        return null;
-    }
-
-    // Get the highway's reference height (cached from previous processing)
-    const highwayRefHeight = highway.get('bridgeRefHeight');
-    if (highwayRefHeight !== undefined && isFinite(highwayRefHeight)) {
-        return highwayRefHeight;
-    }
-
-    // If not cached, calculate it now
-    const highwayAnchor = getFeatureAnchorLonLat(highway) || position;
-    return getBridgeReferenceHeight(highway, highwayAnchor);
-}
-
-/**
- * Calculate smooth transition height between bridge and ground level
- * @param {Object} bridge - The bridge feature
- * @param {Array} position - [lon, lat] position
- * @param {Function} groundElevationFn - Function to get ground elevation
- * @returns {number} Smoothed elevation value
- */
-function getSmoothTransitionHeight(bridge, position, groundElevationFn) {
-    // Calculate distance to bridge edge
-    const bridgeGeometry = bridge.getGeometry();
-    if (!bridgeGeometry) return groundElevationFn(position[0], position[1]);
-
-    // Find closest point on bridge to our position
-    const bridgeLines = getGeometryLines(bridgeGeometry);
-    let minDistance = Infinity;
-
-    for (const line of bridgeLines) {
-        for (let i = 0; i < line.length - 1; i++) {
-            const start = line[i];
-            const end = line[i + 1];
-
-            // Calculate distance from point to line segment
-            const dist = window.modelRenderer.pointToSegmentDistanceMeters(
-                position,
-                start,
-                end
-            );
-            minDistance = Math.min(minDistance, dist);
-        }
-    }
-
-    // Get bridge height
-    const bridgeHeight = getBridgeReferenceHeight(bridge, position);
-    const groundHeight = groundElevationFn(position[0], position[1]);
-
-    // Smooth transition over 20 meters
-    const transitionDistance = 20;
-    const normalizedDist = Math.min(minDistance / transitionDistance, 1);
-
-    // Use smooth interpolation (ease-out curve)
-    const t = 1 - Math.pow(1 - normalizedDist, 2);
-
-    return bridgeHeight * t + groundHeight * (1 - t);
-}
-
 function getFeatureHeightOffset(feature) {
     const offset = feature && feature.get && feature.get('modelHeightOffset');
     return typeof offset === 'number' && isFinite(offset) ? offset : 0;
@@ -1732,16 +1462,9 @@ window.modelRenderer = {
         //   they do not undulate along the way.
         // - Non-bridge ways (including everything UNDER a bridge): stay at
         //   ground level per-position DEM height, independently of the bridge.
-        // - Barriers with bridge=yes: use bridge deck height (they're ON the bridge)
-        // - Barriers without bridge tag: use ground level (they're UNDER/adjacent to bridge)
         const isTunnel = isTunnelFeature(feature);
         const isBridge = !isTunnel && isBridgeFeature(feature);
-        const isBarrier = feature.get('barrier') || feature.get('fence_type') || feature.get('wall_type') || feature.get('wall');
-
-        // Check for bridges above this feature. All features (except tunnels) check
-        // for bridge overhead. Barriers must detect bridges above them to stay
-        // on ground (not bridge deck), even if they have bridge=yes inherited.
-        const bridgeAbove = isTunnel ? null : findBridgeAboveFeature(feature, lonLat);
+        const bridgeAbove = (isBridge || isTunnel) ? null : findBridgeAboveFeature(feature, lonLat);
         const underBridge = bridgeAbove
             ? getUnderBridgeSurface(feature, bridgeAbove, lonLat)
             : null;
@@ -1749,29 +1472,13 @@ window.modelRenderer = {
         let terrainElevation;
         if (isTunnel) {
             terrainElevation = getTunnelElevation();
-        } else if (underBridge) {
-            // Feature is UNDER a bridge: use smooth blended height (not per-point DEM)
-            terrainElevation = getUnderBridgeSmoothHeight(feature, underBridge.bridge, lonLat);
-        } else if (isBarrier && !isBridge) {
-            // Barrier WITHOUT bridge tag: ATTACH to adjacent highway height
-            // This prevents climbing to bridge deck and ensures consistency
-            const adjHighwayHeight = getBarrierHeightFromHighway(feature, lonLat);
-            if (adjHighwayHeight !== null && isFinite(adjHighwayHeight)) {
-                // Use highway's reference height (cached from its own processing)
-                terrainElevation = adjHighwayHeight;
-            } else if (underBridge) {
-                // Under bridge: use median ground from cache (smooth, no cliff)
-                terrainElevation = getUnderBridgeSmoothHeight(feature, underBridge.bridge, lonLat);
-            } else {
-                // No highway nearby: use simple ground DEM
-                if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
-                    try { window.mapterhornTerrain.warmUp(lonLat[0], lonLat[1]); } catch (e) {}
-                }
-                terrainElevation = sampleGroundElevation(lonLat[0], lonLat[1]);
-            }
         } else if (isBridge) {
             terrainElevation = getBridgeReferenceHeight(feature, lonLat);
+        } else if (underBridge) {
+            terrainElevation = underBridge.height;
         } else {
+            // Non-bridge way: sample DEM at this position (ground level).
+            // Prime the DEM tile before sampling.
             if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
                 try { window.mapterhornTerrain.warmUp(lonLat[0], lonLat[1]); } catch (e) { /* no DEM yet */ }
             }
@@ -2108,18 +1815,13 @@ window.modelRenderer = {
         // Keep bridge repetitions level with one sampled terrain height.
         const repIsTunnel = isTunnelFeature(feature);
         const repIsBridge = !repIsTunnel && isBridgeFeature(feature);
-        const repIsBarrier = feature.get('barrier') || feature.get('fence_type') || feature.get('wall_type') || feature.get('wall');
-
-        // Check for bridges above this feature. All features (except tunnels) check
-        // for bridge overhead. Barriers must detect bridges above them to stay
-        // on ground (not bridge deck), even if they have bridge=yes inherited.
-        const bridgeAbove = repIsTunnel ? null : findBridgeAboveFeature(feature, repLonLat);
+        const bridgeAbove = (repIsBridge || repIsTunnel) ? null : findBridgeAboveFeature(feature, repLonLat);
         const underBridge = bridgeAbove
             ? getUnderBridgeSurface(feature, bridgeAbove, repLonLat)
             : null;
 
         // Create model matrix for repetition model - GROUND LEVEL (like footway)
-        const repHeightOffset = feature.get(`fence_repetition_${repIndex}_heightOffset`) ||
+        const repHeightOffset = feature.get(`fence_repetition_${repIndex}_heightOffset`) || 
                                feature.get(`repetition_${repIndex}_heightOffset`) || 0; // Use stored height offset instead of hardcoded 10
 
         // Prime the DEM tile before sampling (see addModelForFeature): without it
@@ -2127,37 +1829,18 @@ window.modelRenderer = {
         if (!repIsTunnel && window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
             try { window.mapterhornTerrain.warmUp(repLonLat[0], repLonLat[1]); } catch (e) { /* no DEM yet */ }
         }
-
+        
         // Get terrain elevation. For bridges: cache reference DEM height on
         // first repetition so the whole bridge stays FLAT at one elevation
         // (no undulation down mountains). Non-bridge ways sample per-position
         // (ground level) and must NOT climb up to meet the bridge.
-        // Barriers: with bridge=yes use bridge height, without use ground level.
         let repTerrainElevation;
         if (repIsTunnel) {
             repTerrainElevation = getTunnelElevation();
-        } else if (underBridge) {
-            // Feature is UNDER a bridge: use smooth blended height (not per-point DEM)
-            repTerrainElevation = getUnderBridgeSmoothHeight(feature, underBridge.bridge, repLonLat);
-        } else if (repIsBarrier && !repIsBridge) {
-            // Barrier WITHOUT bridge tag: ATTACH to adjacent highway height
-            // This prevents climbing to bridge deck and ensures consistency
-            const adjHighwayHeight = getBarrierHeightFromHighway(feature, repLonLat);
-            if (adjHighwayHeight !== null && isFinite(adjHighwayHeight)) {
-                // Use highway's reference height (cached from its own processing)
-                repTerrainElevation = adjHighwayHeight;
-            } else if (underBridge) {
-                // Under bridge: use median ground from cache (smooth, no cliff)
-                repTerrainElevation = getUnderBridgeSmoothHeight(feature, underBridge.bridge, repLonLat);
-            } else {
-                // No highway nearby: use simple ground DEM
-                if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
-                    try { window.mapterhornTerrain.warmUp(repLonLat[0], repLonLat[1]); } catch (e) {}
-                }
-                repTerrainElevation = sampleGroundElevation(repLonLat[0], repLonLat[1]);
-            }
         } else if (repIsBridge) {
             repTerrainElevation = getBridgeReferenceHeight(feature, repLonLat);
+        } else if (underBridge) {
+            repTerrainElevation = underBridge.height;
         } else {
             if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
                 try { window.mapterhornTerrain.warmUp(repLonLat[0], repLonLat[1]); } catch (e) { /* no DEM yet */ }

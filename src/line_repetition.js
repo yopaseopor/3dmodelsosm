@@ -45,6 +45,18 @@
             monorail: { interval: 6, sideOffset: 0, maxModels: 300, rotationOffset: 0 },
             preserved: { interval: 8, sideOffset: 0, maxModels: 200, rotationOffset: 0 },
             funicular: { interval: 8, sideOffset: 0, maxModels: 150, rotationOffset: 0 }
+         },
+        stroke: {
+            default: { interval: 0.30, sideOffset: 0, maxModels: 350, rotationOffset: 0 },
+			solid: { interval: 1.5, sideOffset: 0, maxModels: 10000, rotationOffset: 0 },
+            dashed: { interval: 2, sideOffset: 0, maxModels: 10000, rotationOffset: 0 }
+
+        },
+        waterway: {
+            default: { interval: 0.30, sideOffset: 0, maxModels: 350, rotationOffset: 0 },
+            drain: { interval: 0.30, sideOffset: 0, maxModels: 3350, rotationOffset: 0 },
+            stream: { interval: 0.30, sideOffset: 0, maxModels: 350, rotationOffset: 0 }
+
         },
         natural: {
             default: { interval: 0.50, sideOffset: 0, maxModels: 100 },

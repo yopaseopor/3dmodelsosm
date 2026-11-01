@@ -47,6 +47,7 @@ const availableModels = [
     'w_traffic_sign_ES_R101.gltf',
     'w_vending_parking_tickets.glb',
 	'w_waterway_stream.gltf',
+	'w_waterway_drain_intermittent.glb',
     'ES_CAT_BCN_casa_batllo.glb',
     'ES_CAT_BCN_casa_mila.glb',
    'ES_CAT_BCN_hotel_arts.glb',
@@ -198,7 +199,7 @@ const modelMappings = [
       { tags: ['barrier=kerb'], model: 'w_barrier_kerb.gltf', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Kerb
 { tags: ['barrier=guard_rail', 'bridge=yes'], model: 'w_barrier_guard_rail_bridge.glb', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // guard_rail   
    { tags: ['barrier=guard_rail'], model: 'w_barrier_guard_rail.glb', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // guard_rail 
-   { tags: ['waterway=drain'], model: 'w_waterway_stream.gltf', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Drain area models (closed drains)
+   { tags: ['waterway=drain'], model: 'w_waterway_drain_intermittent.glb', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Drain area models (closed drains)
    
     //{ tags: ['area:highway=footway'], model: 'w_highway_footway.glb', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Footway line models
    
