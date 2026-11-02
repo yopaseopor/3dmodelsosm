@@ -14,8 +14,17 @@ const areaRepetitionDebugConfig = {
     logCoordinates: false
 };
 
-// Area repetition configurations
+// Area model and texture configurations. Keep each area tag's asset and repeat
+// settings together here so geometry-specific model selection has one source.
 const areaRepetitionConfigs = [
+    {
+        tags: ['natural=wood'],
+        model: 'test.gltf',
+        config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] },
+        spacing: 1.0,
+        maxModels: 5000,
+        description: 'Wooded areas'
+    },
     // Building areas
     /*{
         tags: ['building=residential'],
@@ -147,6 +156,15 @@ const areaRepetitionConfigs = [
         maxModels: 3000,
         description: 'Regular parking spaces with smart rotation'
     },
+    {
+        tags: ['parking_space=disabled'],
+        model: 'i_parking_space_disabled.jpg',
+        config: { scale: 2.0, heightOffset: 0.0, rotation: [0, 0, 0] },
+        textureRotationOffsetDegrees: 90,
+        spacing: 1,
+        maxModels: 3000,
+        description: 'Disabled parking spaces'
+    },
 
     // Amenity areas
     {
@@ -190,6 +208,38 @@ const areaRepetitionConfigs = [
            maxModels: 10000,
            description: 'Other area-tagged highways'
        },
+    {
+        tags: ['highway=footway'],
+        model: 'w_highway_footway.glb',
+        config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] },
+        spacing: 1.0,
+        maxModels: 5000,
+        description: 'Footway areas'
+    },
+    {
+        tags: ['highway=residential'],
+        model: 'w_highway_residential.glb',
+        config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] },
+        spacing: 1.0,
+        maxModels: 10000,
+        description: 'Residential road areas'
+    },
+    {
+        tags: ['highway=motorway'],
+        model: 'w_highway_residential.glb',
+        config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] },
+        spacing: 1.0,
+        maxModels: 10000,
+        description: 'Motorway areas'
+    },
+    {
+        tags: ['highway=motorway_link'],
+        model: 'w_highway_residential.glb',
+        config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] },
+        spacing: 1.0,
+        maxModels: 10000,
+        description: 'Motorway link areas'
+    },
 
     // Amenity areas
     {
@@ -211,7 +261,15 @@ const areaRepetitionConfigs = [
         description: 'Manhole drain - exact polygon coverage'
     },
 
-    
+    {
+        tags: ['waterway=stream'],
+        model: 'i_gespa.jpg',
+        config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] },
+        spacing: 5.0,
+        maxModels: 1,
+        description: 'Stream areas'
+    },
+
     // Amenity areas
     {
         tags: ['leisure=playground'],
@@ -221,6 +279,24 @@ const areaRepetitionConfigs = [
         maxModels: 10000,
         description: 'Playground'
     },
+
+    // Amenity areas
+    {
+        tags: ['railway=platform'],
+        model: 'w_public_transport_platform.glb',
+        config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] },
+        spacing: 1.0,
+        maxModels: 3000,
+        description: 'Railway platform model'
+    },
+    {
+        tags: ['public_transport=platform'],
+        model: 'i_railway_platform.jpg',
+        config: { scale: 0.5, heightOffset: 0.0, rotation: [0, 0, 0] },
+        spacing: 1.0, // 1 meter spacing for area-tagged footways
+        maxModels: 5000,
+        description: 'Area-tagged footway areas'
+     },
 
     // Default fallback
     {
@@ -274,6 +350,26 @@ function getAreaRepetitionConfig(tags) {
 
     if (areaRepetitionDebugConfig.enabled) console.log(`🏞️ No specific area repetition config found, will use default`);
     return null;
+}
+
+function getModelForTags(tags, wayCoordinates = null, nodeIndex = null, orientationContext = null) {
+    const areaConfig = getAreaRepetitionConfig(tags);
+    if (!areaConfig) return null;
+
+    const bearing = window.models && window.models.resolveBearing
+        ? window.models.resolveBearing(tags, wayCoordinates, nodeIndex, orientationContext)
+        : null;
+    const config = window.models && window.models.adjustConfigForDirection
+        ? window.models.adjustConfigForDirection(areaConfig.config, tags, bearing)
+        : areaConfig.config;
+
+    return {
+        tags: areaConfig.tags,
+        model: areaConfig.model,
+        geometryType: 'area',
+        config,
+        repetitionConfig: areaConfig
+    };
 }
 
 /**
@@ -533,5 +629,7 @@ window.areaRepetition = {
     applyAreaRepetitions: applyAreaRepetitions,
     generateAreaRepetitions: generateAreaRepetitions,
     isPointInPolygon: isPointInPolygon,
-    getAreaRepetitionConfig: getAreaRepetitionConfig
+    getAreaRepetitionConfig: getAreaRepetitionConfig,
+    getModelForTags: getModelForTags,
+    areaRepetitionConfigs
 };

@@ -17,6 +17,42 @@
         lineRepetitionDebugConfig.logStorage = !!globalDebugConfig.lineRepetition.logStorage;
     }
 
+    // Image assets use the same repeated-texture renderer as areas. Configure
+    // their strip width per mapping with config.textureWidthMeters.
+    const lineModelMappings = [
+        { tags: ['barrier=kerb'], model: 'w_barrier_kerb.gltf', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
+        { tags: ['road_markings=edge_line', 'stroke=solid'], model: 'w_stroke_solid.glb', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
+        { tags: ['road_markings=lane_divider', 'stroke=dashed'], model: 'w_stroke_dashed.glb', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
+        { tags: ['barrier=fence', 'fence_type=railing'], model: 'w_barrier_fence_type_railing.glb', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
+        { tags: ['barrier=fence', 'fence_type=wood'], model: 'w_barrier_fence_wood.gltf', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
+        { tags: ['barrier=fence', 'fence_type=metal'], model: 'w_barrier_fence_wood.gltf', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
+        { tags: ['barrier=fence', 'fence_type=chain_link'], model: 'w_barrier_fence_wood.gltf', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
+        { tags: ['barrier=fence', 'fence_type=wire'], model: 'w_barrier_fence_wood.gltf', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
+        { tags: ['barrier=fence', 'fence_type=pole'], model: 'w_barrier_fence_wood.gltf', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
+        { tags: ['barrier=fence'], model: 'w_barrier_fence_wood.gltf', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
+        { tags: ['fence_type=wood'], model: 'w_barrier_fence_wood.gltf', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
+        { tags: ['fence_type=metal'], model: 'w_barrier_fence_wood.gltf', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
+        { tags: ['fence_type=chain_link'], model: 'w_barrier_fence_wood.gltf', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
+        { tags: ['fence_type=wire'], model: 'w_barrier_fence_wood.gltf', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
+        { tags: ['fence_type=pole'], model: 'w_barrier_fence_wood.gltf', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
+        { tags: ['barrier=wall'], model: 'w_barrier_wall.glb', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
+        { tags: ['highway=cycleway'], model: 'w_highway_cycleway.glb', config: { scale: 4.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
+        { tags: ['highway=footway'], model: 'w_highway_footway.glb', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, -Math.PI / 4, 0] } },
+        { tags: ['footway=sidewalk'], model: 'w_highway_footway.glb', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, -Math.PI / 4, 0] } },
+        { tags: ['highway=residential'], model: 'w_highway_residential.gltf', config: { scale: 3.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
+        { tags: ['highway=motorway'], model: 'w_highway_residential.gltf', config: { scale: 6.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
+        { tags: ['highway=motorway_link'], model: 'w_highway_residential.gltf', config: { scale: 6.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
+        { tags: ['highway=path'], model: 'w_highway_track.gltf', config: { scale: 2.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
+        { tags: ['highway=track'], model: 'w_highway_track.gltf', config: { scale: 6.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
+        { tags: ['natural=beach'], model: 'w_natural_beach.gltf', config: { scale: 12.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
+        { tags: ['natural=coastline'], model: 'w_natural_beach.gltf', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
+        { tags: ['railway=rail'], model: 'w_railway_rail.glb', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
+        { tags: ['public_transport=platform'], model: 'w_public_transport_platform.glb', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
+        { tags: ['barrier=guard_rail', 'bridge=yes'], model: 'w_barrier_guard_rail_bridge.glb', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
+        { tags: ['barrier=guard_rail'], model: 'w_barrier_guard_rail.glb', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
+        { tags: ['waterway=drain'], model: 'w_waterway_drain_intermittent.glb', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }
+    ];
+
     // Add a tag group here to configure new line types; its keys are detected automatically.
     const lineRepetitionConfig = {
         default: { interval: 0.5, sideOffset: 0, maxModels: 500 },
@@ -35,6 +71,11 @@
             cycleway: { interval: 0.25, sideOffset: 0, maxModels: 1500 },
             pedestrian: { interval: 0.20, sideOffset: 0, maxModels: 150 }
         },
+        public_transport: {
+            default: { interval: 5, sideOffset: 0, maxModels: 350, rotationOffset: 0 },
+            platform: { interval: 0.30, sideOffset: 0, maxModels: 1000 },
+            funicular: { interval: 8, sideOffset: 0, maxModels: 150, rotationOffset: 0 }
+         },
         railway: {
             default: { interval: 5, sideOffset: 0, maxModels: 350, rotationOffset: 0 },
             rail: { interval: 4, sideOffset: 0, maxModels: 400, rotationOffset: 0 },
@@ -165,6 +206,21 @@
         return { ...lineRepetitionConfig.default };
     }
 
+    function getModelForTags(tags) {
+        const mapping = window.models && window.models.findTagMapping
+            ? window.models.findTagMapping(lineModelMappings, tags)
+            : null;
+        if (!mapping) return null;
+
+        return {
+            ...mapping,
+            geometryType: 'line',
+            config: window.models && window.models.adjustConfigForDirection
+                ? window.models.adjustConfigForDirection(mapping.config, tags, null)
+                : mapping.config
+        };
+    }
+
     function calculateDistance(start, end) {
         const radius = 6371000;
         const lat1 = start[1] * Math.PI / 180;
@@ -193,6 +249,93 @@
         const last = coordinates[coordinates.length - 1];
         return Math.abs(first[0] - last[0]) < 1e-6 &&
             Math.abs(first[1] - last[1]) < 1e-6;
+    }
+
+    function createLineTexturePolygon(coordinates, widthMeters) {
+        if (!Number.isFinite(widthMeters) || widthMeters <= 0) {
+            throw new RangeError('Line texture width must be a positive number of meters');
+        }
+        if (!Array.isArray(coordinates) || coordinates.length < 2) return null;
+
+        if (coordinates.some(coord =>
+            !Array.isArray(coord) || !Number.isFinite(coord[0]) || !Number.isFinite(coord[1])
+        )) {
+            throw new TypeError('Line texture coordinates must contain finite longitude and latitude values');
+        }
+
+        const referenceLon = coordinates[0][0];
+        const referenceLat = coordinates.reduce((sum, coord) => sum + coord[1], 0) /
+            coordinates.length;
+        const metersPerDegreeLat = 111320;
+        const metersPerDegreeLon = metersPerDegreeLat *
+            Math.cos(referenceLat * Math.PI / 180);
+        if (Math.abs(metersPerDegreeLon) < 1e-6) {
+            throw new RangeError('Cannot create a line texture strip at this latitude');
+        }
+
+        const points = [];
+        for (const coord of coordinates) {
+            const point = [
+                (coord[0] - referenceLon) * metersPerDegreeLon,
+                (coord[1] - referenceLat) * metersPerDegreeLat
+            ];
+            const previous = points[points.length - 1];
+            if (!previous || Math.hypot(point[0] - previous[0], point[1] - previous[1]) > 1e-4) {
+                points.push(point);
+            }
+        }
+        if (points.length < 2) return null;
+
+        const normals = [];
+        for (let index = 0; index < points.length - 1; index++) {
+            const dx = points[index + 1][0] - points[index][0];
+            const dy = points[index + 1][1] - points[index][1];
+            const length = Math.hypot(dx, dy);
+            normals.push([-dy / length, dx / length]);
+        }
+
+        const halfWidth = widthMeters / 2;
+        function vertexOffset(index) {
+            if (index === 0) return normals[0].map(value => value * halfWidth);
+            if (index === points.length - 1) {
+                return normals[normals.length - 1].map(value => value * halfWidth);
+            }
+
+            const previous = normals[index - 1];
+            const next = normals[index];
+            const sum = [previous[0] + next[0], previous[1] + next[1]];
+            const sumLength = Math.hypot(sum[0], sum[1]);
+            if (sumLength < 1e-6) return previous.map(value => value * halfWidth);
+
+            const miter = [sum[0] / sumLength, sum[1] / sumLength];
+            const denominator = miter[0] * next[0] + miter[1] * next[1];
+            if (denominator <= 1e-6) return previous.map(value => value * halfWidth);
+
+            const miterLength = Math.min(halfWidth / denominator, halfWidth * 4);
+            return [miter[0] * miterLength, miter[1] * miterLength];
+        }
+
+        const left = [];
+        const right = [];
+        for (let index = 0; index < points.length; index++) {
+            const offset = vertexOffset(index);
+            left.push([points[index][0] + offset[0], points[index][1] + offset[1]]);
+            right.push([points[index][0] - offset[0], points[index][1] - offset[1]]);
+        }
+
+        const toLonLat = point => [
+            referenceLon + point[0] / metersPerDegreeLon,
+            referenceLat + point[1] / metersPerDegreeLat
+        ];
+        const ring = left.concat(right.reverse()).map(toLonLat);
+        let signedArea = 0;
+        for (let index = 0; index < ring.length; index++) {
+            const next = ring[(index + 1) % ring.length];
+            signedArea += ring[index][0] * next[1] - next[0] * ring[index][1];
+        }
+        if (signedArea < 0) ring.reverse();
+        ring.push(ring[0].slice());
+        return ring;
     }
 
     function generateLineRepetitions(coordinates, tags, maxModelsOverride) {
@@ -277,6 +420,45 @@
             console.log(`Processing ${geometryType} with ${openLines.length} open line(s)`);
         }
 
+        if (/\.(jpg|jpeg|png|gif|bmp|tiff|tif|webp)$/i.test(modelFilename || '')) {
+            const textureWidthMeters = modelConfig && modelConfig.textureWidthMeters;
+            if (openLines.length && (!Number.isFinite(textureWidthMeters) || textureWidthMeters <= 0)) {
+                throw new RangeError('Image line mappings must set config.textureWidthMeters to a positive number');
+            }
+
+            const spacing = modelConfig && modelConfig.textureTileSizeMeters !== undefined
+                ? modelConfig.textureTileSizeMeters
+                : 1.0;
+            if (!Number.isFinite(spacing) || spacing <= 0) {
+                throw new RangeError('Line texture tile size must be a positive number of meters');
+            }
+
+            const textureModelLimit = getLineConfig(properties).maxModels;
+            if (!Number.isFinite(textureModelLimit) || textureModelLimit < 0) {
+                throw new RangeError('lineRepetitionConfig maxModels must be a non-negative number');
+            }
+            const textureLimit = Math.floor(textureModelLimit);
+            const repetitions = openLines.slice(0, textureLimit).map(line => {
+                const coordinates = line.map(coord =>
+                    ol.proj.transform(coord, projection, 'EPSG:4326')
+                );
+                const polygonCoordinates = createLineTexturePolygon(coordinates, textureWidthMeters);
+                return polygonCoordinates && {
+                    type: 'polygon_texture',
+                    polygonCoordinates,
+                    spacing,
+                    scale: modelConfig.scale || 1.0,
+                    textureRotationOffsetDegrees: modelConfig.textureRotationOffsetDegrees
+                };
+            }).filter(Boolean);
+
+            storeLineTextureRepetitions(feature, repetitions, modelFilename);
+            if (lineRepetitionDebugConfig.enabled && lineRepetitionDebugConfig.logStorage) {
+                console.log(`Stored ${repetitions.length} line texture strip(s)`);
+            }
+            return;
+        }
+
         if (geometryType === 'MultiLineString') {
             const repetitions = [];
             for (const line of openLines) {
@@ -333,11 +515,34 @@
         }
     }
 
+    function storeLineTextureRepetitions(feature, repetitions, imageFilename) {
+        repetitions.forEach((repetition, index) => {
+            const key = `repetition_${index}`;
+            const uri = `/3dmodelsosm/src/models/${imageFilename}`;
+            feature.set(key, {
+                uri,
+                scale: repetition.scale,
+                type: 'polygon_texture',
+                polygonCoordinates: repetition.polygonCoordinates,
+                spacing: repetition.spacing,
+                textureRotationOffsetDegrees: repetition.textureRotationOffsetDegrees
+            });
+            feature.set(`${key}_type`, 'polygon_texture');
+            feature.set(`${key}_polygonCoordinates`, repetition.polygonCoordinates);
+            feature.set(`${key}_polygonHoles`, []);
+            feature.set(`${key}_spacing`, repetition.spacing);
+        });
+    }
+
     window.lineRepetitionConfig = lineRepetitionConfig;
     window.lineRepetition = {
         applyLineRepetitions,
         generateLineRepetitions,
+        createLineTexturePolygon,
         getLineConfig,
+        getModelForTags,
+        getModelMappings: () => lineModelMappings,
+        lineModelMappings,
         lineRepetitionConfig
     };
     if (window.modelRepetition && window.modelRepetition.repetitionConfig) {

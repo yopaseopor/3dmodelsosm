@@ -816,8 +816,11 @@
         report('Cesium library', typeof Cesium !== 'undefined');
         report('ol-cesium (olcs)', typeof olcs !== 'undefined');
         report('MapTerhorn module', typeof window.mapterhornTerrain !== 'undefined');
-        report('models registry (window.models)', !!window.models && Array.isArray(window.models.availableModels),
-            window.models ? window.models.availableModels.length + ' models registered' : 'models.js not loaded');
+        const configuredModels = window.models && window.models.getConfiguredModels
+            ? window.models.getConfiguredModels()
+            : [];
+        report('model configuration', !!(window.models && Array.isArray(window.models.nodeModelMappings)),
+            configuredModels.length + ' assets configured across geometry catalogs');
         report('model renderer', !!(window.modelRenderer && window.modelRenderer.addAllModels));
 
         // Terrain fetch + decode test on a tile with strong relief.
@@ -845,8 +848,8 @@
         }
 
         // Model file availability probe (first few GLBs).
-        if (window.models && window.models.availableModels.length) {
-            const probe = window.models.availableModels.filter(m => /\.glb$/i.test(m)).slice(0, 3);
+        if (configuredModels.length) {
+            const probe = configuredModels.filter(m => /\.glb$/i.test(m)).slice(0, 3);
             const checks = await Promise.all(probe.map(f =>
                 fetch('/3dmodelsosm/src/models/' + f, { method: 'HEAD' })
                     .then(r => f + ':' + r.status).catch(e => f + ':ERR')));

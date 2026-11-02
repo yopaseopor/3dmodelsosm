@@ -39,48 +39,13 @@
         maxPitchDeg: 10,
         // Glide
         easeSpeed: 10,            // higher = snappier glide
-        groundClearance: 15,      // keep the camera this far above terrain
-        // Underground (L-1) navigation: the camera may dive BELOW ground to
-        // orbit the basements through the translucent globe. Deepest stop is
-        // 5 levels under (matches building:levels:underground up to 4 + margin).
-        undergroundMinHeight: -15,
-        levelRate: 8              // vertical descend/ascend rate while held (m/s)
+        groundClearance: 15,     // keep the camera this far above terrain
+        undergroundMinHeight: -15
     };
 
-    /** True while the underground view (L-1) is active — camera may go below ground. */
     function isUndergroundMode() {
         return !!(window.indoor && typeof window.indoor.isUndergroundEnabled === 'function' &&
                   window.indoor.isUndergroundEnabled());
-    }
-
-    /** One storey height (falls back to 3 m when the indoor module is absent). */
-    function levelHeightMeters() {
-        return (window.indoor && window.indoor.LEVEL_HEIGHT) || 3;
-    }
-
-    /**
-     * Shift the orbit pivot vertically by dm meters. The pivot sits ON the
-     * ground on the surface; underground (L-1) it may sink to
-     * undergroundMinHeight below it. Descending for the first time auto-enters
-     * the underground view (opaque ground would show nothing); ascending back
-     * to ground level auto-exits it.
-     */
-    function shiftPivotHeight(dm) {
-        const t = nav.tgt;
-        if (!t) return;
-        const under = isUndergroundMode();
-        if (dm < 0 && !under &&
-            window.indoor && typeof window.indoor.setUnderground === 'function') {
-            window.indoor.setUnderground(true);   // translucent globe + basements visible
-        }
-        const gh = groundAt(t.pivot);
-        const minAbs = gh + CFG.undergroundMinHeight; // deepest stop (L-1…L-5)
-        const maxAbs = gh;                            // pivot back ON the ground
-        t.pivot.height = Math.max(minAbs, Math.min(maxAbs, t.pivot.height + dm));
-        if (dm > 0 && isUndergroundMode() && t.pivot.height >= maxAbs - 0.01 &&
-            window.indoor && typeof window.indoor.setUnderground === 'function') {
-            window.indoor.setUnderground(false);  // surfaced: restore opaque globe
-        }
     }
 
     let panel = null;
@@ -287,22 +252,13 @@
             case 'zoom-out':  t.range = clampRange(t.range / CFG.zoomFactor); break;
             case 'reset':
                 t.heading = shortestHeading(0);
-                if (isUndergroundMode()) {
-                    // Reset INSIDE the basement: steeper tilt over the L-1 floor
-                    t.pitch = toRad(-60);
-                    t.pivot.height = groundAt(t.pivot) - levelHeightMeters();
-                    t.range = clampRange(Math.max(Math.min(t.range, 120), 60));
-                } else {
-                    t.pitch = toRad(-45);
-                    t.range = clampRange(Math.max(t.range, 200));
-                }
+                t.pitch = toRad(-45);
+                t.range = clampRange(Math.max(t.range, 200));
                 break;
             case 'up':    moveTargetPivot(0, +1); break;
             case 'down':  moveTargetPivot(0, -1); break;
             case 'left':  moveTargetPivot(-1, 0); break;
             case 'right': moveTargetPivot(+1, 0); break;
-            case 'level-down': shiftPivotHeight(-levelHeightMeters()); break;
-            case 'level-up':   shiftPivotHeight(+levelHeightMeters()); break;
         }
     }
 
@@ -326,8 +282,6 @@
             case 'down':  moveTargetPivot(0, -panRate * dt); break;
             case 'left':  moveTargetPivot(-panRate * dt, 0); break;
             case 'right': moveTargetPivot(+panRate * dt, 0); break;
-            case 'level-down': shiftPivotHeight(-CFG.levelRate * dt); break;
-            case 'level-up':   shiftPivotHeight(+CFG.levelRate * dt); break;
         }
     }
 
@@ -417,6 +371,33 @@
         nav.act = null;
     }
 
+    function refreshLayerSelector() {
+        const selector = document.getElementById('nav3d-layer-select');
+        if (!selector || !window.modelRenderer ||
+            typeof window.modelRenderer.getAvailableOsmLayers !== 'function') return;
+        const selected = window.modelRenderer.activeOsmLayer;
+        selector.innerHTML = '';
+        const all = document.createElement('option');
+        all.value = '';
+        all.textContent = 'All layers';
+        selector.appendChild(all);
+        window.modelRenderer.getAvailableOsmLayers().forEach(function(layer) {
+            const option = document.createElement('option');
+            option.value = layer;
+            option.textContent = 'Layer ' + layer;
+            selector.appendChild(option);
+        });
+        selector.value = selected === null ? '' : String(selected);
+    }
+
+    let watchedLayerMap = null;
+    function watchLayerMap() {
+        if (!window.map || typeof window.map.on !== 'function' || watchedLayerMap === window.map) return;
+        watchedLayerMap = window.map;
+        watchedLayerMap.on('addlayer', refreshLayerSelector);
+        watchedLayerMap.on('removelayer', refreshLayerSelector);
+    }
+
     function buildPanel() {
         // --- Toggle button (separate from the panel) ---
         toggleBtn = document.createElement('div');
@@ -485,17 +466,16 @@
                 #nav3d-controls #nav3d-indoor-btn.nav3d-indoor-active {
                     background: #c8e6c9; border-color: #2e7d32;
                 }
-                #nav3d-controls #nav3d-underground-btn.nav3d-indoor-active {
-                    background: #d7ccc8; border-color: #4e342e;
-                }
                 #nav3d-controls .nav3d-title {
                     text-align: center; font-size: 11px; color: #555; margin-bottom: 4px;
                 }
-                #nav3d-controls .nav3d-level-select {
+                #nav3d-controls .nav3d-level-select,
+                #nav3d-controls .nav3d-layer-select {
                     display: flex; align-items: center; gap: 6px; margin-top: 6px;
                     font: 11px sans-serif; color: #444;
                 }
-                #nav3d-controls .nav3d-level-select select {
+                #nav3d-controls .nav3d-level-select select,
+                #nav3d-controls .nav3d-layer-select select {
                     min-width: 100px; max-width: 150px; height: 28px;
                     border: 1px solid #bbb; border-radius: 5px; background: #fff;
                 }
@@ -516,16 +496,19 @@
                 <button data-act="zoom-in"  title="Zoom in">&#10133;</button>
                 <button data-act="zoom-out" title="Zoom out">&#10134;</button>
                 <button id="nav3d-indoor-btn" title="Show / hide indoor view (Simple Indoor Tagging)">&#127963;</button>
-                <button id="nav3d-underground-btn" title="Show underground: level -1 / layer -1 (translucent ground)">L-1</button>
-                <button data-act="level-down" title="Descend one level (first press enters the underground view)">&#9660;L</button>
-                <button data-act="level-up"   title="Ascend one level (exits the underground view at the surface)">&#9650;L</button>
             </div>
             <label class="nav3d-level-select" style="display:none">
                 Level
                 <select id="nav3d-level-select" aria-label="Select indoor level"></select>
             </label>
+            <label class="nav3d-layer-select">
+                Layer
+                <select id="nav3d-layer-select" aria-label="Select OSM layer"></select>
+            </label>
         `;
         document.body.appendChild(panel);
+        watchLayerMap();
+        refreshLayerSelector();
         if (window.indoor && typeof window.indoor.refreshLevelSelector === 'function') {
             window.indoor.refreshLevelSelector();
         }
@@ -536,6 +519,15 @@
                 ev.stopPropagation();
                 if (window.indoor && typeof window.indoor.setActiveLevel === 'function') {
                     window.indoor.setActiveLevel(levelSelect.value || null);
+                }
+            });
+        }
+        const layerSelect = panel.querySelector('#nav3d-layer-select');
+        if (layerSelect) {
+            layerSelect.addEventListener('change', function (ev) {
+                ev.stopPropagation();
+                if (window.modelRenderer && typeof window.modelRenderer.setActiveOsmLayer === 'function') {
+                    window.modelRenderer.setActiveOsmLayer(layerSelect.value || null);
                 }
             });
         }
@@ -553,20 +545,6 @@
                 }
             });
         }
-        // Underground view: basements (level=-1) and layer=-1 parts at true depth
-        const underBtn = panel.querySelector('#nav3d-underground-btn');
-        if (underBtn) {
-            underBtn.addEventListener('click', function (ev) {
-                ev.stopPropagation();
-                if (window.indoor && typeof window.indoor.setUnderground === 'function') {
-                    const on = window.indoor.setUnderground(!window.indoor.isUndergroundEnabled());
-                    underBtn.classList.toggle('nav3d-indoor-active', on);
-                    underBtn.title = on ? 'Hide underground (back to surface only)'
-                                        : 'Show underground: level -1 / layer -1 (translucent ground)';
-                }
-            });
-        }
-
         // Pointer-based input: tap = one animated step, hold = continuous
         panel.addEventListener('pointerdown', function (ev) {
             const btn = ev.target.closest('button');
@@ -627,6 +605,16 @@
         stopNav();
         setTimeout(updateVisibility, 100);
     });
+
+    function onLayerDataChanged() {
+        watchLayerMap();
+        refreshLayerSelector();
+    }
+
+    ['overlayFeaturesLoaded', 'tagQueryAdded', 'tagQueryRemoved', 'tagOverlayLoaded', 'osm3d:modelsPlaced']
+        .forEach(function(eventName) {
+            window.addEventListener(eventName, onLayerDataChanged);
+        });
 
     // Also poll briefly at startup in case events fired before we loaded.
     let tries = 0;
