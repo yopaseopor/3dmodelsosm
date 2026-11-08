@@ -38,62 +38,92 @@ function createOlLayer(overlay) {
      * so there was nowhere for an already-parsed file to enter except by
      * fetching and parsing it all over again.
      */
-    function ingestGeoJSON(data, projection) {
-        setOverlaySpinner(false);
-        if (debugConfig.enabled && debugConfig.logOverlayLoading) console.log('Received GeoJSON data for ' + overlay.title, data);
-        if (debugConfig.enabled && debugConfig.logOverlayLoading) console.log('Number of features in GeoJSON:', data.features ? data.features.length : 'unknown');
-        const features = new ol.format.GeoJSON().readFeatures(data, {
-            featureProjection: projection
-        });
-
-        if (debugConfig.enabled && debugConfig.logFeatureProcessing) console.log('Parsed features count:', features.length);
-        if (debugConfig.enabled && debugConfig.logFeatureProcessing) console.log('First few features:', features.slice(0, 3).map(f => ({
-            type: f.getGeometry().getType(),
-            properties: f.getProperties()
-        })));
-
-        // Assign 3D models to features based on their properties
-        if (debugConfig.enabled && debugConfig.logModelAssignment) console.log('🎯 About to assign models to', features.length, 'features');
-
-        // Same reason as the GeoJSON loader's sweep: thousands of features in
-        // one blocking loop freeze the tab, so it is time-sliced here too.
-        //
-        // The fallback keeps the old synchronous behaviour, so a missing
-        // progressive.js degrades to "slow" rather than to "broken" - and it
-        // calls onDone itself, which is why the add lives in onDone and not
-        // straight after the call.
-        const assignAll = window.progressive && window.progressive.forEach
-            ? window.progressive.forEach
-            : function (items, worker, opts) {
-                for (let i = 0; i < items.length; i++) {
-                    try { worker(items[i], i); }
-                    catch (error) { if (opts && opts.onError) opts.onError(items[i], error, i); }
-                }
-                if (opts && opts.onDone) opts.onDone();
+    async function ingestGeoJSON(data, projection) {
+        if (debugConfig.enabled && debugConfig.logOverlayLoading && !(data instanceof Blob)) {
+            console.log('Received GeoJSON data for ' + overlay.title, data);
+        }
+        try {
+            const features = [];
+            const format = new ol.format.GeoJSON();
+            const addBatch = batch => {
+                const converted = format.readFeatures({
+                    type: 'FeatureCollection',
+                    features: batch
+                }, { featureProjection: projection });
+                features.push.apply(features, converted);
             };
 
-        // Everything after the sweep: the features are only added to the source
-        // once EVERY one of them has its model, otherwise the renderer would
-        // wake up on a half-finished layer and never revisit it.
-        function publishFeatures() {
-            if (debugConfig.enabled && debugConfig.logOverlayLoading) console.log('Added ' + features.length + ' features for ' + overlay.title);
-            vectorSource.addFeatures(features);
-            // Dispatch event to trigger global summary update
-            window.dispatchEvent(new CustomEvent('overlayFeaturesLoaded'));
-        }
-
-        assignAll(features, (feature, index) => {
-            if (index < 5 && debugConfig.enabled && debugConfig.logFeatureProcessing) { // Log first 5
-                console.log('🎯 Processing feature', index, 'properties:', feature.getProperties());
+            if (data instanceof Blob) {
+                if (!window.geoJSONLoader || !window.geoJSONLoader.readGeoJSONBatches) {
+                    throw new Error('The GeoJSON parser worker is unavailable.');
+                }
+                await window.geoJSONLoader.readGeoJSONBatches(data, metadata => {
+                    if (!metadata || !metadata.featureCount && metadata.geoJSONType !== 'FeatureCollection') {
+                        throw new Error('Invalid GeoJSON data.');
+                    }
+                }, addBatch);
+            } else {
+                let rawFeatures;
+                if (data && data.type === 'FeatureCollection' && Array.isArray(data.features)) {
+                    rawFeatures = data.features;
+                } else if (data && data.type === 'Feature') {
+                    rawFeatures = [data];
+                } else if (data && data.type) {
+                    rawFeatures = [{ type: 'Feature', geometry: data, properties: {} }];
+                } else {
+                    throw new Error('Invalid GeoJSON data.');
+                }
+                for (let offset = 0; offset < rawFeatures.length; offset += 100) {
+                    addBatch(rawFeatures.slice(offset, offset + 100));
+                    if (window.progressive && window.progressive.yield) {
+                        await new Promise(resolve => window.progressive.yield(resolve));
+                    }
+                }
             }
-            assignModelToFeature(feature, features);
-        }, {
-            label: 'overlay features',
-            onError: (feature, error, index) => {
-                console.error('Overlay "' + overlay.title + '" feature ' + index + ' failed, skipping this feature only:', error);
-            },
-            onDone: publishFeatures
-        });
+
+            if (debugConfig.enabled && debugConfig.logFeatureProcessing) console.log('Parsed features count:', features.length);
+            if (debugConfig.enabled && debugConfig.logFeatureProcessing) console.log('First few features:', features.slice(0, 3).map(f => ({
+                type: f.getGeometry() && f.getGeometry().getType(),
+                properties: f.getProperties()
+            })));
+            if (debugConfig.enabled && debugConfig.logModelAssignment) console.log('🎯 About to assign models to', features.length, 'features');
+
+            const assignAll = window.progressive && window.progressive.forEach
+                ? window.progressive.forEach
+                : function (items, worker, opts) {
+                    for (let i = 0; i < items.length; i++) {
+                        try { worker(items[i], i); }
+                        catch (error) { if (opts && opts.onError) opts.onError(items[i], error, i); }
+                    }
+                    if (opts && opts.onDone) opts.onDone();
+                };
+
+            await new Promise((resolve, reject) => {
+                assignAll(features, (feature, index) => {
+                    if (index < 5 && debugConfig.enabled && debugConfig.logFeatureProcessing) {
+                        console.log('🎯 Processing feature', index, 'properties:', feature.getProperties());
+                    }
+                    assignModelToFeature(feature, features);
+                }, {
+                    label: 'overlay features',
+                    onError: (feature, error, index) => {
+                        console.error('Overlay "' + overlay.title + '" feature ' + index + ' failed, skipping this feature only:', error);
+                    },
+                    onDone: () => {
+                        try {
+                            if (debugConfig.enabled && debugConfig.logOverlayLoading) console.log('Added ' + features.length + ' features for ' + overlay.title);
+                            vectorSource.addFeatures(features);
+                            window.dispatchEvent(new CustomEvent('overlayFeaturesLoaded'));
+                            resolve();
+                        } catch (error) {
+                            reject(error);
+                        }
+                    }
+                });
+            });
+        } finally {
+            setOverlaySpinner(false);
+        }
     }
     
     if (overlay.geojson) {
@@ -107,15 +137,14 @@ function createOlLayer(overlay) {
                     setOverlaySpinner(true);
                     const url = overlay.geojson;
 
-                    // Precharge may already have fetched AND parsed this file
-                    // in the background. Take it instead of asking for it again:
-                    // no request, no JSON.parse, straight to the map. Without
-                    // this the background work was thrown away and opening the
-                    // overlay still cost the full download plus parse.
+                    // Precharge may already have fetched this file. Take its
+                    // compact Blob so parsing can happen in the GeoJSON worker.
                     const precharged = window.precharge ? window.precharge.take(url) : null;
                     if (precharged) {
                         console.log('⚡ Using precharged data for ' + overlay.title);
-                        ingestGeoJSON(precharged, projection);
+                        ingestGeoJSON(precharged, projection).catch(error => {
+                            console.error('Error loading GeoJSON data for ' + overlay.title + ':', error);
+                        });
                         return;
                     }
 
@@ -124,10 +153,10 @@ function createOlLayer(overlay) {
                             if (!response.ok) {
                                 throw new Error('Network response was not ok');
                             }
-                            return response.json();
+                            return response.blob();
                         })
-                        .then(data => {
-                            ingestGeoJSON(data, projection);
+                        .then(blob => {
+                            return ingestGeoJSON(blob, projection);
                         })
                         .catch(error => {
                             setOverlaySpinner(false);
@@ -155,27 +184,58 @@ function createOlLayer(overlay) {
                         }
                         return response.json();
                     })
-                    .then(data => {
-                        setOverlaySpinner(false);
+                    .then(async data => {
                         if (debugConfig.enabled && debugConfig.logOverlayLoading) console.log('Received data for ' + overlay.title);
                         if (!data || !data.elements) {
                             console.warn('No elements found in response for ' + overlay.title);
+                            setOverlaySpinner(false);
                             return;
                         }
                         const geojson = osmtogeojson(data);
-                        const features = new ol.format.GeoJSON().readFeatures(geojson, {
-                            featureProjection: projection
+                        const features = [];
+                        const format = new ol.format.GeoJSON();
+                        const rawFeatures = geojson && Array.isArray(geojson.features) ? geojson.features : [];
+                        for (let offset = 0; offset < rawFeatures.length; offset += 100) {
+                            const batch = format.readFeatures({
+                                type: 'FeatureCollection',
+                                features: rawFeatures.slice(offset, offset + 100)
+                            }, { featureProjection: projection });
+                            features.push.apply(features, batch);
+                            if (window.progressive && window.progressive.yield) {
+                                await new Promise(resolve => window.progressive.yield(resolve));
+                            }
+                        }
+
+                        await new Promise((resolve, reject) => {
+                            const assignAll = window.progressive && window.progressive.forEach
+                                ? window.progressive.forEach
+                                : function (items, worker, options) {
+                                    for (let i = 0; i < items.length; i++) {
+                                        try { worker(items[i], i); }
+                                        catch (error) {
+                                            if (options && options.onError) options.onError(items[i], error, i);
+                                        }
+                                    }
+                                    if (options && options.onDone) options.onDone();
+                                };
+                            assignAll(features, feature => assignModelToFeature(feature, features), {
+                                label: 'Overpass overlay features',
+                                onError: (feature, error, index) => {
+                                    console.error('Overpass overlay "' + overlay.title + '" feature ' + index + ' failed:', error);
+                                },
+                                onDone: () => {
+                                    try {
+                                        vectorSource.addFeatures(features);
+                                        window.dispatchEvent(new CustomEvent('overlayFeaturesLoaded'));
+                                        setOverlaySpinner(false);
+                                        resolve();
+                                    } catch (error) {
+                                        reject(error);
+                                    }
+                                }
+                            });
                         });
-                        
-                        // Assign 3D models to features based on their properties
-                        features.forEach(feature => {
-                            assignModelToFeature(feature, features);
-                        });
-                        
                         if (debugConfig.enabled && debugConfig.logOverlayLoading) console.log('Added ' + features.length + ' features for ' + overlay.title);
-                        vectorSource.addFeatures(features);
-                        // Dispatch event to trigger global summary update
-                        window.dispatchEvent(new CustomEvent('overlayFeaturesLoaded'));
                     })
                     .catch(error => {
                         setOverlaySpinner(false);

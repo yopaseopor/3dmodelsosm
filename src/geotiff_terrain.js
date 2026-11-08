@@ -784,6 +784,11 @@ window.terrainManager = {
      * @returns {number} Elevation in meters
      */
     getElevation(longitude, latitude) {
+        if (window.mapterhornTerrain &&
+            typeof window.mapterhornTerrain.isFlatGroundMode === 'function' &&
+            window.mapterhornTerrain.isFlatGroundMode()) {
+            return 0;
+        }
         // 1) A local GeoTIFF may only override the DEM when it IS the rendered
         //    ground. In elevation-only mode the visual ground stays Mapterhorn,
         //    and the two sources use different vertical datums/resolutions —

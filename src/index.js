@@ -1538,57 +1538,38 @@ function findCesiumContainer() {
 }
 
 /**
- * Pre-load gate: show the progress panel and keep the 3D canvas back until the
- * model renderer has placed what is close to the camera.
+ * Pre-load tracker: show the usable 3D canvas and report remaining work until
+ * the nearby models, assets and terrain have settled.
  *
- * Why: from the moment ol3d.setEnabled(true) returns the scene exists but is
- * empty — the models are placed over the next seconds, one frame-budgeted
- * slice at a time. Showing an empty globe, or freezing the tab while it fills,
- * is what made 3D look broken. The canvas fades in when the near batch is in;
- * the 2D map underneath stays interactive the whole time.
+ * The scene is useful before all models and terrain finish loading. Keep it
+ * visible and interactive while the renderer fills it in across frame slices.
  *
- * `revealAfterMs` is the safety valve. If the renderer never reports back (no
- * models, an exception before addAllModels), the scene is revealed anyway.
+ * There is intentionally no elapsed-time cutoff for the statistics: a slow
+ * device or large extract must not be reported as fully ready prematurely.
  */
-/**
- * Pre-load message + reveal.
- *
- * The placement itself is NOT touched: the renderer still walks the layers and
- * builds every model, texture and repetition synchronously, exactly as it
- * always has. This only puts a message on screen around it:
- *
- *   1. the panel appears the moment 3D starts, before the heavy work;
- *   2. the renderer reports how many features it is going through and when it
- *      has finished (`osm3d:modelsPlaced`);
- *   3. the canvas only fades in once that arrives, and the panel lingers a
- *      moment to show the result before it fades out.
- *
- * Every step has a safety valve: whatever happens, the 3D view becomes visible
- * again (8 s) and the panel closes (20 s).
- */
-function startPreLoadGate(ol3d, revealAfterMs) {
+function startPreLoadGate(ol3d) {
     const panel = window.loadingProgress;
     const holder = findCesiumContainer();
     if (!panel) return;   // panel script missing: never block the 3D view
 
-    let revealed = false;
-    let panelFinished = false;
-    // While Cesium still has terrain/imagery tiles in flight the ground is not
-    // settled yet, so the message stays up; it closes on the settle edge.
+    const scene = ol3d && ol3d.getCesiumScene ? ol3d.getCesiumScene() : null;
+    let modelsPlaced = false;
+    let buildingsPlaced = !(window.buildings && typeof window.buildings.addBuildingsToScene === 'function');
+    let buildingError = null;
     let terrainPending = 0;
-    let terrainEverBusy = false;
+    let terrainReadySince = 0;
+    let settleTimer = null;
+    let ready = false;
 
-    function closePanel(why) {
-        if (panelFinished) return;
-        panelFinished = true;
-        if (why) console.log('🎯 pre-load message closed (' + why + ')');
-        panel.finish();
+    function stopWatching() {
+        window.removeEventListener('osm3d:modelsPlaced', onModelsPlaced);
+        window.removeEventListener('osm3d:modelAssetsChanged', checkReady);
+        window.removeEventListener('osm3d:buildingsStarted', onBuildingsStarted);
+        window.removeEventListener('osm3d:buildingsPlaced', onBuildingsPlaced);
+        if (scene && scene.postRender && scene.postRender.removeEventListener) {
+            scene.postRender.removeEventListener(checkReady);
+        }
     }
-
-    // Safety timers FIRST, before anything that can throw: the canvas must
-    // become visible and the panel must close no matter what happens below.
-    const emergencyReveal = setTimeout(function () { reveal('safety timer'); }, revealAfterMs || 8000);
-    const emergencyFinish = setTimeout(function () { closePanel('max wait'); }, 45000);
 
     function showCanvas() {
         if (!holder) return;
@@ -1597,55 +1578,93 @@ function startPreLoadGate(ol3d, revealAfterMs) {
         holder.style.transition = 'opacity .45s ease';
     }
 
-    function reveal(why) {
+    function reveal(errorMessage) {
+        if (ready) return;
+        ready = true;
         showCanvas();
-        if (revealed) return;
-        revealed = true;
-        clearTimeout(emergencyReveal);
         window.dispatchEvent(new CustomEvent('osm3d:revealed'));
-        console.log('🎯 3D scene visible (' + why + ')');
+        console.log('🎯 3D scene ready and visible');
+        stopWatching();
+        if (errorMessage) panel.fail(errorMessage);
+        else panel.finish();
     }
 
     try {
-        panel.begin({ title: 'Building 3D scene', hardStopMs: 45000 });
+        panel.begin({ title: 'Building 3D scene' });
     } catch (error) {
         console.warn('🎯 Pre-load panel failed, showing 3D directly:', error);
         showCanvas();
         return;
     }
 
-    // opacity, not display:none — a hidden element has no size and Cesium would
-    // have to be re-measured. pointer-events off so the 2D map underneath keeps
-    // receiving clicks while the canvas is invisible.
-    if (holder) {
-        holder.style.opacity = '0';
-        holder.style.pointerEvents = 'none';
-        holder.style.transition = 'opacity .45s ease';
-    }
+    // Do not gate access on loading completion. The map and navigation stay
+    // available while models and terrain arrive progressively.
+    showCanvas();
 
-    // Called by the Cesium tileLoadProgressEvent listener below.
-    function noteTerrainProgress(queued, processing) {
-        const pending = queued + processing;
-        if (pending > 0) { terrainEverBusy = true; terrainPending = pending; return; }
-        // Settled — but only after something was actually loading, otherwise the
-        // first idle tick (before any tile was requested) would close the
-        // message immediately.
-        if (terrainEverBusy && terrainPending > 0) {
-            terrainPending = 0;
-            setTimeout(function () { closePanel('terrain settled'); }, 1200);
+    function checkReady() {
+        if (ready || !modelsPlaced || !buildingsPlaced) return;
+        const renderer = window.modelRenderer;
+        if (renderer && renderer._placing) return;
+        const pendingAssets = renderer && renderer.getPendingAssetCount
+            ? renderer.getPendingAssetCount() : 0;
+        if (pendingAssets > 0 || terrainPending > 0) return;
+
+        const globeReady = !scene || !scene.globe || scene.globe.tilesLoaded !== false;
+        if (!globeReady) {
+            terrainReadySince = 0;
+            return;
+        }
+        if (!terrainReadySince) terrainReadySince = Date.now();
+        if (Date.now() - terrainReadySince >= 900) reveal(buildingError);
+        else if (!settleTimer) {
+            settleTimer = setTimeout(function () {
+                settleTimer = null;
+                checkReady();
+            }, 950);
         }
     }
 
-    window.notePreLoadTerrain = noteTerrainProgress;
+    window.notePreLoadTerrain = function (queued, processing) {
+        terrainPending = Math.max(0, Number(queued) || 0) + Math.max(0, Number(processing) || 0);
+        if (terrainPending > 0) {
+            terrainReadySince = 0;
+            if (settleTimer) { clearTimeout(settleTimer); settleTimer = null; }
+        }
+        checkReady();
+    };
 
-    // The renderer fires this at the end of its (synchronous) pass.
-    window.addEventListener('osm3d:modelsPlaced', function (event) {
+    function onModelsPlaced(event) {
         const placed = event && event.detail ? event.detail.placed : 0;
         if (panel.summary) panel.summary(placed);
-        reveal(placed + ' models placed');
-        // If no terrain tile ever reported in (flat ellipsoid, cached, no event),
-        // fall back to a fixed beat so the message cannot stay up forever.
-        setTimeout(function () { if (!terrainEverBusy) closePanel('no terrain activity'); }, 6000);
+        modelsPlaced = true;
+        checkReady();
+    }
+
+    function onBuildingsPlaced(event) {
+        buildingsPlaced = true;
+        buildingError = event && event.detail && event.detail.error || null;
+        if (panel.phase) panel.phase('');
+        checkReady();
+    }
+
+    function onBuildingsStarted() {
+        buildingsPlaced = false;
+        buildingError = null;
+        terrainReadySince = 0;
+        if (panel.phase) panel.phase('Preparing building footprints');
+    }
+
+    window.addEventListener('osm3d:modelsPlaced', onModelsPlaced);
+    window.addEventListener('osm3d:modelAssetsChanged', checkReady);
+    window.addEventListener('osm3d:buildingsStarted', onBuildingsStarted);
+    window.addEventListener('osm3d:buildingsPlaced', onBuildingsPlaced);
+    if (scene && scene.postRender && scene.postRender.addEventListener) {
+        scene.postRender.addEventListener(checkReady);
+    }
+    window.addEventListener('ol3dDestroyed', function cleanupGate() {
+        if (settleTimer) clearTimeout(settleTimer);
+        stopWatching();
+        window.notePreLoadTerrain = null;
     }, { once: true });
 }
 
@@ -1780,8 +1799,9 @@ if (routeLayers.length > 0) {
                         // default cache only holds 100 of them: the tiles were
                         // evicted and re-fetched over and over, which is most of
                         // the "it freezes when I enter 3D" network traffic.
-                        scene.globe.tileCacheSize = 300;
-                        scene.globe.maximumMemoryUsage = 384;
+                        const deviceMemory = Number(navigator.deviceMemory) || 4;
+                        scene.globe.tileCacheSize = deviceMemory <= 2 ? 100 : (deviceMemory <= 4 ? 200 : 300);
+                        scene.globe.maximumMemoryUsage = deviceMemory <= 2 ? 128 : (deviceMemory <= 4 ? 256 : 384);
                        
                         // Restore any route layers that were hidden for initialization
 if (routeLayers.length > 0) {
@@ -1888,10 +1908,9 @@ if (routeLayers.length > 0) {
                 // Enable Cesium
                 ol3d.setEnabled(true);
 
-                        // Hold the (still empty) 3D canvas back and show the
-                        // pre-load panel until the models around the camera are
-                        // actually in place.
-                        if (firstEntryInto3D) startPreLoadGate(ol3d, 8000);
+                        // Track readiness without blocking access to the
+                        // progressively populated 3D scene.
+                        if (firstEntryInto3D) startPreLoadGate(ol3d);
                 
                 // Wait for Cesium to initialize
                 await new Promise(resolve => setTimeout(resolve, 100));
@@ -2019,13 +2038,15 @@ if (routeLayers.length > 0) {
                 // Check layers for existing features and assign models if needed
                 console.log('🎯 Checking for existing features and assigning models...');
                 function assignModelsToExistingFeatures(layer) {
+                    if (!layer) return Promise.resolve();
                     if (layer.getSource && typeof layer.getSource === 'function') {
+                        let source;
                         try {
-                            const source = layer.getSource();
+                            source = layer.getSource();
                             if (source && source.getFeatures) {
                                 const features = source.getFeatures();
                                 let modelsAssigned = 0;
-                                features.forEach(feature => {
+                                const assignFeature = feature => {
                                     // Guard on the property model_renderer actually reads.
                                     // This used to check `feature.model`, which only this
                                     // function wrote, so the guard never matched and every
@@ -2056,11 +2077,6 @@ if (routeLayers.length > 0) {
                                             );
                                             // Use the middle node for bearing calculation, or first if only one segment
                                             nodeIndex = Math.floor(wayCoordinates.length / 2);
-                                            
-                                            console.log(`📐 Way coordinates extracted: ${wayCoordinates.length} nodes, calculating bearing at node ${nodeIndex}`);
-                                            console.log(`📐 Way coordinate sample:`, wayCoordinates.slice(0, 3).map((coord, i) => 
-                                                `[${i}]: [${coord[0].toFixed(6)}, ${coord[1].toFixed(6)}]`
-                                            ));
                                         } else if (geometry && geometry.getType() === 'Point') {
                                             // The rules in model_orientation.js decide what this
                                             // point turns to face; here we only say where it is
@@ -2093,50 +2109,74 @@ if (routeLayers.length > 0) {
                                             if (modelConfig) {
                                                 feature.set('modelHeightOffset', modelConfig.heightOffset);
                                                 feature.set('modelRotation', modelConfig.rotation);
-                                                
-                                                // Log bearing and rotation information
-                                                const bearing = wayCoordinates && nodeIndex !== null ? 
-                                                    window.models.calculateBearing(wayCoordinates, nodeIndex) : 
-                                                    (tagsObj._parentWayBearing !== undefined ? tagsObj._parentWayBearing : null);
-                                                console.log(`🎯 Model ${modelFilename} orientation info:`);
-                                                console.log(`  📐 Bearing at node ${nodeIndex}: ${bearing ? (bearing * 180 / Math.PI).toFixed(2) : 'N/A'}°`);
-                                                console.log(`  🔄 Final rotation: [${modelConfig.rotation.join(', ')}] (Y-axis: ${(modelConfig.rotation[1] * 180 / Math.PI).toFixed(2)}°)`);
-                                                console.log(`  📍 Feature ID: ${properties.id || 'unknown'}, Tags:`, tagsObj);
                                             } else {
                                                 feature.set('modelHeightOffset', 0);
                                             }
                                             modelsAssigned++;
-                                            console.log(`🎯 Assigned model ${modelFilename} to existing feature with tags:`, tagsObj);
                                         }
                                     }
+                                };
+                                const finishAssignment = () => {
+                                    if (modelsAssigned > 0) {
+                                        console.log(`🎯 Assigned models to ${modelsAssigned} existing features in layer`);
+                                    }
+                                };
+                                return new Promise(resolve => {
+                                    const options = {
+                                        label: 'existing feature model assignment',
+                                        budgetMs: 4,
+                                        onError: (feature, error, index) => {
+                                            console.error('🎯 Model assignment failed for feature ' + index + ':', error);
+                                        },
+                                        onDone: () => {
+                                            finishAssignment();
+                                            resolve();
+                                        }
+                                    };
+                                    if (window.progressive && window.progressive.forEach) {
+                                        window.progressive.forEach(features, assignFeature, options);
+                                        return;
+                                    }
+                                    let index = 0;
+                                    function runSlice() {
+                                        const startedAt = performance.now();
+                                        while (index < features.length &&
+                                            (index === 0 || performance.now() - startedAt < options.budgetMs)) {
+                                            try {
+                                                assignFeature(features[index], index);
+                                            } catch (error) {
+                                                options.onError(features[index], error, index);
+                                            }
+                                            index++;
+                                        }
+                                        if (index < features.length) setTimeout(runSlice, 0);
+                                        else options.onDone();
+                                    }
+                                    runSlice();
                                 });
-                                if (modelsAssigned > 0) {
-                                    console.log(`🎯 Assigned models to ${modelsAssigned} existing features in layer`);
-                                }
                             }
                         } catch (e) {
-                            console.log('Error assigning models to existing features:', e.message);
+                            console.error('Error assigning models to existing features:', e);
                         }
                     }
                     // Check group children recursively
                     else if (layer.getLayers && typeof layer.getLayers === 'function') {
                         const childLayers = layer.getLayers().getArray();
-                        childLayers.forEach(childLayer => {
-                            assignModelsToExistingFeatures(childLayer);
-                        });
+                        return Promise.all(childLayers.map(assignModelsToExistingFeatures));
                     }
+                    return Promise.resolve();
                 }
 
-                window.map.getLayers().getArray().forEach(layer => {
-                    assignModelsToExistingFeatures(layer);
+                const assignmentJobs = window.map.getLayers().getArray().map(assignModelsToExistingFeatures);
+                Promise.all(assignmentJobs).then(() => {
+                    if (window.modelRenderer && window.modelRenderer.addAllModels) {
+                        window.modelRenderer.addAllModels();
+                    } else {
+                        console.log('🎯 model_renderer not available');
+                    }
+                }).catch(error => {
+                    console.error('🎯 Existing feature model assignment failed:', error);
                 });
-
-                // Use the new model renderer
-                if (window.modelRenderer) {
-                    window.modelRenderer.addAllModels();
-                } else {
-                    console.log('🎯 model_renderer not available');
-                }
                 
                 console.log('3D mode enabled with synchronized layers');
                 
@@ -2150,57 +2190,36 @@ if (routeLayers.length > 0) {
                 const view = map.getView();
                 const center = ol.proj.toLonLat(view.getCenter());
 
-                // Wait for the DEM tile at the view centre, then place the camera
-                // on the REAL surface. getElevation() is synchronous and happily
-                // samples whatever coarse ancestor happens to be cached (a z8 cell
-                // is ~5 km wide, so on a slope it overshot the true height by
-                // hundreds of metres and left the eye floating at 936 m over 294 m
-                // of ground). getElevationAsync fetches the z15 tile instead — the
-                // same grid the terrain renders from — so the height is exact.
-                let entryGround = null;
-                try {
-                    if (window.mapterhornTerrain && window.mapterhornTerrain.getElevationAsync) {
-                        entryGround = await window.mapterhornTerrain.getElevationAsync(center[0], center[1]);
+                // Use the best already-available elevation so entering 3D never
+                // waits on a network tile. The terrain guard corrects the camera
+                // when the precise DEM tile arrives.
+                const entryHeight = terrainSafeHeight(scene, center[0], center[1], 300);
+                console.log('🗺️ entry camera height: ' + Math.round(entryHeight) + 'm');
+
+                function reofferModelsAtCamera() {
+                    if (window.modelRenderer && window.modelRenderer.addAllModels) {
+                        window.modelRenderer.addAllModels();
                     }
-                } catch (error) {
-                    console.warn('DEM sample for entry camera failed, using clearance only:', error);
-                    entryGround = null;
                 }
-                if (entryGround === null || entryGround === undefined || !isFinite(entryGround)) {
-                    entryGround = 0; // no DEM yet: the guard will lift the camera
-                }
-                console.log('🗺️ entry camera: DEM ' + Math.round(entryGround) +
-                    'm + 300m clearance = ' + Math.round(entryGround + 300) + 'm');
 
                 scene.camera.flyTo({
                     destination: Cesium.Cartesian3.fromDegrees(
                         center[0],
                         center[1],
-                        entryGround + 300
+                        entryHeight
                     ),
                     orientation: {
                         heading: 0.0,
                         pitch: -Cesium.Math.PI_OVER_FOUR, // Less steep angle to see buildings better
                         roll: 0.0
-                    }
+                    },
+                    complete: reofferModelsAtCamera,
+                    cancel: reofferModelsAtCamera
                 });
-                // Same here: pump frames so this flight lands at the DEM-aware
-                // height instead of stalling at the 2D-derived camera position.
+                // Keep the flight and terrain rendering while progressive
+                // feature setup continues in the background.
                 pumpSceneRenders(scene, 4000);
 
-                // Re-offer the models once the camera has actually landed. The
-                // first sweep ran while the camera was still where the 2D view
-                // left it (kilometres up), so anything outside the load radius
-                // was skipped as "too far" — and nothing retried it, which is
-                // how a session could end up with no models at all. addAllModels
-                // is idempotent: only the missing ones get placed.
-                setTimeout(function () {
-                    if (window.modelRenderer && window.modelRenderer.addAllModels) {
-                        console.log('🎯 camera landed — re-offering models that were out of range');
-                        window.modelRenderer.addAllModels();
-                    }
-                }, 4500);
-                
                 button.innerHTML = '<i class="fa fa-map"></i>';
                 button.title = 'Switch to 2D';
                 

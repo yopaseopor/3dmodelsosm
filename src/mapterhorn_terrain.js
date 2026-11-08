@@ -43,7 +43,9 @@
     const DEFAULT_SAMPLE_LEVEL = 15;       // zoom used for elevation queries
     const DEFAULT_SAMPLE_RADIUS = 20;      // meters between slope samples
     const DEFAULT_MAX_TILT = 35 * Math.PI / 180; // clamp tilt for models
-    const MAX_CACHED_TILES = 900;          // ~60MB of 129x129 Float32 grids.
+    const DEVICE_MEMORY_GB = Number(window.navigator && window.navigator.deviceMemory) || 4;
+    const MAX_CACHED_TILES = DEVICE_MEMORY_GB <= 2 ? 180 : (DEVICE_MEMORY_GB <= 4 ? 450 : 900);
+                                           // ~12/30/60MB of 129x129 Float32 grids.
                                            // Sized to keep fine tiles resident when
                                            // globe.maximumScreenSpaceError=1 demands
                                            // extra refinement near the camera — if fine
@@ -413,9 +415,69 @@
         sampleLevel: DEFAULT_SAMPLE_LEVEL,
         sampleRadiusMeters: DEFAULT_SAMPLE_RADIUS,
         groundSmoothMeters: 30,        // neighborhood size for soft ground sampling
+        _flatGroundMode: false,
+        _terrainProvider: null,
+        _suppressedTerrainReasons: new Set(),
+        _flatTerrainScene: null,
+        _flatTerrainProvider: null,
 
         _cache: new MapterhornTileCache(DEFAULT_TILE_URL, DEFAULT_HEIGHTMAP_SIZE),
         _elevationPending: new Set(),
+
+        isFlatGroundMode: function () {
+            return this._flatGroundMode;
+        },
+
+        setFlatGroundMode: function (enabled) {
+            const next = !!enabled;
+            if (next === this._flatGroundMode) return true;
+            this._flatGroundMode = next;
+            this.setTerrainSuppressed('flat-ground-mode', next);
+            window.dispatchEvent(new CustomEvent('mapterhornFlatGroundChanged', {
+                detail: { enabled: next }
+            }));
+            return true;
+        },
+
+        setTerrainProvider: function (provider, scene) {
+            if (!provider) return false;
+            const targetScene = scene || this._scene;
+            this._terrainProvider = provider;
+            if (!targetScene || (targetScene.isDestroyed && targetScene.isDestroyed())) return false;
+            this._scene = targetScene;
+            this._syncTerrainProvider(targetScene);
+            return true;
+        },
+
+        setTerrainSuppressed: function (reason, suppressed, scene) {
+            if (!reason) return false;
+            if (suppressed) this._suppressedTerrainReasons.add(reason);
+            else this._suppressedTerrainReasons.delete(reason);
+            const targetScene = scene || this._scene;
+            if (!targetScene || (targetScene.isDestroyed && targetScene.isDestroyed())) return false;
+            this._scene = targetScene;
+            this._syncTerrainProvider(targetScene);
+            if (targetScene.requestRender) targetScene.requestRender();
+            if (!suppressed && this._suppressedTerrainReasons.size === 0) {
+                this.keepCameraAboveGround();
+            }
+            return true;
+        },
+
+        _syncTerrainProvider: function (scene) {
+            if (!scene || !scene.globe) return;
+            if (this._suppressedTerrainReasons.size > 0) {
+                if (this._flatTerrainScene !== scene || !this._flatTerrainProvider) {
+                    this._flatTerrainScene = scene;
+                    this._flatTerrainProvider = new Cesium.EllipsoidTerrainProvider();
+                }
+                scene.terrainProvider = this._flatTerrainProvider;
+            } else if (this._terrainProvider) {
+                scene.terrainProvider = this._terrainProvider;
+                this._flatTerrainScene = null;
+                this._flatTerrainProvider = null;
+            }
+        },
 
         createProvider: function (options) {
             const opts = Object.assign({}, options || {});
@@ -430,8 +492,9 @@
             if (!scene || !scene.globe) return false;
             try {
                 const provider = this.createProvider(options);
-                scene.terrainProvider = provider;
                 this._scene = scene;
+                this._terrainProvider = provider;
+                this._syncTerrainProvider(scene);
                 // depthTestAgainstTerrain stays as the app configured it (false):
                 // forcing it true hides ground-level models behind terrain tiles.
                 log('terrain enabled (' + DEFAULT_TILE_URL + ')');
@@ -439,8 +502,8 @@
                 // to a flat globe instead of leaving a broken terrain surface.
                 const fallbackToFlat = () => {
                     try {
-                        if (scene.terrainProvider === provider && !scene.isDestroyed()) {
-                            scene.terrainProvider = new Cesium.EllipsoidTerrainProvider();
+                        if (this._terrainProvider === provider && !scene.isDestroyed()) {
+                            this.setTerrainProvider(new Cesium.EllipsoidTerrainProvider(), scene);
                             console.warn('🗺️ MapTerhorn unreachable — falling back to flat terrain');
                         }
                     } catch (e) { /* scene already destroyed */ }
@@ -490,6 +553,7 @@
          * the whole point and the globe is rendered translucent.
          */
         keepCameraAboveGround: function () {
+            if (this._suppressedTerrainReasons.size > 0) return false;
             const scene = this._cameraGuard && this._cameraGuard.scene;
             if (!scene || scene.isDestroyed || scene.isDestroyed()) return false;
             try {
@@ -555,6 +619,7 @@
          * later call (or a tile-load callback) will have data.
          */
         getElevation: function (longitude, latitude) {
+            if (this._flatGroundMode) return 0;
             // Deterministic sample from the DEM grid — the SAME source the
             // terrain provider renders from, so geometry heights always match
             // the visible surface. (Querying the rendered globe instead
@@ -583,6 +648,7 @@
          * Loads the best tile for the point if needed.
          */
         getElevationAsync: function (longitude, latitude) {
+            if (this._flatGroundMode) return Promise.resolve(0);
             const self = this;
             return this._sampleWalkAsync(longitude, latitude, this.sampleLevel)
                 .then(h => (h === null ? self._sampleWalk(longitude, latitude, self.sampleLevel, true) : h));
@@ -617,6 +683,7 @@
         },
 
         _sampleWalkAsync: function (longitude, latitude, zoom) {
+            if (this._flatGroundMode) return Promise.resolve(0);
             const self = this;
             const z = Math.max(0, Math.min(DEFAULT_MAX_LEVEL, Math.round(zoom)));
             const tx = Math.floor(lonToTileX(longitude, z));
@@ -704,6 +771,7 @@
 
         /** Force-load terrain around a lon/lat (used to warm the cache). */
         warmUp: function (longitude, latitude) {
+            if (this._flatGroundMode) return;
             this._primeElevationTile(longitude, latitude);
         },
 
@@ -730,6 +798,16 @@
                 sampler: null
             }, options || {});
             if (!Array.isArray(points) || points.length === 0) return null;
+            if (this._flatGroundMode) {
+                const heights = new Float32Array(points.length);
+                heights.fill(opts.lift);
+                return {
+                    heights: heights,
+                    mean: opts.lift,
+                    max: opts.lift,
+                    min: opts.lift
+                };
+            }
 
             const sampler = opts.sampler || ((lon, lat) => this.getElevation(lon, lat));
 

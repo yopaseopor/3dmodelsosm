@@ -39,6 +39,8 @@ function buildingLog() {
 // outlines that must not be extruded because they contain parts.
 const buildingPartRegistry = [];
 const registeredPartFeatures = new Set();
+let buildingGeneration = 0;
+const activeBuildingJobs = new Set();
 
 // OSM layer=* is a stacking order, not meters: a small per-unit vertical
 // offset avoids z-fighting between overlapping volumes; layer=-1 sinks
@@ -883,8 +885,8 @@ function pointInPolygon(point, ring) {
 function registerBuildingPart(feature, outerLonLat) {
     if (!feature || !outerLonLat || outerLonLat.length < 3) return;
     if (registeredPartFeatures.has(feature)) return;
+    if (buildingPartRegistry.length >= 5000) return;
     registeredPartFeatures.add(feature);
-    if (buildingPartRegistry.length > 5000) return; // safety cap
 
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     let cx = 0, cy = 0;
@@ -912,28 +914,32 @@ function registerBuildingPart(feature, outerLonLat) {
  */
 function registerBuildingPartsFromFeatures(features) {
     if (!features || !features.forEach) return;
-    features.forEach(feature => {
-        try {
-            if (registeredPartFeatures.has(feature)) return;
-            const tags = {};
-            feature.getKeys().forEach(key => {
-                if (key !== 'geometry' && key !== 'extrudedBuilding') {
-                    tags[key] = feature.get(key);
-                }
-            });
-            const partValue = tags['building:part'];
-            if (!partValue || partValue === 'no') return;
-            const geometry = feature.getGeometry();
-            if (!geometry) return;
-            const geomType = geometry.getType();
-            if (geomType !== 'Polygon' && geomType !== 'MultiPolygon') return;
-            const rings = (geomType === 'Polygon') ? geometry.getCoordinates() : geometry.getCoordinates()[0];
-            if (!rings || !rings[0] || rings[0].length < 3) return;
-            const outerLonLat = rings[0].map(coord =>
-                ol.proj.transform(coord, window.map.getView().getProjection(), 'EPSG:4326'));
-            registerBuildingPart(feature, outerLonLat);
-        } catch (e) { /* skip unprojectable part */ }
-    });
+    features.forEach(registerBuildingPartFeature);
+}
+
+function registerBuildingPartFeature(feature) {
+    try {
+        if (registeredPartFeatures.has(feature)) return;
+        const tags = {};
+        feature.getKeys().forEach(key => {
+            if (key !== 'geometry' && key !== 'extrudedBuilding') {
+                tags[key] = feature.get(key);
+            }
+        });
+        const partValue = tags['building:part'];
+        if (!partValue || partValue === 'no') return;
+        const geometry = feature.getGeometry();
+        if (!geometry) return;
+        const geomType = geometry.getType();
+        if (geomType !== 'Polygon' && geomType !== 'MultiPolygon') return;
+        const rings = (geomType === 'Polygon') ? geometry.getCoordinates() : geometry.getCoordinates()[0];
+        if (!rings || !rings[0] || rings[0].length < 3) return;
+        const outerLonLat = rings[0].map(coord =>
+            ol.proj.transform(coord, window.map.getView().getProjection(), 'EPSG:4326'));
+        registerBuildingPart(feature, outerLonLat);
+    } catch (error) {
+        console.error('🏗️ Could not register building:part footprint:', error);
+    }
 }
 
 /**
@@ -1470,19 +1476,53 @@ function createBuildingEntity(buildingData, container) {
  */
 function processLayerFeatures(layer, dataSource) {
     const source = layer.getSource();
-    if (source && source.getFeatures) {
-        const features = source.getFeatures();
-        if (buildingLog()) console.log(`🏗️ Processing ${features.length} features in layer for buildings`);
+    if (!source) return Promise.resolve();
+    const collection = source.getFeaturesCollection && source.getFeaturesCollection();
+    const features = collection ? collection.getArray() : source.getFeatures && source.getFeatures();
+    if (!features) return Promise.resolve();
+    if (buildingLog()) console.log(`🏗️ Processing ${features.length} features in layer for buildings`);
+    const generation = buildingGeneration;
 
-        // Pass 1: register every building:part footprint FIRST so outlines that
-        // contain parts are detected no matter which feature comes first.
-        registerBuildingPartsFromFeatures(features);
-
-        // Pass 2: extrude every footprint, in one synchronous pass as before.
-        features.forEach((feature, index) => {
-            processBuildingFeature(feature, index, dataSource);
+    function run(featuresToProcess, worker, label) {
+        return new Promise(resolve => {
+            let settled = false;
+            const job = { handle: null, finish: null };
+            const finish = () => {
+                if (settled) return;
+                settled = true;
+                activeBuildingJobs.delete(job);
+                resolve();
+            };
+            job.finish = finish;
+            activeBuildingJobs.add(job);
+            const progressive = window.progressive;
+            if (progressive && progressive.forEach) {
+                job.handle = progressive.forEach(featuresToProcess, (feature, index) => {
+                    if (generation === buildingGeneration) worker(feature, index);
+                }, {
+                    label: label,
+                    onError: (feature, error, index) => {
+                        console.error(`🏗️ ${label} failed for feature ${index}:`, error);
+                    },
+                    onDone: finish
+                });
+            } else {
+                featuresToProcess.forEach((feature, index) => {
+                    try {
+                        if (generation === buildingGeneration) worker(feature, index);
+                    } catch (error) {
+                        console.error(`🏗️ ${label} failed for feature ${index}:`, error);
+                    }
+                });
+                finish();
+            }
         });
     }
+
+    return run(features, registerBuildingPartFeature, 'building part registration')
+        .then(() => generation === buildingGeneration ? run(features, (feature, index) => {
+            processBuildingFeature(feature, index, dataSource);
+        }, 'building extrusion') : undefined);
 }
 
 /**
@@ -1563,7 +1603,7 @@ function processBuildingFeature(feature, index, dataSource) {
  * finer tiles load afterwards the surface can shift, leaving buildings sunk or
  * floating. Rebuilding the entity with fresh DEM samples fixes it.
  */
-function repositionBuildingsOnDem() {
+function repositionBuildingsOnDem(force) {
     if (buildingEntities.size === 0) return;
     // ol3dInstance may be null when entities were added via processBuildingFeatures;
     // fall back to the global instance so re-seating still works.
@@ -1593,7 +1633,7 @@ function repositionBuildingsOnDem() {
 
             // Only rebuild when the ground clearly moved (tile refinement);
             // sub-meter shifts are covered by the 0.5m buried walls.
-            if (Math.abs(fresh.groundMax - current.groundMax) < 1.0) return;
+            if (!force && Math.abs(fresh.groundMax - current.groundMax) < 1.0) return;
 
             removeBuildingVisuals(feature);
             dataSource.entities.remove(entity);
@@ -1612,11 +1652,21 @@ function repositionBuildingsOnDem() {
     }
 }
 
+window.addEventListener('mapterhornFlatGroundChanged', function () {
+    repositionBuildingsOnDem(true);
+});
+
 function addBuildingsToScene(ol3d) {
     if (!ol3d || !ol3d.getDataSources) {
         console.warn('OLCesium instance not available or getDataSources not supported');
-        return;
+        return Promise.resolve();
     }
+    if (addBuildingsToScene._running) {
+        addBuildingsToScene._rerun = true;
+        return addBuildingsToScene._running;
+    }
+    window.dispatchEvent(new CustomEvent('osm3d:buildingsStarted'));
+    const generation = buildingGeneration;
 
     ol3dInstance = ol3d;
 
@@ -1656,6 +1706,7 @@ function addBuildingsToScene(ol3d) {
     // 'overlay', and their children were never visited. Overpass buildings were
     // therefore never extruded in 3D, while GeoJSON overlays (which sit in
     // 'overlay' groups) worked fine.
+    const layers = [];
     const visit = (layer) => {
         if (!layer) return;
         // A group: descend, whatever its type ('overlay', 'tag-query', ...).
@@ -1664,13 +1715,39 @@ function addBuildingsToScene(ol3d) {
             return;
         }
         if (layer.getSource) {
-            processLayerFeatures(layer, dataSource);
+            layers.push(layer);
         }
     };
     window.map.getLayers().forEach(visit);
 
-    console.log(`🏗️ Buildings data source now has ${dataSource.entities.values.length} entities`);
-    console.log(`🏗️ Total data sources: ${dataSources.length}`);
+    if (window.loadingProgress && window.loadingProgress.phase) {
+        window.loadingProgress.phase('Preparing building footprints');
+    }
+    const buildingPass = layers.reduce((work, layer) => work.then(() =>
+        generation === buildingGeneration ? processLayerFeatures(layer, dataSource) : undefined),
+        Promise.resolve()).then(() => {
+            if (generation !== buildingGeneration) return;
+            if (window.loadingProgress && window.loadingProgress.phase) window.loadingProgress.phase('');
+            console.log(`🏗️ Buildings data source now has ${dataSource.entities.values.length} entities`);
+            console.log(`🏗️ Total data sources: ${dataSources.length}`);
+            window.dispatchEvent(new CustomEvent('osm3d:buildingsPlaced'));
+        }).catch(error => {
+            if (generation !== buildingGeneration) return;
+            if (window.loadingProgress && window.loadingProgress.phase) window.loadingProgress.phase('');
+            console.error('🏗️ Building processing could not be completed:', error);
+            window.dispatchEvent(new CustomEvent('osm3d:buildingsPlaced', {
+                detail: { error: error && error.message ? error.message : 'Building processing failed.' }
+            }));
+        });
+    addBuildingsToScene._running = buildingPass;
+    return buildingPass.then(() => {
+        if (addBuildingsToScene._running === buildingPass) addBuildingsToScene._running = null;
+        if (generation !== buildingGeneration) return;
+        if (addBuildingsToScene._rerun) {
+            addBuildingsToScene._rerun = false;
+            return addBuildingsToScene(ol3d);
+        }
+    });
 }
 
 /**
@@ -2044,6 +2121,16 @@ function reprocessAllLayersForBuildings() {
 
 window.addEventListener('ol3dDestroyed', function() {
     console.log('🏗️ 3D mode destroyed, removing buildings from scene');
+    buildingGeneration++;
+    activeBuildingJobs.forEach(job => {
+        if (job.handle && job.handle.cancel) job.handle.cancel();
+        job.finish();
+    });
+    activeBuildingJobs.clear();
+    addBuildingsToScene._running = null;
+    addBuildingsToScene._rerun = false;
+    buildingPartRegistry.length = 0;
+    registeredPartFeatures.clear();
     removeBuildingsFromScene();
 });
 

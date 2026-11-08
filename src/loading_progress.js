@@ -53,9 +53,13 @@
         // counters rather than being folded into the model numbers.
         sub: { done: 0, total: 0, label: 'building extrusions' },
         modelsPlaced: null,      // models produced by the finished pass
-        revealTimer: null,
+        assetsPending: 0,
+        operable: false,
+        phase: '',
+        dismissed: false,
         bytesAtStart: 0,
-        finishAt: null
+        cachedAssetBytes: 0,
+        assetBytesCheckedAt: 0
     };
 
     // -------------------------------------------------------------------------
@@ -86,7 +90,13 @@
         ].join(';');
 
         host.innerHTML =
-            '<div class="lp-title" style="font-weight:600;letter-spacing:.2px"></div>' +
+            '<div style="display:flex;align-items:center;gap:8px;pointer-events:none">' +
+                '<div class="lp-title" style="flex:1;font-weight:600;letter-spacing:.2px"></div>' +
+                '<button class="lp-close" type="button" aria-label="Hide loading statistics" title="Hide loading statistics" ' +
+                    'style="pointer-events:auto;cursor:pointer;width:22px;height:22px;line-height:1;' +
+                    'border:1px solid rgba(255,255,255,.28);border-radius:5px;background:transparent;' +
+                    'color:#eef2f6;font:16px/1 system-ui,sans-serif;padding:0">×</button>' +
+            '</div>' +
             '<div class="lp-pct" style="display:flex;align-items:baseline;gap:6px;margin-top:6px">' +
                 '<span class="lp-pct-value" style="font-size:26px;font-weight:700;line-height:1">0%</span>' +
                 '<span class="lp-stage" style="font-size:12px;opacity:.72"></span>' +
@@ -98,8 +108,31 @@
             '<div class="lp-bytes" style="margin-top:2px;font-size:12px;opacity:.72;font-variant-numeric:tabular-nums"></div>';
 
         document.body.appendChild(host);
+        var reopen = document.createElement('button');
+        reopen.type = 'button';
+        reopen.textContent = '3D loading stats';
+        reopen.setAttribute('aria-label', 'Show loading statistics');
+        reopen.style.cssText = [
+            'position:fixed',
+            'top:16px',
+            'right:16px',
+            'z-index:10000',
+            'display:none',
+            'padding:7px 10px',
+            'border:1px solid rgba(255,255,255,.28)',
+            'border-radius:8px',
+            'background:rgba(18,22,28,0.92)',
+            'color:#eef2f6',
+            'font:12px system-ui,-apple-system,Segoe UI,Roboto,sans-serif',
+            'box-shadow:0 6px 24px rgba(0,0,0,0.45)',
+            'cursor:pointer'
+        ].join(';');
+        document.body.appendChild(reopen);
+
         el = {
             host: host,
+            reopen: reopen,
+            close: host.querySelector('.lp-close'),
             title: host.querySelector('.lp-title'),
             pct: host.querySelector('.lp-pct-value'),
             stage: host.querySelector('.lp-stage'),
@@ -107,6 +140,8 @@
             eta: host.querySelector('.lp-eta'),
             bytes: host.querySelector('.lp-bytes')
         };
+        el.close.addEventListener('click', function () { window.loadingProgress.close(); });
+        el.reopen.addEventListener('click', function () { window.loadingProgress.open(); });
         return el;
     }
 
@@ -181,6 +216,7 @@
      * arriving, and reporting 100% then would be a lie.
      */
     function progressRatio() {
+        if (state.operable) return 1;
         // Weights are renormalised over the channels that actually have work.
         // A hard-coded "+10% already done" once made the panel open at 30%
         // before a single model was placed.
@@ -205,15 +241,18 @@
             ratio += Math.min(1, state.sub.done / state.sub.total) * 0.20;
             weight += 0.20;
         }
-        return Math.max(0, Math.min(1, ratio / weight));
+        return Math.max(0, Math.min(state.drained ? 0.99 : 1, ratio / weight));
     }
 
     function stageLabel() {
+        if (state.phase) return state.phase;
         var sub = state.sub;
         if (sub.total > 0 && sub.done < sub.total) return 'building footprints';
         if (!state.drained) return 'placing models';
         var t = state.terrain;
         if (t.valid && (t.queued + t.processing) > 0) return 'loading terrain';
+        if (state.assetsPending > 0) return 'loading ' + state.assetsPending + ' model asset(s)';
+        if (!state.operable) return 'waiting for scene to settle';
         // Done and settled: say what was built rather than a vague "finishing".
         if (state.modelsPlaced !== null) return state.modelsPlaced + ' models loaded';
         return 'ready';
@@ -221,14 +260,11 @@
 
     /** Seconds left, from the smoothed placement rate (null until we have one). */
     function etaMs() {
+        if (state.operable) return 0;
         if (state.drained) {
-            var t = state.terrain;
-            if (t.valid && (t.queued + t.processing) > 0) {
-                // Rough, and deliberately vague: terrain refinement is driven by
-                // the screen-space error, not by a queue we control.
-                return (t.queued + t.processing) * 400;
-            }
-            return 0;
+            if (state.assetsPending > 0) return null;
+            var terrainPending = state.terrain.queued + state.terrain.processing;
+            return terrainPending > 0 ? terrainPending * 400 : null;
         }
         if (!state.rate || state.rate <= 0) {
             // No throughput yet. If nothing is left to place, we can still be
@@ -260,15 +296,28 @@
         var eta = etaMs();
         var elapsed = Date.now() - state.startedAt;
         el.eta.textContent = 'elapsed ' + formatClock(elapsed) +
-            (state.drained ? '' : (eta === null ? ' · working…' : ' · about ' + formatClock(eta) + ' left'));
+            (state.operable ? ' · ready' : (state.drained
+                ? (eta === null ? ' · waiting for full readiness' : ' · roughly ' + formatClock(eta) + ' left')
+                :
+                (eta === null ? ' · working…' : ' · about ' + formatClock(eta) + ' left')));
 
-        var bytes = assetBytes();
+        var now = Date.now();
+        if (now - state.assetBytesCheckedAt >= 1000) {
+            state.cachedAssetBytes = assetBytes();
+            state.assetBytesCheckedAt = now;
+        }
+        var bytes = state.cachedAssetBytes;
         var heap = heapBytes();
+        var renderer = window.modelRenderer;
+        var memory = renderer && typeof renderer.memoryReport === 'function' ? renderer.memoryReport() : '';
         el.bytes.textContent = formatBytes(bytes) + ' loaded' +
             (heap !== null ? ' · heap ' + formatBytes(heap) : '') +
             (state.placementTotal ? ' · ' + state.placed + '/' + state.placementTotal + ' features' : '') +
             (state.modelsPlaced !== null ? ' · ' + state.modelsPlaced + ' models' : '') +
-            (state.sub.total ? ' · ' + state.sub.done + '/' + state.sub.total + ' buildings' : '');
+            (state.sub.total ? ' · ' + state.sub.done + '/' + state.sub.total + ' buildings' : '') +
+            (memory ? ' · ' + memory : '');
+        el.host.style.display = state.dismissed ? 'none' : 'block';
+        el.reopen.style.display = state.dismissed ? 'block' : 'none';
     }
 
     // -------------------------------------------------------------------------
@@ -276,9 +325,8 @@
     // -------------------------------------------------------------------------
     window.loadingProgress = {
         /**
-         * Show the panel. `hardStopMs` is a safety valve: whatever happens,
-         * the panel finishes itself after that long so the app can never be
-         * left behind an eternal spinner.
+         * Show the panel. It remains visible until readiness is reported or
+         * the user explicitly hides the statistics.
          */
         begin: function (opts) {
             opts = opts || {};
@@ -294,20 +342,30 @@
             state.terrain = { queued: 0, processing: 0, ready: 0, valid: false };
             state.sub = { done: 0, total: 0, label: 'building extrusions' };
             state.modelsPlaced = null;
+            state.assetsPending = 0;
+            state.operable = false;
+            state.phase = '';
+            state.dismissed = false;
             state.bytesAtStart = assetBytes();
+            state.cachedAssetBytes = state.bytesAtStart;
+            state.assetBytesCheckedAt = Date.now();
             panel.host.style.opacity = '1';
             panel.host.style.display = 'block';
+            panel.reopen.style.display = 'none';
             this.render();
 
             var self = this;
             this._timer = setInterval(function () { self.render(); }, 250);
+        },
 
-            if (state.revealTimer) clearTimeout(state.revealTimer);
-            var hardStop = opts.hardStopMs || 15000;
-            state.revealTimer = setTimeout(function () {
-                console.warn('⏱️ loadingProgress: hard stop reached, finishing anyway');
-                self.finish();
-            }, hardStop);
+        phase: function (label) {
+            state.phase = label || '';
+            if (state.active) render();
+        },
+
+        assetsPending: function (count) {
+            state.assetsPending = Math.max(0, Number(count) || 0);
+            if (state.active) render();
         },
 
         /**
@@ -329,7 +387,8 @@
             // made the counter read "233/1295 placed".
             state.drained = true;
             state.modelsPlaced = isFinite(placed) ? placed : 0;
-            state.title = '3D scene ready';
+            state.phase = '';
+            state.title = 'Finishing 3D scene';
             render();
         },
 
@@ -371,24 +430,39 @@
 
         render: render,
 
-        /** Hide the panel. Safe to call when it was never shown. */
-        finish: function () {
+        /** Mark the tracked work complete and leave its result visible. */
+        finish: function (title) {
             if (this._timer) { clearInterval(this._timer); this._timer = null; }
-            if (state.revealTimer) { clearTimeout(state.revealTimer); state.revealTimer = null; }
             state.active = false;
             if (!el) return;
-            el.host.style.opacity = '0';
-            var host = el.host;
-            setTimeout(function () { if (!state.active) host.style.display = 'none'; }, 400);
+            state.operable = true;
+            state.phase = '';
+            state.title = title || (state.modelsPlaced !== null ? '3D scene ready' : 'Loading complete');
+            render();
+        },
+
+        /** Hide statistics without stopping progress tracking. */
+        close: function () {
+            state.dismissed = true;
+            if (el) render();
+        },
+
+        /** Reopen statistics after they have been hidden. */
+        open: function () {
+            state.dismissed = false;
+            if (el) render();
         },
 
         /** Never leave the user staring at a bar that will not move. */
         fail: function (message) {
             if (this._timer) { clearInterval(this._timer); this._timer = null; }
             state.active = false;
+            state.operable = false;
+            state.dismissed = false;
             var panel = buildPanel();
             panel.host.style.opacity = '1';
             panel.host.style.display = 'block';
+            panel.reopen.style.display = 'none';
             panel.title.textContent = '3D scene could not be completed';
             panel.stage.textContent = '';
             panel.fill.style.width = '100%';
@@ -401,6 +475,9 @@
     // A 3D session can be torn down at any time; make sure the panel goes with
     // it, otherwise leaving 3D during a load leaves a dead overlay on screen.
     window.addEventListener('ol3dDestroyed', function () {
-        if (window.loadingProgress) window.loadingProgress.finish();
+        if (window.loadingProgress) {
+            window.loadingProgress.finish();
+            window.loadingProgress.close();
+        }
     });
 })();

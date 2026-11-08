@@ -115,36 +115,42 @@ class GeoJSONLoader {
             // the percentage is a percentage of something real from the first
             // frame instead of jumping from 0 to 100.
             var progress = window.loadingProgress;
-            var fileSize = (file && file.size) || 0;
             if (progress && progress.begin) {
                 progress.begin({
-                    title: 'Loading ' + (file.name || 'GeoJSON'),
-                    // A safety valve only: a stalled load must not leave the panel
-                    // up forever. Sized well above a real load of a big file,
-                    // because a load that legitimately needs two minutes must
-                    // not have its counter yanked away at sixty seconds.
-                    hardStopMs: 180000
+                    title: 'Loading ' + (file.name || 'GeoJSON')
                 });
             }
 
-            // Read file as text
-            const geoJSONText = await this.readFileAsText(file);
-
-            // Parse GeoJSON
-            const geoJSON = JSON.parse(geoJSONText);
-
-            // Validate GeoJSON
-            if (!this.validateGeoJSON(geoJSON)) {
-                throw new Error('Invalid GeoJSON format');
-            }
-            
-            // Create vector layer
-            const layer = this.createVectorLayer(geoJSON, options);
-
-            // The file is parsed, so the feature count is known: give it to the
-            // panel so the percentage has a real denominator from here on.
-            var featureCount = (geoJSON && geoJSON.features) ? geoJSON.features.length : 0;
-            if (progress && progress.total) progress.total(featureCount);
+            let layer = null;
+            let featureCount = 0;
+            let processedFeatures = 0;
+            if (progress && progress.phase) progress.phase('Reading and parsing GeoJSON');
+            await this.readGeoJSONBatches(file, function (metadata) {
+                if (!this.validateGeoJSON({ type: metadata.geoJSONType })) {
+                    throw new Error('Invalid GeoJSON format');
+                }
+                featureCount = metadata.featureCount;
+                layer = this.createVectorLayer(null, options);
+                if (progress && progress.total) progress.total(featureCount);
+                if (progress && progress.phase) progress.phase('Converting GeoJSON features');
+            }.bind(this), function (batch) {
+                const format = new ol.format.GeoJSON();
+                const features = format.readFeatures({
+                    type: 'FeatureCollection',
+                    features: batch
+                }, {
+                    featureProjection: window.map ? window.map.getView().getProjection() : 'EPSG:3857'
+                });
+                layer.getSource().addFeatures(features);
+                processedFeatures += batch.length;
+                if (progress && progress.step) {
+                    progress.step(batch.length, processedFeatures, featureCount);
+                }
+                if (progress && progress.phase) {
+                    progress.phase('Converting features ' + processedFeatures.toLocaleString() +
+                        '/' + featureCount.toLocaleString());
+                }
+            }.bind(this));
             
             // Generate layer ID and name
             const layerId = `geojson_${++this.layerCounter}`;
@@ -428,7 +434,7 @@ class GeoJSONLoader {
                                 // renderer pass coming to write the summary,
                                 // and leaving the panel up would mean a frozen
                                 // counter over a finished job.
-                                progress.finish();
+                                progress.finish('GeoJSON load complete');
                                 }
                             }
                         });
@@ -439,8 +445,91 @@ class GeoJSONLoader {
             return layerInfo;
         } catch (error) {
             console.error('📍 Error loading GeoJSON:', error);
+            if (window.loadingProgress && window.loadingProgress.fail) {
+                window.loadingProgress.fail(error && error.message ? error.message : 'GeoJSON could not be loaded.');
+            }
             throw error;
         }
+    }
+
+    /**
+     * Parse in a worker and transfer features in small batches, so JSON.parse
+     * and large feature conversion do not monopolize the map's main thread.
+     */
+    async readGeoJSONBatches(file, onStart, onFeatures) {
+        const yieldToBrowser = () => new Promise(resolve => {
+            if (window.progressive && window.progressive.yield) {
+                window.progressive.yield(resolve);
+            } else {
+                setTimeout(resolve, 0);
+            }
+        });
+
+        if (typeof Worker !== 'function') {
+            const data = JSON.parse(await this.readFileAsText(file));
+            let features;
+            if (data && data.type === 'FeatureCollection') {
+                if (!Array.isArray(data.features)) throw new Error('Invalid GeoJSON FeatureCollection');
+                features = data.features;
+            } else if (data && data.type === 'Feature') {
+                features = [data];
+            } else if (data && typeof data.type === 'string') {
+                features = [{ type: 'Feature', geometry: data, properties: {} }];
+            } else {
+                throw new Error('Invalid GeoJSON format');
+            }
+            onStart({ geoJSONType: data.type, featureCount: features.length });
+            for (let offset = 0; offset < features.length; offset += 100) {
+                onFeatures(features.slice(offset, offset + 100));
+                await yieldToBrowser();
+            }
+            return;
+        }
+
+        await new Promise((resolve, reject) => {
+            let worker;
+            try {
+                worker = new Worker(new URL('src/geojson_parser_worker.js', document.baseURI));
+            } catch (error) {
+                console.warn('📍 GeoJSON worker unavailable; parsing on the main thread:', error);
+                reject(error);
+                return;
+            }
+
+            let started = false;
+            worker.onmessage = event => {
+                const message = event.data || {};
+                try {
+                    if (message.type === 'error') {
+                        throw new Error(message.message || 'Failed to parse GeoJSON.');
+                    }
+                    if (message.type === 'start') {
+                        onStart(message);
+                        started = true;
+                        worker.postMessage({ type: 'continue' });
+                    } else if (message.type === 'features') {
+                        if (!started || !Array.isArray(message.features)) {
+                            throw new Error('GeoJSON parser returned an invalid feature batch.');
+                        }
+                        onFeatures(message.features);
+                        yieldToBrowser().then(() => worker.postMessage({ type: 'continue' }));
+                    } else if (message.type === 'done') {
+                        worker.terminate();
+                        resolve();
+                    } else {
+                        throw new Error('GeoJSON parser returned an unknown message.');
+                    }
+                } catch (error) {
+                    worker.terminate();
+                    reject(error);
+                }
+            };
+            worker.onerror = event => {
+                worker.terminate();
+                reject(event.error || new Error(event.message || 'GeoJSON worker failed.'));
+            };
+            worker.postMessage({ file: file });
+        });
     }
 
     /**
@@ -498,9 +587,9 @@ class GeoJSONLoader {
     createVectorLayer(geoJSON, options = {}) {
         // Create vector source
         const vectorSource = new ol.source.Vector({
-            features: new ol.format.GeoJSON().readFeatures(geoJSON, {
+            features: geoJSON ? new ol.format.GeoJSON().readFeatures(geoJSON, {
                 featureProjection: window.map ? window.map.getView().getProjection() : 'EPSG:3857'
-            })
+            }) : []
         });
 
         // Create style function

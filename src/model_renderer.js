@@ -118,6 +118,12 @@ function isTunnelFeature(feature) {
     return tunnel === 'yes' && parseOsNumber(feature.get('layer')) === -1;
 }
 
+function isFlatGroundMode() {
+    return !!(window.mapterhornTerrain &&
+        typeof window.mapterhornTerrain.isFlatGroundMode === 'function' &&
+        window.mapterhornTerrain.isFlatGroundMode());
+}
+
 function isUndergroundFeature(feature) {
     if (!feature || typeof feature.get !== 'function') return false;
     const tunnel = String(feature.get('tunnel') || '').trim().toLowerCase();
@@ -125,6 +131,7 @@ function isUndergroundFeature(feature) {
 }
 
 function getTunnelElevation() {
+    if (isFlatGroundMode()) return 0;
     // Treat OSM layer -1 as one storey below a flat, DEM-independent datum.
     return -3;
 }
@@ -363,6 +370,7 @@ window.getFeatureModelOptions = getFeatureModelOptions;
  * @returns {number} elevation in metres
  */
 function sampleGroundElevation(lon, lat) {
+    if (isFlatGroundMode()) return 0;
     if (window.terrainManager && window.terrainManager.getElevation) {
         const local = window.terrainManager.getElevation(lon, lat);
         if (local !== null && local !== undefined && isFinite(local)) return local;
@@ -531,6 +539,7 @@ function getBridgeReferenceHeight(feature, lonLat) {
     const surfaceAnchor = surfaceFeature === feature
         ? lonLat
         : (getFeatureAnchorLonLat(surfaceFeature) || lonLat);
+    if (isFlatGroundMode()) return 0;
     let referenceHeight = surfaceFeature.get('bridgeRefHeight');
     if (referenceHeight === undefined || referenceHeight === null || !isFinite(referenceHeight)) {
         if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
@@ -912,6 +921,9 @@ window.modelRenderer = {
     // counter did.
     liveByKind: { model: 0, repetition: 0, texture: 0 },
     liveTotal: 0,
+    _pendingAssets: 0,
+    _assetReadinessSeen: new WeakSet(),
+    _assetSessionId: 0,
     cameraUpdateTimeout: null,        // Throttle camera updates
     modelPool: new Map(),             // Pool of reusable model instances
     backgroundTasks: [],              // Background loading tasks
@@ -958,14 +970,50 @@ window.modelRenderer = {
             url: modelUrl,
             show: true
         }));
+        this.trackModelReadiness(newModel, modelUrl);
         
         pool.push({
             model: newModel,
-            isVisible: true
+            isVisible: true,
+            scene: cesiumScene
         });
         
         if (debugConfig.enabled) console.log(`🆕 Created new pooled model: ${modelUrl}`);
         return { model: newModel, isVisible: true };
+    },
+
+    trackModelReadiness: function(model, label) {
+        if (!model || !model.readyPromise || this._assetReadinessSeen.has(model)) return;
+        this._assetReadinessSeen.add(model);
+        const sessionId = this._session3dId;
+        this._pendingAssets++;
+        this._publishAssetReadiness();
+        const self = this;
+        model.readyPromise.then(function() {
+            self._settleModelReadiness(sessionId);
+        }, function(error) {
+            console.error('🎯 3D model failed to load (' + label + '):', error);
+            self._settleModelReadiness(sessionId);
+        });
+    },
+
+    _settleModelReadiness: function(sessionId) {
+        if (sessionId !== this._session3dId) return;
+        this._pendingAssets = Math.max(0, this._pendingAssets - 1);
+        this._publishAssetReadiness();
+    },
+
+    _publishAssetReadiness: function() {
+        if (window.loadingProgress && window.loadingProgress.assetsPending) {
+            window.loadingProgress.assetsPending(this._pendingAssets);
+        }
+        window.dispatchEvent(new CustomEvent('osm3d:modelAssetsChanged', {
+            detail: { pending: this._pendingAssets }
+        }));
+    },
+
+    getPendingAssetCount: function() {
+        return this._pendingAssets;
     },
 
     /**
@@ -1009,8 +1057,16 @@ window.modelRenderer = {
                 const toRemove = Math.max(0, unusedModels.length - Math.floor(maxPoolSize / this.modelPool.size));
                 
                 for (let i = 0; i < toRemove; i++) {
-                    const index = pool.indexOf(unusedModels[i]);
+                    const pooledModel = unusedModels[i];
+                    const index = pool.indexOf(pooledModel);
                     if (index > -1) {
+                        try {
+                            if (pooledModel.scene && pooledModel.scene.primitives) {
+                                pooledModel.scene.primitives.remove(pooledModel.model);
+                            }
+                        } catch (error) {
+                            console.error('🎯 Could not destroy an unused pooled model:', error);
+                        }
                         pool.splice(index, 1);
                         if (debugConfig.enabled) console.log(`♻️ Removed unused model from pool: ${modelUrl}`);
                     }
@@ -1596,20 +1652,28 @@ window.modelRenderer = {
      * before (groups recurse, leaf layers contribute their features) — it just
      * collects instead of placing, so the total is known before any work.
      */
-    collectPlaceTasks: function(layers, cesiumScene, out) {
+    collectPlaceGroups: function(layers, cesiumScene, out) {
         const self = this;
         (layers || []).forEach(function(layer) {
             if (!layer) return;
             // A group: descend, whatever its type.
             if (typeof layer.getLayers === 'function') {
-                self.collectPlaceTasks(layer.getLayers().getArray(), cesiumScene, out);
+                self.collectPlaceGroups(layer.getLayers().getArray(), cesiumScene, out);
                 return;
             }
             if (!layer.getSource || typeof layer.getSource !== 'function') return;
             let features = null;
             try {
                 const source = layer.getSource();
-                if (source && source.getFeatures) features = source.getFeatures();
+                if (source && source.getFeaturesCollection) {
+                    const collection = source.getFeaturesCollection();
+                    if (collection && collection.getArray) {
+                        features = collection.getArray();
+                    }
+                }
+                if (!features && source && source.getFeatures) {
+                    features = source.getFeatures();
+                }
             } catch (e) {
                 // Layer source access failed. Log instead of swallowing: an
                 // empty catch here hid the failure of every model in the layer.
@@ -1618,9 +1682,7 @@ window.modelRenderer = {
             }
             if (!features) return;
             if (debugConfig.enabled) console.log(`🎯 Found ${features.length} features in layer`);
-            for (let i = 0; i < features.length; i++) {
-                out.push({ feature: features[i], fidx: i, layer: layer, cesiumScene: cesiumScene });
-            }
+            if (features.length) out.push({ features: features, layer: layer, cesiumScene: cesiumScene });
         });
         return out;
     },
@@ -1630,25 +1692,39 @@ window.modelRenderer = {
      * hand-off between slices is what lets the browser paint the progress bar
      * and keep answering clicks.
      */
-    runPlaceSlices: function(tasks) {
+    runPlaceSlices: function(groups) {
         const self = this;
-        const total = tasks.length;
+        const total = groups.reduce(function(count, group) { return count + group.features.length; }, 0);
         let index = 0;
+        let groupIndex = 0;
+        let featureIndex = 0;
         this._placing = true;
 
         function slice() {
             const started = index;
-            const end = Math.min(total, index + self.placeSliceSize);
-            for (; index < end; index++) {
-                const task = tasks[index];
+            const deadline = (window.progressive && window.progressive.nowMs
+                ? window.progressive.nowMs() : Date.now()) + 8;
+            let processed = 0;
+            while (index < total && processed < self.placeSliceSize &&
+                (window.progressive && window.progressive.nowMs
+                    ? window.progressive.nowMs() : Date.now()) < deadline) {
+                const group = groups[groupIndex];
+                const feature = group.features[featureIndex];
                 try {
                     // Isolate every feature. addPlainResult / the repetition
                     // helpers are NOT wrapped individually, so a single throw
                     // would abort the whole sweep and silently cost the rest of
                     // the layer its models.
-                    self.placeFeature(task.feature, task.fidx, task.cesiumScene, task.layer);
+                    self.placeFeature(feature, featureIndex, group.cesiumScene, group.layer);
                 } catch (featureError) {
-                    console.error(`🎯 Feature ${task.fidx} in layer "${task.layer.get('title') || 'unnamed'}" failed, skipping:`, featureError);
+                    console.error(`🎯 Feature ${featureIndex} in layer "${group.layer.get('title') || 'unnamed'}" failed, skipping:`, featureError);
+                }
+                index++;
+                featureIndex++;
+                processed++;
+                if (featureIndex >= group.features.length) {
+                    groupIndex++;
+                    featureIndex = 0;
                 }
             }
             self._progressDone = index;
@@ -1698,12 +1774,12 @@ window.modelRenderer = {
 
     /** Start a sweep over one layer (kept as the module's entry point). */
     addModelsFromLayer: function(layer, cesiumScene) {
-        const tasks = this.collectPlaceTasks([layer], cesiumScene, []);
-        this._progressTotal = tasks.length;
+        const groups = this.collectPlaceGroups([layer], cesiumScene, []);
+        this._progressTotal = groups.reduce(function(count, group) { return count + group.features.length; }, 0);
         if (window.loadingProgress && window.loadingProgress.total) {
-            window.loadingProgress.total(tasks.length);
+            window.loadingProgress.total(this._progressTotal);
         }
-        this.runPlaceSlices(tasks);
+        this.runPlaceSlices(groups);
     },
 
     /**
@@ -1853,6 +1929,7 @@ window.modelRenderer = {
         const underBridge = bridgeAbove
             ? getUnderBridgeSurface(feature, bridgeAbove, lonLat)
             : null;
+        if (isFlatGroundMode() && underBridge) return;
 
         let terrainElevation;
         if (isTunnel) {
@@ -2058,6 +2135,7 @@ window.modelRenderer = {
                 let surfaceHeightOffset = 0;
                 let underBridgeKey = null;
                 let underBridgeFeature = null;
+                let bridgeAbove = null;
                 if (isTunnelFeature(feature)) {
                     flatSurfaceHeight = getTunnelElevation();
                 } else if (isBridgeFeature(feature) && centre) {
@@ -2067,7 +2145,7 @@ window.modelRenderer = {
                     flatSurfaceHeight = getBridgeReferenceHeight(feature, centre);
                     flatSurfacePosition = feature.get('bridgeRefPosition');
                 } else if (centre) {
-                    const bridgeAbove = findBridgeAboveFeature(feature, centre);
+                    bridgeAbove = findBridgeAboveFeature(feature, centre);
                     if (bridgeAbove) {
                         underBridgeFeature = findUnderBridgeWayFeature(feature, bridgeAbove, centre) || feature;
                         const underBridge = getUnderBridgeSurface(underBridgeFeature, bridgeAbove, centre);
@@ -2077,6 +2155,7 @@ window.modelRenderer = {
                         underBridgeKey = underBridge.bridgeKey;
                     }
                 }
+                if (isFlatGroundMode() && underBridgeKey !== null) return;
 
                 // Area repetitions store polygon coordinates and their bearing
                 // in WGS84 when generated. Preserve that bearing instead of
@@ -2204,6 +2283,7 @@ window.modelRenderer = {
         const underBridge = bridgeAbove
             ? getUnderBridgeSurface(feature, bridgeAbove, repLonLat)
             : null;
+        if (isFlatGroundMode() && underBridge) return;
 
         // Create model matrix for repetition model - GROUND LEVEL (like footway)
         let repHeightOffset = feature.get(`fence_repetition_${repIndex}_heightOffset`) ||
@@ -2299,6 +2379,7 @@ window.modelRenderer = {
             scale: repModel.scale || 1.0,
             show: true
         }));
+        this.trackModelReadiness(repCesiumModel, repModel.uri);
         
         // Keep the sampled height explicit. Ground-clamping can snap an
         // under-bridge way onto the bridge surface.
@@ -2373,6 +2454,7 @@ window.modelRenderer = {
         const underBridge = bridgeAbove
             ? getUnderBridgeSurface(underBridgeFeature, bridgeAbove, areaCentre)
             : null;
+        if (isFlatGroundMode() && underBridge) return;
         const underBridgeHeightOffset = underBridge
             ? getFeatureHeightOffset(underBridgeFeature)
             : 0;
@@ -3620,6 +3702,8 @@ window.modelRenderer = {
             this._sceneRef = cesiumScene;
             this._session3dId = (this._session3dId || 0) + 1;
             this.resetLive();
+            this._pendingAssets = 0;
+            this._assetReadinessSeen = new WeakSet();
             this.modelPool.clear();
             // The camera listener is bound to the OLD scene's camera. Unhook so
             // hookCameraStreaming() re-binds to the new one; otherwise streaming
@@ -3655,15 +3739,19 @@ window.modelRenderer = {
                 if (this._placing) { this._pendingSweep = true; return; }
 
                 const layers = window.map.getLayers().getArray();
-                const tasks = this.collectPlaceTasks(layers, cesiumScene, []);
+                const groups = this.collectPlaceGroups(layers, cesiumScene, []);
+                const featureTotal = groups.reduce(function(count, group) { return count + group.features.length; }, 0);
                 // Tell the panel the real total BEFORE any work starts, so the
                 // percentage it shows is a percentage of something.
-                this._progressTotal = tasks.length;
-                if (window.loadingProgress && window.loadingProgress.total) {
-                    window.loadingProgress.total(tasks.length);
+                this._progressTotal = featureTotal;
+                if (window.loadingProgress && window.loadingProgress.phase) {
+                    window.loadingProgress.phase('Placing 3D models');
                 }
-                this.runPlaceSlices(tasks);
-                if (debugConfig.enabled) console.log('🎯 Layer processing started (' + tasks.length + ' features)');
+                if (window.loadingProgress && window.loadingProgress.total) {
+                    window.loadingProgress.total(featureTotal);
+                }
+                this.runPlaceSlices(groups);
+                if (debugConfig.enabled) console.log('🎯 Layer processing started (' + featureTotal + ' features)');
             } catch (error) {
                 console.error('🎯 Model renderer error:', error);
             }
@@ -3676,6 +3764,7 @@ window.modelRenderer = {
     // Keeps the original rotation/tilt baked in the matrix and only updates the
     // translation height, so nothing flips when the elevation refines.
     repositionModelsOnDem: function() {
+        if (isFlatGroundMode()) return;
         // No DEM source at all: sampleGroundElevation would answer 0 and we
         // would actively drag every model down to sea level. Do nothing.
         const hasDem = (window.terrainManager && window.terrainManager.getElevation) ||
@@ -3809,6 +3898,22 @@ window.modelRenderer = {
     },
 };
 
+window.addEventListener('mapterhornFlatGroundChanged', function () {
+    const renderer = window.modelRenderer;
+    if (!renderer || !renderer.loadedModels || !window.is3d ||
+        !window.ol3d || !window.ol3d.getEnabled || !window.ol3d.getEnabled()) return;
+
+    const scene = window.ol3d.getCesiumScene && window.ol3d.getCesiumScene();
+    if (!scene) return;
+
+    // Model matrices contain absolute DEM heights; changing terrain providers
+    // alone does not move them. Recreate tracked primitives against the new datum.
+    Array.from(renderer.loadedModels.keys()).forEach(function (key) {
+        renderer.unloadEntry(key, scene);
+    });
+    renderer.addAllModels();
+});
+
 if (typeof debugConfig !== 'undefined' && debugConfig.enabled) {
     console.log('🎯 model_renderer.js loaded');
 }
@@ -3837,6 +3942,10 @@ window.addEventListener('tagOverlayLoaded', function () {
 window.addEventListener('ol3dDestroyed', function () {
     if (window.modelRenderer) {
         window.modelRenderer.resetLive();
+        window.modelRenderer._session3dId = (window.modelRenderer._session3dId || 0) + 1;
+        window.modelRenderer._pendingAssets = 0;
+        window.modelRenderer._assetReadinessSeen = new WeakSet();
+        window.modelRenderer._publishAssetReadiness();
         window.modelRenderer.modelPool.clear();
         window.modelRenderer._placing = false;
         window.modelRenderer._pendingSweep = false;
@@ -3864,6 +3973,11 @@ window.addEventListener('ol3dDestroyed', function () {
 // decision to make in the file rather than by typo in an address bar.
 (function applyPrimitiveBudgetOverride() {
     if (typeof window === 'undefined' || !window.location) return;
+    const deviceMemory = Number(window.navigator && window.navigator.deviceMemory) || 4;
+    const deviceBudget = deviceMemory <= 2 ? 6000 : (deviceMemory <= 4 ? 14000 : (deviceMemory <= 8 ? 24000 : 30000));
+    memoryConfig.maxLivePrimitives = Math.min(memoryConfig.maxLivePrimitives, deviceBudget);
+    console.log('🎯 primitive budget set to ' + memoryConfig.maxLivePrimitives +
+        ' for a device reporting ' + deviceMemory + ' GB of memory');
     var match = /[?&]primitives=(\d+)/.exec(window.location.search || '');
     if (!match) return;
     var requested = parseInt(match[1], 10);

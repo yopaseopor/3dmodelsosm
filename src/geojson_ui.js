@@ -211,31 +211,52 @@ class GeoJSONUI {
         const bbox = `${south},${west},${north},${east}`;
         const query = `[out:xml][timeout:${timeoutSeconds}];way(${bbox})->.visibleWays;node(${bbox})->.visibleNodes;(.visibleWays;.visibleNodes;)->.visibleElements;.visibleElements out body geom;rel(bw.visibleWays)->.wayRelations;rel(bn.visibleNodes)->.nodeRelations;(.wayRelations;.nodeRelations;)->.visibleRelations;.visibleRelations out body;`;
         const xhr = new XMLHttpRequest();
+        const maxResponseBytes = this.getOverpassResponseLimit();
+        let responseTooLarge = false;
 
         if (this.downloadButton) {
             this.downloadButton.disabled = true;
         }
-        this.setDownloadStatus('Requesting the visible area from Overpass...');
+        this.setDownloadStatus('Requesting visible area from Overpass…');
 
         try {
             const xml = await new Promise((resolve, reject) => {
                 xhr.open('POST', config.overpassApi());
                 xhr.timeout = (timeoutSeconds + 15) * 1000;
                 xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded; charset=UTF-8');
+                xhr.overrideMimeType('text/xml; charset=utf-8');
+                xhr.onprogress = event => {
+                    if (event.loaded > maxResponseBytes) {
+                        responseTooLarge = true;
+                        xhr.abort();
+                        reject(new Error('Overpass response exceeded the ' +
+                            this.formatDownloadBytes(maxResponseBytes) + ' safety limit. Zoom in and retry.'));
+                        return;
+                    }
+                    const received = this.formatDownloadBytes(event.loaded);
+                    const expected = event.lengthComputable
+                        ? ' / ' + this.formatDownloadBytes(event.total)
+                        : '';
+                    this.setDownloadStatus('Downloading Overpass data: ' + received + expected + '…');
+                };
                 xhr.onload = () => {
                     if (xhr.status < 200 || xhr.status >= 300) {
                         reject(new Error(`Overpass returned HTTP ${xhr.status}.`));
                         return;
                     }
-                    resolve(xhr.responseText);
+                    resolve(xhr.responseXML || new DOMParser().parseFromString(xhr.responseText, 'text/xml'));
                 };
                 xhr.onerror = () => reject(new Error('Could not connect to the Overpass API.'));
                 xhr.ontimeout = () => reject(new Error(`Overpass request timed out after ${timeoutSeconds} seconds.`));
-                xhr.onabort = () => reject(new Error('Overpass request was cancelled.'));
+                xhr.onabort = () => reject(responseTooLarge
+                    ? new Error('Overpass response exceeded the ' + this.formatDownloadBytes(maxResponseBytes) +
+                        ' safety limit. Zoom in and retry.')
+                    : new Error('Overpass request was cancelled.'));
                 xhr.send(`data=${encodeURIComponent(query)}`);
             });
 
-            const xmlDocument = new DOMParser().parseFromString(xml, 'text/xml');
+            this.setDownloadStatus('Converting Overpass data to GeoJSON…');
+            const xmlDocument = xml;
             if (xmlDocument.getElementsByTagName('parsererror').length) {
                 throw new Error('Overpass returned invalid XML.');
             }
@@ -245,7 +266,7 @@ class GeoJSONUI {
             }
 
             const { geoJSON, featureCount, relationWarnings } = this.convertOSMXMLToGeoJSON(xmlDocument);
-            const blob = new Blob([JSON.stringify(geoJSON, null, 2)], {
+            const blob = new Blob([JSON.stringify(geoJSON)], {
                 type: 'application/geo+json'
             });
             const center = ol.proj.transform(view.getCenter(), view.getProjection(), 'EPSG:4326');
@@ -253,7 +274,7 @@ class GeoJSONUI {
             if (this.downloadObjectUrl) {
                 URL.revokeObjectURL(this.downloadObjectUrl);
             }
-            this.downloadFile = new File([blob], filename, { type: 'application/geo+json' });
+            this.downloadFile = blob;
             this.downloadObjectUrl = URL.createObjectURL(this.downloadFile);
             this.showDownloadActions(filename);
             const warningMessage = relationWarnings > 0
@@ -288,6 +309,21 @@ class GeoJSONUI {
             featureCount: geoJSON.features.length,
             relationWarnings
         };
+    }
+
+    getOverpassResponseLimit() {
+        const deviceMemory = Number(navigator.deviceMemory) || 4;
+        if (deviceMemory <= 2) return 16 * 1024 * 1024;
+        if (deviceMemory <= 4) return 32 * 1024 * 1024;
+        return 64 * 1024 * 1024;
+    }
+
+    formatDownloadBytes(bytes) {
+        if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+        const units = ['B', 'KB', 'MB', 'GB'];
+        const index = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
+        const value = bytes / Math.pow(1024, index);
+        return `${value.toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
     }
 
     setDownloadStatus(message) {

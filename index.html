@@ -20,7 +20,7 @@
 	<link rel="stylesheet" href="src/css/mobile.css" type="text/css"/>
 	<link rel="stylesheet" href="src/css/language-selector.css" type="text/css"/>
 	
-	<link rel="icon" href="favicon.svg" type="image/svg+xml"/>
+	<link rel="icon" href="favicon.ico" type="image"/>
 </head>
 <body>
 	<div class="flex-row">
@@ -60,7 +60,7 @@
 			<!-- GeoJSON Downloader Control -->
 			<div style="margin: 10px 0;">
 			  <button id="geojson-download-btn" type="button" style="width: 100%; padding: 8px; background: #673AB7; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">
-				⬇️ GeoJSON Downloader
+				⬇️ GeoJSON Downloader from Openstreetmap data
 			  </button>
 			  <small id="geojson-download-status" role="status" aria-live="polite" style="color: #ccc; display: block; margin-top: 5px; text-align: center;">Available from zoom 19</small>
 			  <div id="geojson-download-result" style="margin-top: 6px; text-align: center;"></div>
@@ -178,8 +178,8 @@
 	<script src="src/cesium_models.js"></script>
 	<script src="src/mapterhorn_terrain.js"></script>
 	<script src="src/debug_config.js"></script>
-	<!-- Pre-load panel (progress / ETA / bytes). Must be before model_renderer.js:
-	     the renderer reports into window.loadingProgress as it places models. -->
+	<!-- Progress/ETA/memory panel. It remains visible until the initial 3D,
+	     terrain, model-asset, and building work is actually ready. -->
 	<script src="src/loading_progress.js"></script>
 	<!-- Time-sliced scheduler. This is what keeps a large GeoJSON from freezing
 	     the tab: every bulk loop (the loader's per-feature pass, the overlay
@@ -193,10 +193,8 @@
 	     It replaces requestIdleCallback, which Firefox starves under Cesium
 	     (67.5s -> 3.9s on the 3854-feature Paris file when it was measured). -->
 	<script src="src/progressive.js"></script>
-	<!-- Background pre-charge: fetches and parses the big overlay GeoJSONs
-	     before you click them, so the click is instant. Optional - the app works
-	     without it - but precharge.take() is what lets the loader skip its own
-	     fetch when the data is already in hand. -->
+	<!-- Size- and memory-bounded background pre-charge; precharge.take() hands
+	     small parsed overlays to the loader and releases the cache reference. -->
 	<script src="src/precharge.js"></script>
 	<script src="src/model_renderer.js"></script>
 	<script src="src/model_repetition.js"></script>
@@ -206,6 +204,7 @@
 	<script src="src/indoor.js"></script>
 	<script src="src/geotiff_terrain.js"></script>
 	<script src="src/geotiff_ui.js"></script>
+	<!-- geojson_loader.js uses this worker for off-thread parsing and batches. -->
 	<script src="src/geojson_loader.js"></script>
 	<script src="src/geojson_ui.js"></script>
 	<script src="src/taginfo_api.js"></script>

@@ -14,8 +14,14 @@ const areaRepetitionDebugConfig = {
     logCoordinates: false
 };
 
-// Area model and texture configurations. Keep each area tag's asset and repeat
-// settings together here so geometry-specific model selection has one source.
+// Area model and texture configurations. Any setting can read a tag, e.g.
+// config.scale: { tag: 'height', default: 1 } or spacing: { tag: 'spacing', default: 1 }.
+// Keep each area tag's asset and repeat settings together here.
+//Implemented tag-driven configuration across all three modules. Use { tag, default } anywhere in a mapping or repetition setting; for example, height can drive scale:
+	//config: {
+    //scale: { tag: 'height', type: 'number', default: 1 },
+   // heightOffset: { tag: 'min_height', type: 'number', default: 0 }}
+	//The same syntax works for repetition settings, such as interval, spacing, and maxModels. Numeric tag values are converted to numbers; default is used if a tag is missing or invalid. Optional types include number, string, boolean, and json.
 const areaRepetitionConfigs = [
     {
         tags: ['natural=wood'],
@@ -261,6 +267,16 @@ const areaRepetitionConfigs = [
         description: 'Manhole drain - exact polygon coverage'
     },
 
+    // Amenity areas
+    {
+        tags: ['natural=grassland'],
+        model: 'i_gespa.jpg',
+        config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] },
+        spacing: 1, // 2 meter spacing for gardens
+        maxModels: 10000,
+        description: 'Garden'
+     },
+
     {
         tags: ['waterway=stream'],
         model: 'i_gespa.jpg',
@@ -344,12 +360,18 @@ function getAreaRepetitionConfig(tags) {
 
         if (allMatch) {
             if (areaRepetitionDebugConfig.enabled) console.log(`🏞️ Found matching area repetition config:`, config.description);
-            return config;
+            return resolveConfigForTags(config, tags);
         }
     }
 
     if (areaRepetitionDebugConfig.enabled) console.log(`🏞️ No specific area repetition config found, will use default`);
     return null;
+}
+
+function resolveConfigForTags(config, tags) {
+    return window.models && typeof window.models.resolveConfig === 'function'
+        ? window.models.resolveConfig(config, tags)
+        : config;
 }
 
 function getModelForTags(tags, wayCoordinates = null, nodeIndex = null, orientationContext = null) {
@@ -399,7 +421,10 @@ function generateAreaRepetitions(coordinates, tags, holes = []) {
     }
 
     // Get configuration for this area type
-    const config = getAreaRepetitionConfig(tags) || areaRepetitionConfigs.find(c => c.tags[0] === '*');
+    const config = getAreaRepetitionConfig(tags) || resolveConfigForTags(
+        areaRepetitionConfigs.find(c => c.tags[0] === '*'),
+        tags
+    );
     const modelFilename = config.model;
     const isImageFile = modelFilename && (modelFilename.toLowerCase().endsWith('.png') || modelFilename.toLowerCase().endsWith('.jpg') || modelFilename.toLowerCase().endsWith('.jpeg'));
 
@@ -470,7 +495,10 @@ function generateAreaRepetitions(coordinates, tags, holes = []) {
                 repetitions.push({
                     type: 'model_instance',
                     position: [lon, lat, 0], // lon, lat, height
-                    model: modelFilename
+                    model: modelFilename,
+                    scale: config.config.scale,
+                    heightOffset: config.config.heightOffset,
+                    rotation: config.config.rotation
                 });
                 modelCount++;
             }
@@ -581,7 +609,7 @@ function applyAreaRepetitions(feature, modelFilename, modelConfig, tags) {
                     // Store polygon texture data with rotation
                     const repModelOptions = {
                         uri: `/3dmodelsosm/src/models/${rep.model}`,
-                        scale: rep.scale || 1.0,
+                        scale: rep.scale === undefined ? 1.0 : rep.scale,
                         type: 'polygon_texture',
                         polygonCoordinates: rep.polygonCoordinates,
                         spacing: rep.spacing,
@@ -601,15 +629,17 @@ function applyAreaRepetitions(feature, modelFilename, modelConfig, tags) {
                     // Original model instance approach
                     const repModelOptions = {
                         uri: `/3dmodelsosm/src/models/${rep.model}`, // Use model from repetition config
-                        scale: 1.0, // Normal scale for visibility
+                        scale: rep.scale === undefined ? 1.0 : rep.scale,
                         heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
                         position: rep.position
                     };
 
                     feature.set(repetitionKey, repModelOptions);
                     feature.set(`${repetitionKey}_position`, rep.position);
-                    feature.set(`${repetitionKey}_heightOffset`, 0); // ON THE GROUND
-                    feature.set(`${repetitionKey}_rotation`, [0, 0, 0]);
+                    feature.set(`${repetitionKey}_heightOffset`,
+                        rep.heightOffset === undefined ? 0 : rep.heightOffset);
+                    feature.set(`${repetitionKey}_rotation`,
+                        rep.rotation || [0, 0, 0]);
 
                     if (areaRepetitionDebugConfig.enabled) console.log(`🏞️ Stored model instance repetition ${index + 1} configuration at [${rep.position[0].toFixed(6)}, ${rep.position[1].toFixed(6)}] with model: ${rep.model}`);
                 }

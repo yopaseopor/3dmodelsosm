@@ -19,6 +19,14 @@
 
     // Image assets use the same repeated-texture renderer as areas. Configure
     // their strip width per mapping with config.textureWidthMeters.
+	//Implemented tag-driven configuration across all three modules. Use { tag, default } anywhere in a mapping or repetition setting; for example, height can drive scale:
+	//config: {
+    //scale: { tag: 'height', type: 'number', default: 1 },
+   // heightOffset: { tag: 'min_height', type: 'number', default: 0 }}
+	//The same syntax works for repetition settings, such as interval, spacing, and maxModels. Numeric tag values are converted to numbers; default is used if a tag is missing or invalid. Optional types include number, string, boolean, and json.
+
+	
+	
     const lineModelMappings = [
         { tags: ['barrier=kerb'], model: 'w_barrier_kerb.gltf', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
         { tags: ['road_markings=edge_line', 'stroke=solid'], model: 'w_stroke_solid.glb', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
@@ -35,7 +43,8 @@
         { tags: ['fence_type=chain_link'], model: 'w_barrier_fence_wood.gltf', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
         { tags: ['fence_type=wire'], model: 'w_barrier_fence_wood.gltf', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
         { tags: ['fence_type=pole'], model: 'w_barrier_fence_wood.gltf', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
-        { tags: ['barrier=wall'], model: 'w_barrier_wall.glb', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
+        { tags: ['barrier=wall'], model: 'w_barrier_wall.glb', config: { scale: { tag: 'height', type: 'number', default: 1 }, heightOffset: 0.0, rotation: [0, 0, 0] } },
+		{ tags: ['barrier=retaining_wall'], model: 'w_barrier_wall.glb', config: { scale: { tag: 'height', type: 'number', default: 1 }, heightOffset: 0.0, rotation: [0, 0, 0] } },
         { tags: ['highway=cycleway'], model: 'w_highway_cycleway.glb', config: { scale: 4.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
         { tags: ['highway=footway'], model: 'w_highway_footway.glb', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, -Math.PI / 4, 0] } },
         { tags: ['footway=sidewalk'], model: 'w_highway_footway.glb', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, -Math.PI / 4, 0] } },
@@ -50,9 +59,11 @@
         { tags: ['public_transport=platform'], model: 'w_public_transport_platform.glb', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
         { tags: ['barrier=guard_rail', 'bridge=yes'], model: 'w_barrier_guard_rail_bridge.glb', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
         { tags: ['barrier=guard_rail'], model: 'w_barrier_guard_rail.glb', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
-        { tags: ['waterway=drain'], model: 'w_waterway_drain_intermittent.glb', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }
+        { tags: ['waterway=drain'], model: 'w_waterway_drain_intermittent.glb', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
+		{ tags: ['waterway=stream'], model: 'w_waterway_stream.gltf', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }
     ];
 
+    // Any setting can read a tag value, e.g. scale: { tag: 'height', default: 1 }.
     // Add a tag group here to configure new line types; its keys are detected automatically.
     const lineRepetitionConfig = {
         default: { interval: 0.5, sideOffset: 0, maxModels: 500 },
@@ -200,10 +211,26 @@
             const family = lineRepetitionConfig[key];
             if (!family || properties[key] === undefined) continue;
             const specific = family[properties[key]];
-            if (specific) return { ...lineRepetitionConfig.default, ...family.default, ...specific };
-            if (family.default) return { ...lineRepetitionConfig.default, ...family.default };
+            if (specific) {
+                return resolveConfigForTags(
+                    { ...lineRepetitionConfig.default, ...family.default, ...specific },
+                    properties
+                );
+            }
+            if (family.default) {
+                return resolveConfigForTags(
+                    { ...lineRepetitionConfig.default, ...family.default },
+                    properties
+                );
+            }
         }
-        return { ...lineRepetitionConfig.default };
+        return resolveConfigForTags({ ...lineRepetitionConfig.default }, properties);
+    }
+
+    function resolveConfigForTags(config, tags) {
+        return window.models && typeof window.models.resolveConfig === 'function'
+            ? window.models.resolveConfig(config, tags)
+            : config;
     }
 
     function getModelForTags(tags) {
@@ -212,12 +239,17 @@
             : null;
         if (!mapping) return null;
 
+        const resolvedMapping = resolveConfigForTags(mapping, tags);
         return {
-            ...mapping,
+            ...resolvedMapping,
             geometryType: 'line',
             config: window.models && window.models.adjustConfigForDirection
-                ? window.models.adjustConfigForDirection(mapping.config, tags, null)
-                : mapping.config
+                ? window.models.adjustConfigForDirection(
+                    resolvedMapping.config,
+                    tags,
+                    null
+                )
+                : resolvedMapping.config
         };
     }
 

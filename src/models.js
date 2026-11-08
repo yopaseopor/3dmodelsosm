@@ -1,8 +1,14 @@
 /**
  * Point-model configuration and shared tag lookup for geometry catalogs.
+ * Any config value can reference a tag, e.g. scale: { tag: 'height', default: 1 }.
  */
 
 // Point models are the only non-repeated models configured here.
+//Implemented tag-driven configuration across all three modules. Use { tag, default } anywhere in a mapping or repetition setting; for example, height can drive scale:
+	//config: {
+    //scale: { tag: 'height', type: 'number', default: 1 },
+   // heightOffset: { tag: 'min_height', type: 'number', default: 0 }}
+	//The same syntax works for repetition settings, such as interval, spacing, and maxModels. Numeric tag values are converted to numbers; default is used if a tag is missing or invalid. Optional types include number, string, boolean, and json.
 const nodeModelMappings = [
     { tags: ['amenity=bench'], model: 'w_amenity_bench.gltf', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Bicycle parking model for amenity=bicycle_parking
     { tags: ['amenity=bicycle_parking'], model: 'w_amenity_bicycle_parking.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Bicycle parking model for amenity=bicycle_parking
@@ -148,7 +154,13 @@ function resolveBearing(tags, wayCoordinates, nodeIndex, orientationContext) {
  * @returns {object} Adjusted config
  */
 function adjustConfigForDirection(config, tags, bearing) {
-    const adjustedConfig = JSON.parse(JSON.stringify(config));
+    const resolvedConfig = resolveConfig(config, tags);
+    const adjustedConfig = {
+        ...resolvedConfig,
+        rotation: Array.isArray(resolvedConfig.rotation)
+            ? resolvedConfig.rotation.slice()
+            : [0, 0, 0]
+    };
     // Use bearing from parameter, or from parent way, or default to 0
     const baseBearing = bearing !== null ? bearing : 
                        (tags._parentWayBearing !== undefined ? tags._parentWayBearing : 0);
@@ -158,7 +170,7 @@ function adjustConfigForDirection(config, tags, bearing) {
     // which way the model faces (forward may be +X, -Z, +Y...), so a model can
     // come out 90 or 180 degrees out. Set rotation: [0, Math.PI/2, 0] on that
     // mapping to correct it without touching any orientation code.
-    const offset = (Array.isArray(config.rotation) ? config.rotation[1] : 0) || 0;
+    const offset = adjustedConfig.rotation[1] || 0;
     adjustedConfig.rotation[1] = -baseBearing + offset;
     
     // Check for orientation tag (degrees) first, then direction tag
@@ -208,6 +220,87 @@ function adjustConfigForDirection(config, tags, bearing) {
             break;
     }
     return adjustedConfig;
+}
+
+/**
+ * Resolve tag references anywhere in a configuration object.
+ *
+ * Use { tag: 'height', default: 1 } for a numeric value from an OSM tag.
+ * The default is used when the tag is absent or cannot be converted.
+ * Optional types are 'number', 'string', 'boolean', and 'json'.
+ */
+function resolveConfig(config, tags) {
+    function resolveValue(value) {
+        if (Array.isArray(value)) {
+            return value.map(resolveValue);
+        }
+        if (!value || typeof value !== 'object') {
+            return value;
+        }
+
+        const keys = Object.keys(value);
+        const isTagReference = typeof value.tag === 'string' &&
+            keys.every(key => ['tag', 'default', 'type'].includes(key));
+        if (isTagReference) {
+            const hasDefault = Object.prototype.hasOwnProperty.call(value, 'default');
+            const rawValue = tags && Object.prototype.hasOwnProperty.call(tags, value.tag)
+                ? tags[value.tag]
+                : undefined;
+            if (rawValue === undefined || rawValue === null || rawValue === '') {
+                return hasDefault ? resolveValue(value.default) : undefined;
+            }
+
+            let resolvedValue = rawValue;
+            switch (value.type) {
+                case 'number': {
+                    const number = typeof rawValue === 'number'
+                        ? rawValue
+                        : Number.parseFloat(String(rawValue).trim());
+                    resolvedValue = Number.isFinite(number) ? number : undefined;
+                    break;
+                }
+                case 'string':
+                    resolvedValue = String(rawValue);
+                    break;
+                case 'boolean': {
+                    const normalized = String(rawValue).trim().toLowerCase();
+                    if (['true', 'yes', '1'].includes(normalized)) resolvedValue = true;
+                    else if (['false', 'no', '0'].includes(normalized)) resolvedValue = false;
+                    else resolvedValue = undefined;
+                    break;
+                }
+                case 'json':
+                    try {
+                        resolvedValue = JSON.parse(String(rawValue));
+                    } catch (error) {
+                        console.warn(`Could not parse tag "${value.tag}" as JSON:`, error);
+                        resolvedValue = undefined;
+                    }
+                    break;
+                default: {
+                    const number = typeof rawValue === 'number'
+                        ? rawValue
+                        : Number(String(rawValue).trim());
+                    resolvedValue = Number.isFinite(number) ? number : rawValue;
+                    break;
+                }
+            }
+            return resolvedValue === undefined && hasDefault
+                ? resolveValue(value.default)
+                : resolvedValue;
+        }
+
+        const resolvedObject = {};
+        for (const [key, nestedValue] of Object.entries(value)) {
+            const resolvedNestedValue = resolveValue(nestedValue);
+            if (resolvedNestedValue !== undefined) {
+                resolvedObject[key] = resolvedNestedValue;
+            }
+        }
+        return resolvedObject;
+    }
+
+    return resolveValue(config);
 }
 
 /**
@@ -319,10 +412,11 @@ function getModelForTags(tags, wayCoordinates = null, nodeIndex = null, geometry
     const mapping = findTagMapping(nodeModelMappings, tags);
     if (!mapping) return null;
     const bearing = resolveBearing(tags, wayCoordinates, nodeIndex, orientationContext);
+    const resolvedMapping = resolveConfig(mapping, tags);
     return {
-        ...mapping,
+        ...resolvedMapping,
         geometryType: 'point',
-        config: adjustConfigForDirection(mapping.config, tags, bearing)
+        config: adjustConfigForDirection(resolvedMapping.config, tags, bearing)
     };
 }
 
@@ -334,6 +428,7 @@ window.models = {
     invalidateMappingIndex,
     getMappingIndexStats,
     getConfiguredModels,
+    resolveConfig,
     adjustConfigForDirection,
     resolveBearing,
     calculateBearing,

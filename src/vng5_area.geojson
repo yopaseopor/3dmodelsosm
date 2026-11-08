@@ -9301,6 +9301,25 @@
         {
             "type": "Feature",
             "properties": {
+                "waterway": "stream"
+            },
+            "geometry": {
+                "type": "LineString",
+                "coordinates": [
+                    [
+                        1.71484660636,
+                        41.21986902277
+                    ],
+                    [
+                        1.71501470037,
+                        41.21965009153
+                    ]
+                ]
+            }
+        },
+        {
+            "type": "Feature",
+            "properties": {
                 "building:part": "yes",
                 "building:levels": "10"
             },

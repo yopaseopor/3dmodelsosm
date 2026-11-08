@@ -37,6 +37,7 @@ Portal Map is a comprehensive web-based OpenStreetMap viewer featuring advanced 
 - **Satellite & Aerial Imagery**: Esri Satellite, IGN PNOA (Spain), ICGC (Catalonia)
 - **Vector tile rendering** with custom styles for enhanced visualization
 - **3D Terrain View**: Full Cesium.js integration with terrain provider and dynamic base layer switching
+- **Flat-ground mode**: Disable DEM from the 3D navigation controls; ground-level features are flattened and bridge ways take priority at crossings
 - **Interactive controls**: Zoom, rotation, coordinates display, scale bar, geolocation
 
 ### 🔍 Advanced Search & Query System

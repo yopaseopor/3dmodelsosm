@@ -11,13 +11,12 @@
 //
 // "Precharge" is just moving those steps EARLIER. The moment the overlay list
 // exists we ask the server how big each file is (a HEAD request, no body), and
-// anything above the size threshold is fetched and parsed in the background,
-// one file at a time, while the user is still choosing. The bytes go into the
-// HTTP cache as a side effect, and the parsed object is kept in memory.
+// anything above the size threshold is fetched one file at a time while the
+// user is still choosing. The response is retained as a size-bounded Blob;
+// parsing waits until selection and runs in a Worker.
 //
-// When the overlay is finally switched on, `take(url)` hands the loader the
-// object it already has: no download, no parse, and the loader goes straight
-// to the part the user actually cares about — putting features on the map.
+// When the overlay is finally switched on, `take(url)` hands the loader that
+// Blob, avoiding another download without retaining a large parsed object graph.
 //
 // It is deliberately quiet:
 //   * small files are never precharged (below the threshold, fetching on
@@ -30,15 +29,22 @@
 // window.precharge is the public surface:
 //   warm(url, label)          probe one file and charge it if it is big
 //   warmAll(overlays)         probe every overlay that has a .geojson
-//   take(url)                 the parsed object, or null if not ready
+//   take(url)                 the cached GeoJSON Blob, or null if not ready
 //   info(url)                 {state, bytes, features, mix} for a file
 //   forget(url)               drop cached data (frees the memory)
 // ---------------------------------------------------------------------------
 (function () {
     'use strict';
 
+    var deviceMemory = Number(window.navigator && window.navigator.deviceMemory) || 4;
     /** Below this, charging in advance costs more than it saves. */
     var BIG_BYTES = 400 * 1024;
+    /** Never parse a background file whose decoded payload exceeds this size. */
+    var MAX_PRECHARGE_BYTES = deviceMemory <= 2 ? 6 * 1024 * 1024 :
+        (deviceMemory <= 4 ? 12 * 1024 * 1024 : 20 * 1024 * 1024);
+    /** Bound the total retained response bodies in memory. */
+    var MAX_CACHED_HEAP_BYTES = deviceMemory <= 2 ? 20 * 1024 * 1024 :
+        (deviceMemory <= 4 ? 48 * 1024 * 1024 : 96 * 1024 * 1024);
     /** One file at a time, and a pause between files: politeness, not speed. */
     var CHARGE_GAP_MS = 250;
     /** How long to wait between the size probes of the overlay list. */
@@ -50,8 +56,7 @@
     var cache = Object.create(null);     // url -> entry
     var charging = false;
     var pendingQueue = [];
-    var panelState = { collapsed: false };
-    var hideTimer = null;
+    var panelState = { collapsed: false, dismissed: false };
 
     function debugEnabled() {
         // window.globalDebugConfig, NOT window.debugConfig: nothing ever
@@ -111,21 +116,54 @@
                     'style="pointer-events:auto;cursor:pointer;width:22px;height:22px;line-height:1;' +
                     'border:1px solid rgba(255,255,255,.28);border-radius:5px;background:transparent;' +
                     'color:#eef2f6;font:13px/1 system-ui,sans-serif;padding:0">−</button>' +
+                '<button class="pc-close" type="button" aria-label="Hide precharge statistics" title="Hide precharge statistics" ' +
+                    'style="pointer-events:auto;cursor:pointer;width:22px;height:22px;line-height:1;' +
+                    'border:1px solid rgba(255,255,255,.28);border-radius:5px;background:transparent;' +
+                    'color:#eef2f6;font:16px/1 system-ui,sans-serif;padding:0">×</button>' +
             '</div>' +
             '<div class="pc-body">' +
                 '<div class="pc-list"></div>' +
             '</div>';
 
         document.body.appendChild(host);
+        var reopen = document.createElement('button');
+        reopen.type = 'button';
+        reopen.textContent = 'GeoJSON preload stats';
+        reopen.setAttribute('aria-label', 'Show precharge statistics');
+        reopen.style.cssText = [
+            'position:fixed',
+            'bottom:16px',
+            'left:16px',
+            'z-index:10000',
+            'display:none',
+            'padding:7px 10px',
+            'border:1px solid rgba(255,255,255,.28)',
+            'border-radius:8px',
+            'background:rgba(18,22,28,0.92)',
+            'color:#eef2f6',
+            'font:12px system-ui,-apple-system,Segoe UI,Roboto,sans-serif',
+            'box-shadow:0 6px 24px rgba(0,0,0,0.45)',
+            'cursor:pointer'
+        ].join(';');
+        document.body.appendChild(reopen);
 
         var toggle = host.querySelector('.pc-toggle');
         toggle.addEventListener('click', function () {
             writeCollapsed(!panelState.collapsed);
             render();
         });
+        host.querySelector('.pc-close').addEventListener('click', function () {
+            panelState.dismissed = true;
+            render();
+        });
+        reopen.addEventListener('click', function () {
+            panelState.dismissed = false;
+            render();
+        });
 
         el = {
             host: host,
+            reopen: reopen,
             toggle: toggle,
             title: host.querySelector('.pc-title'),
             body: host.querySelector('.pc-body'),
@@ -145,6 +183,13 @@
         return (i === 0 ? value.toFixed(0) : value.toFixed(1)) + ' ' + units[i];
     }
 
+    function formatDuration(ms) {
+        var seconds = Math.max(0, Math.round(ms / 1000));
+        var minutes = Math.floor(seconds / 60);
+        seconds %= 60;
+        return minutes + ':' + (seconds < 10 ? '0' : '') + seconds;
+    }
+
     function nameOf(url) {
         var clean = String(url).split('?')[0].split('/');
         return clean[clean.length - 1] || String(url);
@@ -157,7 +202,8 @@
             var entry = cache[url];
             if (entry.state === 'probing' || entry.state === 'queued' ||
                 entry.state === 'loading' || entry.state === 'ready' ||
-                entry.state === 'taken' || entry.state === 'failed') {
+                entry.state === 'taken' || entry.state === 'failed' ||
+                entry.state === 'skipped') {
                 out.push(entry);
             }
         }
@@ -165,19 +211,11 @@
         return out.slice(0, 4);
     }
 
-    function visibleBusy() {
-        var url;
-        for (url in cache) {
-            var state = cache[url].state;
-            if (state === 'probing' || state === 'queued' || state === 'loading') return true;
-        }
-        return false;
-    }
-
     function render() {
         if (!el) return;
         var entries = visibleEntries();
-        var ready = 0, busy = 0, loadedBytes = 0;
+        var ready = 0, busy = 0, loadedBytes = 0, estimatedHeapBytes = 0;
+        for (var cacheUrl in cache) estimatedHeapBytes += cache[cacheUrl].cacheCost || 0;
         for (var i = 0; i < entries.length; i++) {
             var entry = entries[i];
             loadedBytes += entry.received || 0;
@@ -188,26 +226,20 @@
             else if (entry.state !== 'failed') busy++;
         }
 
-        // Nothing in flight: the panel has said everything it has to say, so
-        // fade it out on its own rather than sitting in the corner of the map
-        // for the rest of the session. It comes straight back if another file
-        // starts being charged.
-        if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
-        if (busy === 0 && entries.length) {
-            hideTimer = setTimeout(function () {
-                if (visibleBusy()) return;
-                el.host.style.opacity = '0';
-                setTimeout(function () { if (!visibleBusy()) el.host.style.display = 'none'; }, 400);
-            }, 6000);
-        }
-
         // Nothing left to say: get out of the way entirely.
         if (!entries.length) {
             el.host.style.opacity = '0';
-            setTimeout(function () { if (!visibleEntries().length) el.host.style.display = 'none'; }, 400);
+            el.host.style.display = 'none';
+            el.reopen.style.display = 'none';
+            return;
+        }
+        if (panelState.dismissed) {
+            el.host.style.display = 'none';
+            el.reopen.style.display = 'block';
             return;
         }
         el.host.style.display = 'block';
+        el.reopen.style.display = 'none';
         el.host.style.opacity = '1';
         el.body.style.display = panelState.collapsed ? 'none' : 'block';
         el.toggle.textContent = panelState.collapsed ? '+' : '−';
@@ -227,15 +259,28 @@
                 bits.push(formatBytes(e.bytes));
                 if (e.features) bits.push(e.features.toLocaleString() + ' features');
                 if (e.mix) bits.push(e.mix);
+                if (e.elapsedMs) bits.push('ready in ' + formatDuration(e.elapsedMs));
+                if (!e.features) bits.push('features parsed on selection');
                 bits.push('ready');
             } else if (e.state === 'failed') {
                 bits.push('could not be precharged');
+            } else if (e.state === 'skipped') {
+                bits.push('too large to cache in memory; will load when selected');
             } else if (e.state === 'probing') {
                 bits.push('checking size…');
             } else if (e.state === 'queued') {
                 bits.push('queued');
             } else {
-                bits.push(formatBytes(e.received || 0) + (e.bytes ? ' / ' + formatBytes(e.bytes) : '') + ' downloading');
+                var downloading = formatBytes(e.received || 0) +
+                    (e.bytes ? ' / ' + formatBytes(e.bytes) : ' · size unknown') + ' downloading';
+                if (e.rate > 0) {
+                    if (e.bytes > e.received) {
+                        downloading += ' · about ' + formatDuration((e.bytes - e.received) / e.rate * 1000) + ' left';
+                    } else {
+                        downloading += ' · ' + formatBytes(e.rate) + '/s';
+                    }
+                }
+                bits.push(downloading);
             }
             html += '<div style="margin-top:4px">' +
                 '<div style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' +
@@ -245,7 +290,8 @@
         }
         if (loadedBytes > 0) {
             html += '<div style="margin-top:6px;font-size:12px;opacity:.72">' +
-                formatBytes(loadedBytes) + ' downloaded in the background</div>';
+                formatBytes(loadedBytes) + ' downloaded · about ' + formatBytes(estimatedHeapBytes) +
+                ' cached in memory</div>';
         }
         el.list.innerHTML = html;
     }
@@ -261,8 +307,9 @@
     function entryFor(url) {
         if (!cache[url]) {
             cache[url] = {
-                url: url, label: '', state: 'idle', bytes: 0, received: 0,
-                features: 0, mix: null, data: null, error: null
+                url: url, label: '', state: 'idle', bytes: 0, received: 0, rate: 0,
+                features: 0, mix: null, data: null, error: null,
+                cacheCost: 0, lastUsed: 0, startedAt: 0, elapsedMs: 0
             };
         }
         return cache[url];
@@ -273,22 +320,36 @@
      * instead of an indeterminate spinner. Falls back to a plain text() read
      * where streams are not available.
      */
+    function sizeLimitError() {
+        var error = new Error('Precharge size limit exceeded');
+        error.prechargeSizeLimit = true;
+        return error;
+    }
+
     function readWithProgress(response, onBytes) {
         if (!response.body || typeof response.body.getReader !== 'function') {
-            return response.text().then(function (text) { onBytes(text.length); return text; });
+            return response.blob().then(function (blob) {
+                if (blob.size > MAX_PRECHARGE_BYTES) throw sizeLimitError();
+                onBytes(blob.size);
+                return blob;
+            });
         }
         var reader = response.body.getReader();
-        var decoder = new TextDecoder();
         var chunks = [];
         var received = 0;
         function pump() {
             return reader.read().then(function (result) {
                 if (result.done) {
                     onBytes(received);
-                    return chunks.join('');
+                    var blob = new Blob(chunks, { type: 'application/geo+json' });
+                    chunks.length = 0;
+                    return blob;
                 }
                 received += result.value.byteLength;
-                chunks.push(decoder.decode(result.value, { stream: true }));
+                if (received > MAX_PRECHARGE_BYTES) {
+                    return reader.cancel().then(function () { throw sizeLimitError(); }, function () { throw sizeLimitError(); });
+                }
+                chunks.push(result.value);
                 onBytes(received);
                 return pump();
             });
@@ -296,36 +357,23 @@
         return pump();
     }
 
-    /** "2039 points, 1565 lines, 250 areas" — a quick shape of the file. */
-    function geometryMix(data) {
-        var features = (data && data.features) || [];
-        var counts = Object.create(null);
-        var i;
-        for (i = 0; i < features.length; i++) {
-            var type = features[i] && features[i].geometry && features[i].geometry.type;
-            if (type) counts[type] = (counts[type] || 0) + 1;
-        }
-        var parts = [];
-        if (counts.Point) parts.push(counts.Point.toLocaleString() + ' points');
-        if (counts.MultiPoint) parts.push(counts.MultiPoint.toLocaleString() + ' multi-points');
-        if (counts.LineString) parts.push(counts.LineString.toLocaleString() + ' lines');
-        if (counts.MultiLineString) parts.push(counts.MultiLineString.toLocaleString() + ' multi-lines');
-        var areas = (counts.Polygon || 0) + (counts.MultiPolygon || 0);
-        if (areas) parts.push(areas.toLocaleString() + ' areas');
-        return parts.join(', ');
-    }
-
     function evictOldCaches() {
         var ready = [];
+        var retainedBytes = 0;
         var url;
         for (url in cache) {
-            if (cache[url].state === 'ready' || cache[url].state === 'taken') ready.push(url);
+            if ((cache[url].state === 'ready' || cache[url].state === 'taken') && cache[url].data) {
+                ready.push(url);
+                retainedBytes += cache[url].cacheCost || 0;
+            }
         }
-        // Smallest first: the big ones are exactly the ones worth keeping.
-        ready.sort(function (a, b) { return cache[a].bytes - cache[b].bytes; });
-        while (ready.length > MAX_CACHED) {
+        // Keep recently used entries and evict until both limits are satisfied.
+        ready.sort(function (a, b) { return cache[a].lastUsed - cache[b].lastUsed; });
+        while (ready.length > MAX_CACHED || retainedBytes > MAX_CACHED_HEAP_BYTES) {
             var victim = ready.shift();
-            cache[victim].data = null;      // release the parsed object
+            retainedBytes -= cache[victim].cacheCost || 0;
+            cache[victim].data = null;      // release the cached response body
+            cache[victim].cacheCost = 0;
             cache[victim].state = 'idle';
             debug('evicted', nameOf(victim));
         }
@@ -337,6 +385,8 @@
         var entry = pendingQueue.shift();
         entry.state = 'loading';
         entry.received = 0;
+        entry.rate = 0;
+        entry.startedAt = Date.now();
         show();
 
         fetch(entry.url)
@@ -345,18 +395,30 @@
                 // Content-Length is unknown for a chunked/compressed response;
                 // the streamed count then becomes the size.
                 entry.bytes = Number(response.headers.get('content-length')) || 0;
+                if (entry.bytes > MAX_PRECHARGE_BYTES) {
+                    if (response.body && response.body.cancel) {
+                        response.body.cancel().catch(function (error) {
+                            debug('could not cancel oversized preload', error && error.message);
+                        });
+                    }
+                    throw sizeLimitError();
+                }
                 return readWithProgress(response, function (received) {
                     entry.received = received;
+                    entry.rate = received * 1000 / Math.max(1, Date.now() - entry.startedAt);
                     render();
                 });
             })
-            .then(function (text) {
-                entry.bytes = entry.bytes || text.length;
-                entry.data = JSON.parse(text);
-                entry.features = (entry.data && entry.data.features) ? entry.data.features.length : 0;
-                entry.mix = geometryMix(entry.data);
+            .then(function (blob) {
+                entry.bytes = entry.received || entry.bytes || blob.size;
+                entry.data = blob;
+                entry.features = 0;
+                entry.mix = null;
                 entry.state = 'ready';
                 entry.received = entry.bytes;
+                entry.cacheCost = entry.bytes;
+                entry.lastUsed = Date.now();
+                entry.elapsedMs = Date.now() - entry.startedAt;
                 debug('ready', entry.label, formatBytes(entry.bytes), entry.features + ' features');
                 evictOldCaches();
                 render();
@@ -368,9 +430,9 @@
             .catch(function (error) {
                 // A failed precharge is not a failure of the app: the loader
                 // will simply fetch the file itself when it is needed.
-                entry.state = 'failed';
+                entry.state = error && error.prechargeSizeLimit ? 'skipped' : 'failed';
                 entry.error = error;
-                debug('failed', entry.label, error && error.message);
+                if (entry.state === 'failed') debug('failed', entry.label, error && error.message);
                 render();
             })
             .then(function () {
@@ -413,6 +475,11 @@
                         entry.state = 'small';
                         return entry;
                     }
+                    if (length > MAX_PRECHARGE_BYTES) {
+                        entry.state = 'skipped';
+                        render();
+                        return entry;
+                    }
                     // No length at all (compressed/chunked): charge it anyway,
                     // because "unknown" on a GeoJSON overlay means "possibly
                     // enormous", which is the case we are protecting against.
@@ -445,14 +512,16 @@
         },
 
         /**
-         * The parsed object for a URL that is already charged, or null.
-         * Handing it to the loader is what makes switching the overlay on
-         * instant: no request, no parse, straight to the map.
+         * The cached body for a URL that is already charged, or null. Parsing
+         * is left to the loader's Worker so the background cache stays compact.
          */
         take: function (url) {
             var entry = cache[url];
             if (!entry || entry.state !== 'ready' || !entry.data) return null;
             entry.state = 'taken';
+            entry.lastUsed = Date.now();
+            entry.data = null;
+            entry.cacheCost = 0;
             debug('taken', entry.label, entry.features + ' features');
             render();
             return entry.data;
@@ -463,11 +532,11 @@
             if (!entry) return null;
             return {
                 state: entry.state, bytes: entry.bytes, received: entry.received,
-                features: entry.features, mix: entry.mix
+                features: entry.features || null, mix: entry.mix
             };
         },
 
-        /** Drop a cached file (frees the parsed object). */
+        /** Drop a cached file and release its response body. */
         forget: function (url) {
             if (cache[url]) cache[url].data = null;
             delete cache[url];
