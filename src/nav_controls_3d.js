@@ -961,8 +961,7 @@
             <div class="nav3d-title">3D navigation</div>
             <div class="nav3d-pointer-settings">
                 <div class="nav3d-actions">
-                    <button id="nav3d-pointer-toggle" type="button" aria-label="Enable pointer" title="Enable pointer" aria-pressed="false">P</button>
-                    <button id="nav3d-recover-view" type="button" aria-label="Return to last safe view" title="Return to last safe view">↩</button>
+                    
                 </div>
                 <label class="nav3d-pointer-setting">
                     Mode
@@ -1006,28 +1005,20 @@
                         <option value="800">High sky</option>
                     </select>
                 </label>
-                <small class="nav3d-pointer-help">WASD / arrows move · drag to look · Q/E change fly height</small>
-            </div>
-            <div class="nav3d-grid">
-                <button data-act="rot-left"  title="Rotate left">&#8635;</button>
-                <button data-act="up"        title="Pan forward (hold to keep moving)">&#9650;</button>
-                <button data-act="rot-right" title="Rotate right">&#8634;</button>
-                <button data-act="left"      title="Pan left">&#9664;</button>
-                <button data-act="reset"     title="Reset: north up, 45&#176; tilt">&#8682;</button>
-                <button data-act="right"     title="Pan right">&#9654;</button>
-                <button data-act="tilt-up"   title="Tilt up (more horizontal)">&#8593;&#771;</button>
-                <button data-act="down"      title="Pan backward">&#9660;</button>
-                <button data-act="tilt-down" title="Tilt down (more top-down)">&#8595;&#771;</button>
-            </div>
-            <div class="nav3d-row2">
+				<button id="nav3d-pointer-toggle" type="button" aria-label="Enable pointer" title="Enable pointer" aria-pressed="false">P</button>
+                    <button id="nav3d-recover-view" type="button" aria-label="Return to last safe view" title="Return to last safe view">↩</button>
                 <button data-act="zoom-in"  title="Zoom in">&#10133;</button>
                 <button data-act="zoom-out" title="Zoom out">&#10134;</button>
-                <button data-act="roll-left" title="Roll left">&#8634;</button>
+
+                <small class="nav3d-pointer-help">WASD / arrows move · drag to look · Q/E change fly height</small>
+				
+				                <button data-act="roll-left" title="Roll left">&#8634;</button>
                 <button data-act="roll-right" title="Roll right">&#8635;</button>
                 <button id="nav3d-indoor-btn" title="Show / hide indoor view (Simple Indoor Tagging)">&#127963;</button>
-                <button id="nav3d-flat-ground-btn" type="button" aria-label="Disable DEM and flatten ground" aria-pressed="false" title="Disable DEM and flatten ground">DEM</button>
+                <button id="nav3d-flat-ground-btn" type="button" aria-label="Disable DEM and flatten ground" aria-pressed="false" title="Disable DEM and flatten ground">DEM OFF</button>
+				
             </div>
-            <label class="nav3d-level-select" style="display:none">
+			<label class="nav3d-level-select" style="display:none">
                 Level
                 <select id="nav3d-level-select" aria-label="Select indoor level"></select>
             </label>
@@ -1035,6 +1026,21 @@
                 Layer
                 <select id="nav3d-layer-select" aria-label="Select OSM layer"></select>
             </label>
+            <div class="nav3d-grid">
+			<button data-act="rot-right"  title="Rotate left">&#8624;</button>
+                <button data-act="up"        title="Pan forward (hold to keep moving)">&#9650;</button>
+                <button data-act="rot-left" title="Rotate right">&#8625;</button>
+				<button data-act="left"      title="Pan left">&#9664;</button>
+                <button data-act="reset"     title="Reset: north up, 45&#176; tilt">&#8682;</button>
+                <button data-act="right"     title="Pan right">&#9654;</button>
+                <button data-act="tilt-up"   title="Tilt up (more horizontal)">&#8593;&#771;</button>
+                <button data-act="down"      title="Pan backward">&#9660;</button>
+                <button data-act="tilt-down" title="Tilt down (more top-down)">&#8595;&#771;</button>
+            </div>
+            <div class="nav3d-row2">
+			
+            </div>
+            
         `;
         document.body.appendChild(panel);
         const pointerToggle = panel.querySelector('#nav3d-pointer-toggle');
