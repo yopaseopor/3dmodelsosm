@@ -16,10 +16,14 @@ const nodeModelMappings = [
     { tags: ['amenity=drinking_water'], model: 'w_amenity_drinking_water.gltf', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Bicycle parking model for amenity=bicycle_parking
     { tags: ['amenity=post_box'], model: 'w_amenity_post_box.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Street lamp model for highway=street_lamp
     { tags: ['amenity=waste_basket'], model: 'w_amenity_waste_basket.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Bicycle parking model for amenity=bicycle_parking 
-    { tags: ['highway=bus_stop'], model: 'w_highway_bus_stop.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Street lamp model for highway=street_lamp
+    { tags: ['emergency=defibrillator'], model: 'w_emergency_defibrillator.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  
+	{ tags: ['highway=bus_stop'], model: 'w_highway_bus_stop.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Street lamp model for highway=street_lamp
     { tags: ['highway=speed_camera'], model: 'w_highway_speed_camera.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Street lamp model for highway=street_lamp
-	{ tags: ['highway=street_lamp', 'lamp_mount=straight_mast'], model: 'w_highway_street_lamp_straight_mast.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, Math.PI / 2, 0] } },
-    { tags: ['highway=street_lamp'], model: 'w_highway_street_lamp.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, Math.PI / 2, 0] } },  // Street lamp model for highway=street_lamp
+	{ tags: ['highway=speed_camera'], model: 'w_highway_speed_camera.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Street lamp model for highway=street_lamp
+	{ tags: ['highway=steps'], model: 'w_highway_steps.glb', geometryType: 'line', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, Math.PI / 2, 0] } },
+{ tags: ['highway=street_lamp', 'lamp_mount=straight_mast'], model: 'w_highway_street_lamp_straight_mast.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, Math.PI / 2, 0] } },
+    
+    { tags: ['highway=street_lamp'], model: 'w_highway_street_lamp.glb', geometryType: 'point', config: { scale: 0.4, heightOffset: 0.0, rotation: [0, Math.PI / 2, 0] } },  // Street lamp model for highway=street_lamp
     { tags: ['highway=traffic_signals', 'traffic_signals=cyclist_crossing'], model: 'w_highway_traffic_signals_cycle.gltf', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Traffic signals model for cyclist crossing
     { tags: ['highway=traffic_signals', 'traffic_signals=pedestrian_crossing'], model: 'w_highway_traffic_signals_pedestrian.gltf', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Traffic signals model for pedestrian crossing
     { tags: ['highway=traffic_signals'], model: 'w_highway_traffic_signals.gltf', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Traffic signals model for highway=traffic_signals
@@ -30,11 +34,11 @@ const nodeModelMappings = [
     { tags: ['playground=swing'], model: 'w_playground_swing.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Could use forest model
 	{ tags: ['power=pole'], model: 'w_power_pole.gltf', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // slide
 	{ tags: ['power=tower'], model: 'w_power_tower.gltf', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // slide
-{ tags: ['recycling:plastic=yes'], model: 'w_recycling_plastic_yes.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Recycling container model for    
-{ tags: ['recycling:glass=yes'], model: 'w_recycling_glass_yes.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Recycling container model for    
-{ tags: ['recycling:organic=yes'], model: 'w_recycling_organic_yes.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Recycling container model for    
-{ tags: ['recycling:waste=yes'], model: 'w_recycling_waste_yes.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Recycling container model for    
-{ tags: ['recycling:paper=yes'], model: 'w_recycling_paper_yes.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Recycling container model for    
+{ tags: ['recycling:plastic=yes'], model: 'w_recycling_plastic_yes.glb', geometryType: 'point', config: { scale: 0.5, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Recycling container model for    
+{ tags: ['recycling:glass=yes'], model: 'w_recycling_glass_yes.glb', geometryType: 'point', config: { scale: 0.5, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Recycling container model for    
+{ tags: ['recycling:organic=yes'], model: 'w_recycling_organic_yes.glb', geometryType: 'point', config: { scale: 0.5, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Recycling container model for    
+{ tags: ['recycling:waste=yes'], model: 'w_recycling_waste_yes.glb', geometryType: 'point', config: { scale: 0.5, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Recycling container model for    
+{ tags: ['recycling:paper=yes'], model: 'w_recycling_paper_yes.glb', geometryType: 'point', config: { scale: 0.5, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Recycling container model for    
    { tags: ['vending=parking_tickets'], model: 'w_vending_parking_tickets.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // slide
     { tags: ['traffic_sign=ES:R2'], model: 'w_traffic_sign_ES_R2.gltf', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Could use forest model
     { tags: ['traffic_sign=ES:R101'], model: 'w_traffic_sign_ES_R101.gltf', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Could use forest model
@@ -300,7 +304,18 @@ function resolveConfig(config, tags) {
         return resolvedObject;
     }
 
-    return resolveValue(config);
+    // Preserve repetition-level scalar settings that live alongside `config`.
+    // These are non-recursive leaf values (numbers/strings/booleans) so they
+    // survive resolveValue unchanged, but we keep them here for clarity.
+    const LEAF_KEYS = ['textureRepeatCount', 'textureRotationOffsetDegrees',
+                       'render_order', 'spacing', 'maxModels'];
+    const out = resolveValue(config);
+    for (const key of LEAF_KEYS) {
+        if (config && Object.prototype.hasOwnProperty.call(config, key)) {
+            out[key] = config[key];
+        }
+    }
+    return out;
 }
 
 /**
@@ -420,6 +435,65 @@ function getModelForTags(tags, wayCoordinates = null, nodeIndex = null, geometry
     };
 }
 
+// Auto-fit GLB models to area cells using their real-world dimensions.
+const glbAABB = {};
+glbAABB['ES_CAT_BCN_casa_batllo.glb'] = {x:41.8753, y:37.9088, z:0.6475};
+glbAABB['ES_CAT_BCN_casa_mila.glb'] = {x:1.2899, y:1.9528, z:0.5382};
+glbAABB['ES_CAT_BCN_hotel_arts.glb'] = {x:6.7882, y:6.7882, z:15.4000};
+glbAABB['ES_CAT_BCN_sagrada_familia.glb'] = {x:6.7297, y:17.2477, z:27.9168};
+glbAABB['ES_CAT_BCN_torre_glories.glb'] = {x:35.8430, y:36.4033, z:140.4821};
+glbAABB['ES_CAT_BCN_torre_mapfre.glb'] = {x:2.8284, y:2.8284, z:1.5000};
+glbAABB['Untitled.glb'] = {x:0.2389, y:0.3793, z:2.8922};
+glbAABB['w_amenity_bicycle_parking.glb'] = {x:2.4740, y:0.6693, z:0.0043};
+glbAABB['w_amenity_charging_station.glb'] = {x:0.6000, y:1.8000, z:1.6000};
+glbAABB['w_amenity_post_box.glb'] = {x:0.8580, y:0.8555, z:1.4732};
+glbAABB['w_amenity_waste_basket.glb'] = {x:33.0065, y:25.6943, z:63.2074};
+glbAABB['w_barrier_fence_type_railing.glb'] = {x:0.0200, y:1.0000, z:0.0200};
+glbAABB['w_barrier_guard_rail.glb'] = {x:1.5674, y:4.9027, z:11.7831};
+glbAABB['w_barrier_guard_rail_bridge.glb'] = {x:0.1328, y:0.9110, z:1.8960};
+glbAABB['w_barrier_kerb.glb'] = {x:0.2634, y:0.1242, z:0.2920};
+glbAABB['w_barrier_wall.glb'] = {x:0.1740, y:1.0934, z:0.9883};
+glbAABB['w_barrier_wall_material_brick.glb'] = {x:0.1740, y:1.0934, z:0.9883};
+glbAABB['w_highway_bus_stop.glb'] = {x:0.2000, y:4.0000, z:0.2000};
+glbAABB['w_highway_bus_stop2.glb'] = {x:0.4723, y:0.0894, z:0.6427};
+glbAABB['w_highway_speed_camera.glb'] = {x:1.0000, y:2.0000, z:1.0000};
+glbAABB['w_highway_steps.glb'] = {x:1.2000, y:0.4000, z:0.4000};
+glbAABB['w_highway_steps_short.glb'] = {x:0.2000, y:0.4016, z:0.4000};
+glbAABB['w_highway_street_lamp.glb'] = {x:1.2748, y:1.2748, z:8.7869};
+glbAABB['w_highway_street_lamp_straight_mast.glb'] = {x:0.3398, y:0.1351, z:0.0563};
+glbAABB['w_highway_traffic_signals.glb'] = {x:3.4685, y:0.2567, z:8.9881};
+glbAABB['w_highway_traffic_signals_cycle.glb'] = {x:0.2389, y:0.3793, z:2.6556};
+glbAABB['w_highway_traffic_signals_exp.glb'] = {x:3.2000, y:8.0400, z:1.2400};
+glbAABB['w_highway_traffic_signals_n_pedestrian.glb'] = {x:0.4744, y:0.5014, z:2.8922};
+glbAABB['w_highway_traffic_signals_pedestrian.glb'] = {x:0.4657, y:0.3435, z:2.5084};
+glbAABB['w_highway_traffic_signals_pedestrian_cycle.glb'] = {x:0.4744, y:0.5014, z:2.6556};
+glbAABB['w_man_made_pole.glb'] = {x:0.0595, y:2.0000, z:0.0464};
+glbAABB['w_natural_tree.glb'] = {x:2.9317, y:2.8009, z:3.5888};
+glbAABB['w_playground_slide.glb'] = {x:464.5669, y:464.5670, z:814.9606};
+glbAABB['w_playground_swing.glb'] = {x:2.2986, y:2.3097, z:3.7755};
+glbAABB['w_railway_rail - copia.glb'] = {x:0.0031, y:0.0357, z:0.0003};
+glbAABB['w_railway_rail.glb'] = {x:0.0031, y:0.0130, z:0.0003};
+glbAABB['w_recycling_glass_yes.glb'] = {x:2.7400, y:3.3200, z:2.7400};
+glbAABB['w_recycling_organic_yes.glb'] = {x:2.7400, y:3.3200, z:2.7400};
+glbAABB['w_recycling_paper_yes.glb'] = {x:3.7600, y:3.3200, z:2.7400};
+glbAABB['w_recycling_plastic_yes.glb'] = {x:3.7600, y:3.3200, z:2.7400};
+glbAABB['w_recycling_type_container.glb'] = {x:4869.6500, y:12641.6503, z:1716.3513};
+glbAABB['w_recycling_waste_yes.glb'] = {x:3.7600, y:3.3200, z:2.7400};
+glbAABB['w_stroke_dashed.glb'] = {x:0.9129, y:0.0097, z:0.1518};
+glbAABB['w_stroke_solid.glb'] = {x:0.9129, y:0.0097, z:0.1518};
+glbAABB['w_traffic_sign_ES_R2.glb'] = {x:0.5372, y:0.0832, z:0.5119};
+glbAABB['w_vending_parking_tickets.glb'] = {x:0.6737, y:1.7358, z:0.7008};
+
+/**
+ * Get the largest real-world dimension of a GLB model in meters.
+ * Uses pre-computed mesh bounds × node scale from the GLB file.
+ * Returns null if the model is not in the lookup table.
+ */
+function getModelMaxDimension(filename) {
+    const info = glbAABB[filename];
+    if (!info) return null;
+    return Math.max(info.x || 0, info.y || 0, info.z || 0);
+}
 window.models = {
     nodeModelMappings,
     modelMappings: nodeModelMappings,
@@ -432,7 +506,8 @@ window.models = {
     adjustConfigForDirection,
     resolveBearing,
     calculateBearing,
-    isLineStringClosed
+    isLineStringClosed,
+    getModelMaxDimension
 };
 
 console.log('models.js loaded. Point model mappings:', nodeModelMappings.length);

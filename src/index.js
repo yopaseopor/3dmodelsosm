@@ -473,7 +473,9 @@ $(function () {
                                Object.keys(tagsObj).some(key => key.startsWith('area:'));
             
             // Treat as area if closed or has area tags
-            geometryType = (isClosed || hasAreaTag) ? 'area' : 'line';
+            // BUT NOT for fence features - fences should always be treated as lines, even when closed
+            const isFence = tagsObj['barrier'] === 'fence' || tagsObj['fence_type'];
+            geometryType = (isClosed && !isFence) || hasAreaTag ? 'area' : 'line';
             
             if (isClosed) {
                 console.log(`🔗 DEBUG: Closed LineString detected, treating as area`);

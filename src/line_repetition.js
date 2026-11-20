@@ -43,12 +43,14 @@
         { tags: ['fence_type=chain_link'], model: 'w_barrier_fence_wood.gltf', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
         { tags: ['fence_type=wire'], model: 'w_barrier_fence_wood.gltf', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
         { tags: ['fence_type=pole'], model: 'w_barrier_fence_wood.gltf', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
-        { tags: ['barrier=wall'], model: 'w_barrier_wall.glb', config: { scale: { tag: 'height', type: 'number', default: 1 }, heightOffset: 0.0, rotation: [0, 0, 0] } },
+        { tags: ['barrier=wall', 'material=brick'], model: 'w_barrier_wall_material_brick.glb', config: { scale: { tag: 'height', type: 'number', default: 1 }, heightOffset: 0.0, rotation: [0, 0, 0] } },
+		{ tags: ['barrier=wall'], model: 'w_barrier_wall.glb', config: { scale: { tag: 'height', type: 'number', default: 1 }, heightOffset: 0.0, rotation: [0, 0, 0] } },
 		{ tags: ['barrier=retaining_wall'], model: 'w_barrier_wall.glb', config: { scale: { tag: 'height', type: 'number', default: 1 }, heightOffset: 0.0, rotation: [0, 0, 0] } },
         { tags: ['highway=cycleway'], model: 'w_highway_cycleway.glb', config: { scale: 4.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
         { tags: ['highway=footway'], model: 'w_highway_footway.glb', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, -Math.PI / 4, 0] } },
         { tags: ['footway=sidewalk'], model: 'w_highway_footway.glb', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, -Math.PI / 4, 0] } },
         { tags: ['highway=residential'], model: 'w_highway_residential.gltf', config: { scale: 3.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
+        { tags: ['highway=steps'], model: 'w_highway_steps.glb', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
         { tags: ['highway=motorway'], model: 'w_highway_residential.gltf', config: { scale: 6.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
         { tags: ['highway=motorway_link'], model: 'w_highway_residential.gltf', config: { scale: 6.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
         { tags: ['highway=path'], model: 'w_highway_track.gltf', config: { scale: 2.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
@@ -60,6 +62,7 @@
         { tags: ['barrier=guard_rail', 'bridge=yes'], model: 'w_barrier_guard_rail_bridge.glb', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
         { tags: ['barrier=guard_rail'], model: 'w_barrier_guard_rail.glb', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
         { tags: ['waterway=drain'], model: 'w_waterway_drain_intermittent.glb', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
+		{ tags: ['highway'], model: 'w_highway_residential.gltf', config: { scale: 3.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
 		{ tags: ['waterway=stream'], model: 'w_waterway_stream.gltf', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }
     ];
 
@@ -68,7 +71,7 @@
     const lineRepetitionConfig = {
         default: { interval: 0.5, sideOffset: 0, maxModels: 500 },
         highway: {
-            default: { interval: 0.30, sideOffset: 0, maxModels: 100 },
+            default: { interval: 0.50, sideOffset: 0, maxModels: 10000 },
             residential: { interval: 0.50, sideOffset: 0, maxModels: 1500 },
             footway: { interval: 0.30, sideOffset: 0, maxModels: 1000 },
             service: { interval: 0.50, sideOffset: 0, maxModels: 800 },
@@ -88,7 +91,7 @@
             funicular: { interval: 8, sideOffset: 0, maxModels: 150, rotationOffset: 0 }
          },
         railway: {
-            default: { interval: 5, sideOffset: 0, maxModels: 350, rotationOffset: 0 },
+            default: { interval: 5, sideOffset: 0, maxModels: 3500, rotationOffset: 0 },
             rail: { interval: 4, sideOffset: 0, maxModels: 400, rotationOffset: 0 },
             light_rail: { interval: 4, sideOffset: 0, maxModels: 400, rotationOffset: 0 },
             tram: { interval: 4, sideOffset: 0, maxModels: 400, rotationOffset: 0 },
@@ -107,7 +110,7 @@
         waterway: {
             default: { interval: 0.30, sideOffset: 0, maxModels: 350, rotationOffset: 0 },
             drain: { interval: 0.30, sideOffset: 0, maxModels: 3350, rotationOffset: 0 },
-            stream: { interval: 0.30, sideOffset: 0, maxModels: 350, rotationOffset: 0 }
+            stream: { interval: 0.30, sideOffset: 0, maxModels: 3500, rotationOffset: 0 }
 
         },
         natural: {
@@ -148,7 +151,7 @@
                 interval: 0.15, sideOffset: 0, maxModels: 5000, postHeight: 1.0,
                 postWidth: 0.15, heightOffset: 0,
                 description: 'Wooden fence posts'
-            },
+                        },
             metal: {
                 interval: 0.25, sideOffset: 0, maxModels: 800, postHeight: 1.8,
                 postWidth: 0.08, description: 'Metal fence posts'
@@ -158,8 +161,8 @@
                 postWidth: 0.05, description: 'Chain link fence posts'
             },
             pole: {
-                interval: 0.5, sideOffset: 0, maxModels: 400, postHeight: 2.2,
-                postWidth: 0.12, description: 'Pole fence posts'
+                interval: 0.2, sideOffset: 0, maxModels: 5000, postHeight: 1.0,
+                postWidth: 0.1, description: 'Pole fence posts'
             },
             wire: {
                 interval: 5.0, sideOffset: 0, maxModels: 200, postHeight: 1.2,
@@ -379,7 +382,14 @@
             throw new RangeError('lineRepetitionConfig maxModels must be a non-negative number');
         }
         if (String(tags && tags.area || '').toLowerCase() === 'yes' || isClosedLine(coordinates)) {
-            return [];
+            // Only skip closed lines for non-barrier/non-fence features
+            const isBarrierFeature = tags && (tags.barrier || tags.fence_type);
+            if (isBarrierFeature) {
+                // For barrier/barrier features, allow closed LineStrings to be processed
+                // as line repetitions
+            } else {
+                return [];
+            }
         }
 
         const repetitions = [];
@@ -447,7 +457,12 @@
         const sourceLines = geometryType === 'LineString'
             ? [geometry.getCoordinates()]
             : geometry.getCoordinates();
-        const openLines = sourceLines.filter(line => !isClosedLine(line));
+        // Closed barrier lines (a fenced perimeter, for example) are still
+        // repeated; every other closed line stays with the area renderer.
+        const isBarrierLine = !!(properties && (properties.barrier || properties.fence_type));
+        const openLines = isBarrierLine
+            ? sourceLines
+            : sourceLines.filter(line => !isClosedLine(line));
         if (lineRepetitionDebugConfig.enabled && lineRepetitionDebugConfig.logProcessing) {
             console.log(`Processing ${geometryType} with ${openLines.length} open line(s)`);
         }

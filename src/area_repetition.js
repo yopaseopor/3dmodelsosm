@@ -17,6 +17,7 @@ const areaRepetitionDebugConfig = {
 // Area model and texture configurations. Any setting can read a tag, e.g.
 // config.scale: { tag: 'height', default: 1 } or spacing: { tag: 'spacing', default: 1 }.
 // Keep each area tag's asset and repeat settings together here.
+// Texture configs can set textureRepeatCount to fit that many tiles on each polygon axis.
 //Implemented tag-driven configuration across all three modules. Use { tag, default } anywhere in a mapping or repetition setting; for example, height can drive scale:
 	//config: {
     //scale: { tag: 'height', type: 'number', default: 1 },
@@ -136,6 +137,7 @@ const areaRepetitionConfigs = [
     {
         tags: ['amenity=parking', 'orientation=parallel'],
         model: 'i_parking.jpg',
+		render_order: 2,
         config: { scale: 2.0, heightOffset: 0.0, rotation: [0, 0, 0] },
         textureRotationOffsetDegrees: 90,
         spacing: 1, // 3 meter spacing for parking
@@ -143,15 +145,31 @@ const areaRepetitionConfigs = [
         description: 'Parking areas'
      },
 
-    // Amenity areas - Parking spaces with smart rotation based on street orientation
+    // Disabled parking spaces are tagged BOTH amenity=parking_space AND
+    // parking_space=disabled in OSM. The config matcher returns the FIRST
+    // matching entry top-to-bottom, so this more-specific entry MUST come
+    // before the generic amenity=parking_space entry below — otherwise
+    // disabled spaces match the generic entry (no textureRepeatCount) first
+    // and get native-resolution tiling instead of exactly 10 tiles/axis.
     {
-        tags: ['amenity=parking_space', 'parking_space=disabled'],
+        tags: ['parking_space=disabled'],
         model: 'i_parking_space_disabled.jpg',
         config: { scale: 2.0, heightOffset: 0.0, rotation: [0, 0, 0] },
-        textureRotationOffsetDegrees: 90,
-        spacing: 1, // 1 meter spacing for parking spaces
+        textureRotationOffsetDegrees: 180,
+		textureRepeatCount: 1,
+        spacing: 1,
         maxModels: 3000,
-        description: 'Disabled parking spaces with smart rotation'
+        description: 'Disabled parking spaces'
+    },
+    
+    {
+        tags: ['parking_space=delivery'],
+        model: 'i_parking_space_delivery.jpg',
+        config: { scale: 2.0, heightOffset: 0.0, rotation: [0, 0, 0] },
+        textureRotationOffsetDegrees: 90,
+		spacing: 1,
+        maxModels: 3000,
+        description: 'Delivery parking spaces'
     },
     {
         tags: ['amenity=parking_space'],
@@ -161,15 +179,6 @@ const areaRepetitionConfigs = [
         spacing: 1, // 1 meter spacing for parking spaces
         maxModels: 3000,
         description: 'Regular parking spaces with smart rotation'
-    },
-    {
-        tags: ['parking_space=disabled'],
-        model: 'i_parking_space_disabled.jpg',
-        config: { scale: 2.0, heightOffset: 0.0, rotation: [0, 0, 0] },
-        textureRotationOffsetDegrees: 90,
-        spacing: 1,
-        maxModels: 3000,
-        description: 'Disabled parking spaces'
     },
 
     // Amenity areas
@@ -201,10 +210,21 @@ const areaRepetitionConfigs = [
        {
         tags: ['area:highway=residential'],
         model: 'i_asfalt.jpg',
+		render_order: 1,
         config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] },
         spacing: 1.0, // 5 meter spacing for area-tagged residential streets
         maxModels: 10000,
         description: 'Area-tagged residential street areas'
+    },
+       {
+        tags: ['area:highway=steps'],
+        model: 'w_highway_steps.glb',
+		textureRotationOffsetDegrees: 90,
+		textureRepeatCount: 2,
+        config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] },
+        spacing: 1.0, // 5 meter spacing for area-tagged residential streets
+        maxModels: 10000,
+        description: 'Area-tagged steps areas'
     },
        {
            tags: ['area:highway=*'],
@@ -261,7 +281,8 @@ const areaRepetitionConfigs = [
     {
         tags: ['manhole=drain'],
         model: 'i_manhole_drain.jpg',
-        config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] },
+		textureRotationOffsetDegrees: 90,
+        config: { scale: 0.1, heightOffset: 0.0, rotation: [0, 0, 0] },
         spacing: 0.5, // Small spacing for precise coverage
         maxModels: 10000, // Only need one instance for small manholes
         description: 'Manhole drain - exact polygon coverage'
@@ -275,11 +296,47 @@ const areaRepetitionConfigs = [
         spacing: 1, // 2 meter spacing for gardens
         maxModels: 10000,
         description: 'Garden'
+      },
+
+    // Amenity areas
+    {
+        tags: ['amenity=parking', 'orientation=parallel'],
+        model: 'i_parking.jpg',
+		render_order: 2,
+        config: { scale: 2.0, heightOffset: 0.0, rotation: [0, 0, 0] },
+        textureRotationOffsetDegrees: 90,
+        spacing: 1, // 3 meter spacing for parking
+        maxModels: 3000,
+        description: 'Parking areas'
+      },
+
+    // Amenity areas
+    {
+        tags: ['road_marking=restriction'],
+        model: 'i_road_marking_restriction.jpg',
+		render_order: 2,
+        config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] },
+        textureRotationOffsetDegrees: 90,
+        // Fit this many complete texture tiles across each polygon dimension.
+        textureRepeatCount: 1,
+        spacing: 2, // 3 meter spacing for parking
+        maxModels: 3000,
+        description: 'Parking areas'
      },
+    {
+        tags: ['road_restriction=*'],
+        model: 'i_road_marking_restriction.jpg',
+        config: { scale: 2.0, heightOffset: 0.0, rotation: [0, 0, 0] },
+        textureRotationOffsetDegrees: 90,
+        textureRepeatCount: 1,
+        spacing: 2,
+        maxModels: 3000,
+        description: 'Road restriction areas'
+    },
 
     {
         tags: ['waterway=stream'],
-        model: 'i_gespa.jpg',
+        model: 'i_aigua.jpg',
         config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] },
         spacing: 5.0,
         maxModels: 1,
@@ -374,6 +431,13 @@ function resolveConfigForTags(config, tags) {
         : config;
 }
 
+function getAreaRenderOrder(tags, config) {
+    const manager = window.areaTextureManager;
+    return manager && typeof manager.getRenderOrder === 'function'
+        ? manager.getRenderOrder(tags, config)
+        : null;
+}
+
 function getModelForTags(tags, wayCoordinates = null, nodeIndex = null, orientationContext = null) {
     const areaConfig = getAreaRepetitionConfig(tags);
     if (!areaConfig) return null;
@@ -426,10 +490,25 @@ function generateAreaRepetitions(coordinates, tags, holes = []) {
         tags
     );
     const modelFilename = config.model;
-    const isImageFile = modelFilename && (modelFilename.toLowerCase().endsWith('.png') || modelFilename.toLowerCase().endsWith('.jpg') || modelFilename.toLowerCase().endsWith('.jpeg'));
+    // Decide whether to use the single-polygon texture approach (drives the
+    // WorldScaleImage GLSL shader) versus the classic grid-of-model-instances
+    // approach. Image files always use the polygon texture path. A .glb/.gltf
+    // uses the polygon-texture path ONLY when textureRepeatCount > 1 AND
+    // textureRotationOffsetDegrees is set — that combination makes sense as a
+    // scaled shader tile.  When textureRepeatCount === 1 for glb we keep the
+    // grid-instancing path (spacing derives from bbox / count = one large
+    // model covering the polygon); when no textureRepeatCount is set the model
+    // instances are placed on a fixed-rotation-meter grid.
+    const isImageFile = modelFilename && /\.jpe?g$/i.test(modelFilename) || /\.png$/i.test(modelFilename);
+    const isGlbOrGltf = modelFilename && /\.(glb|gltf)$/i.test(modelFilename);
+    const hasTextureRepeatOrRot = config.textureRepeatCount !== undefined ||
+                                  config.textureRotationOffsetDegrees !== undefined;
+    // NOTE: GLB/GLTF models ALWAYS use grid instancing — never the shader-tile path.
+    // Shader tiles work only for image textures stretched over a single polygon.
+    const needsPolygonTexture = isImageFile || tags['manhole'] === 'drain';
 
-    // For image files (textures) OR manhole=drain, return single polygon object instead of grid points
-    if (isImageFile || tags['manhole'] === 'drain') {
+    // For image files OR manhole=drain, return single polygon object instead of grid points
+    if (needsPolygonTexture || tags['manhole'] === 'drain') {
         if (areaRepetitionDebugConfig.enabled) console.log(`🏞️ Using single polygon texture approach for ${modelFilename}`);
         
         // Calculate texture rotation based on nearby ways
@@ -450,18 +529,29 @@ function generateAreaRepetitions(coordinates, tags, holes = []) {
             model: tags['manhole'] === 'drain' ? 'i_manhole_drain.jpg' : modelFilename,
             spacing: config.spacing,
             rotation: textureRotation,
+            textureRepeatCount: config.textureRepeatCount,
             textureRotationOffsetDegrees: Number.isFinite(config.textureRotationOffsetDegrees)
                 ? config.textureRotationOffsetDegrees
                 : 0,
-            scale: config.config.scale
+            scale: config.config.scale,
+            renderOrder: getAreaRenderOrder(tags, config)
         }];
     }
 
     // For 3D models, use the original grid-based approach
-    const spacingMeters = config.spacing;
+    const baseSpacingMeters = config.spacing;
     const maxModels = config.maxModels;
+    // When textureRepeatCount is set, treat it as the target number of model
+    // instances along each polygon axis and derive the grid spacing from the
+    // bounding-box dimensions rather than using the raw config.spacing value.
+    // This makes textureRepeatCount work for .glb/.gltf area repetitions just
+    // like it does for image-texture areas.
+    const textureRepeatCount = Number.isInteger(config.textureRepeatCount) && config.textureRepeatCount >= 1
+        ? config.textureRepeatCount : null;
 
-    if (areaRepetitionDebugConfig.enabled && areaRepetitionDebugConfig.logGeneration) console.log(`🏞️ Using grid-based model approach: spacing=${spacingMeters}m, maxModels=${maxModels}, model=${modelFilename}`);
+    if (areaRepetitionDebugConfig.enabled && areaRepetitionDebugConfig.logGeneration) {
+        console.log(`🏞️ Using grid-based model approach: spacing=${baseSpacingMeters}m, maxModels=${maxModels}, model=${modelFilename}${textureRepeatCount !== null ? ', repeatCount=' + textureRepeatCount : ''}`);
+    }
 
     // Calculate bounding box
     let minLon = Infinity, maxLon = -Infinity, minLat = Infinity, maxLat = -Infinity;
@@ -478,16 +568,65 @@ function generateAreaRepetitions(coordinates, tags, holes = []) {
 
     // Calculate center latitude for conversion
     const centerLat = (minLat + maxLat) / 2;
-    const [spacingLonDeg, spacingLatDeg] = metersToDegrees(spacingMeters, centerLat);
 
-    if (areaRepetitionDebugConfig.enabled && areaRepetitionDebugConfig.logCoordinates) console.log(`🏞️ Center latitude: ${centerLat.toFixed(6)}, spacing: ${spacingLonDeg.toFixed(8)} lon deg, ${spacingLatDeg.toFixed(8)} lat deg`);
+    const lonDegPerMeter = 1 / (111320 * Math.cos(centerLat * Math.PI / 180));
+    const latDegPerMeter = 1 / 111320;
+    const bboxWidthM  = (maxLon - minLon)  / lonDegPerMeter;
+    const bboxHeightM = (maxLat - minLat)  / latDegPerMeter;
 
-    // Generate grid points within bounding box
+    // textureRepeatCount = N means: tile the area with N rows × N cols.
+    //   N=1 → ONE model covering the ENTIRE bbox (largest possible).
+    //   N>1 → NxN grid of smaller models spaced evenly across the bbox.
+    let nx, ny;
+    if (textureRepeatCount !== null) {
+        nx = Math.max(1, Math.round(textureRepeatCount));
+        ny = Math.max(1, Math.round(textureRepeatCount));
+    } else {
+        // No repeatCount specified: use baseSpacingMeters to derive a natural grid
+        const spacingXmeters = baseSpacingMeters || 1.0;
+        const spacingYmeters = baseSpacingMeters || 1.0;
+        const dxDeg = spacingXmeters * lonDegPerMeter;
+        const dyDeg = spacingYmeters * latDegPerMeter;
+        nx = Math.max(1, Math.ceil((maxLon - minLon) / dxDeg) + 1);
+        ny = Math.max(1, Math.ceil((maxLat - minLat) / dyDeg) + 1);
+    }
+
+    const spacingLonDeg = (maxLon - minLon) / nx;
+    const spacingLatDeg = (maxLat - minLat) / ny;
+
+    // Size of one grid cell in meters
+    const cellWidthMeters  = bboxWidthM  / nx;
+    const cellHeightMeters = bboxHeightM / ny;
+
+    // Auto-scale: make each model fill its assigned cell based on real GLB dimensions
+    let modelScale = config.config.scale;
+    const maxDim = (window.models && typeof window.models.getModelMaxDimension === 'function')
+        ? window.models.getModelMaxDimension(modelFilename) : null;
+    if (maxDim && maxDim > 0) {
+        // Scale so the model's largest dimension fills the larger cell dimension
+        const cellSpan = Math.max(cellWidthMeters, cellHeightMeters);
+        modelScale = (config.config.scale || 1) * (cellSpan / maxDim);
+    }
+
+    // Compute polygon bearing so instances align with the way
+    let effectiveBearing = 0;
+    {
+        const authoredYRot = Array.isArray(config.config.rotation) ? (config.config.rotation[1] || 0) : 0;
+        const calculated = window.modelRenderer && window.modelRenderer.calculateTextureRotation
+            ? window.modelRenderer.calculateTextureRotation(coordinates, modelFilename, tags)
+            : 0;
+        const textureOffset = (config.textureRotationOffsetDegrees || 0) * Math.PI / 180;
+        effectiveBearing = (calculated || 0) + authoredYRot + textureOffset;
+    }
+
+    // Generate grid points at CELL CENTERS so they land inside the polygon boundary
     const repetitions = [];
     let modelCount = 0;
 
-    for (let lon = minLon; lon <= maxLon && modelCount < maxModels; lon += spacingLonDeg) {
-        for (let lat = minLat; lat <= maxLat && modelCount < maxModels; lat += spacingLatDeg) {
+    for (let ix = 0; ix < nx && modelCount < maxModels; ix++) {
+        const lon = minLon + (ix + 0.5) * spacingLonDeg;
+        for (let iy = 0; iy < ny && modelCount < maxModels; iy++) {
+            const lat = minLat + (iy + 0.5) * spacingLatDeg;
             // Check if point is inside polygon
             const isInsideOuter = isPointInPolygon([lon, lat], coordinates);
             const isInsideHole = holes.some(hole => isPointInPolygon([lon, lat], hole));
@@ -496,9 +635,9 @@ function generateAreaRepetitions(coordinates, tags, holes = []) {
                     type: 'model_instance',
                     position: [lon, lat, 0], // lon, lat, height
                     model: modelFilename,
-                    scale: config.config.scale,
+                    scale: modelScale,
                     heightOffset: config.config.heightOffset,
-                    rotation: config.config.rotation
+                    rotation: [0, effectiveBearing, 0]
                 });
                 modelCount++;
             }
@@ -558,18 +697,18 @@ function applyAreaRepetitions(feature, modelFilename, modelConfig, tags) {
             // Check if it's a closed LineString (represents an area) using centralized function
             const isClosed = window.models && window.models.isLineStringClosed ? 
                              window.models.isLineStringClosed(geometry) : false;
-            
+
             if (isClosed) {
                 const lineCoords = geometry.getCoordinates();
                 polygons = [[lineCoords.slice(0, -1)]]; // Single polygon with only outer ring
                 geometryType = 'Polygon'; // Treat as polygon for processing
-                if (areaRepetitionDebugConfig.enabled) console.log('🏞️ Closed LineString detected, treating as polygon for area repetition');
+                if (areaRepetitionDebugConfig.enabled) console.log('Closed LineString detected, treating as polygon for area repetition');
             } else {
-                if (areaRepetitionDebugConfig.enabled) console.log('🏞️ LineString not closed, skipping area repetition');
+                if (areaRepetitionDebugConfig.enabled) console.log('LineString not closed, skipping area repetition');
                 return;
             }
         } else {
-            if (areaRepetitionDebugConfig.enabled) console.log(`🏞️ Geometry type ${geometryType} not supported for area repetition`);
+            if (areaRepetitionDebugConfig.enabled) console.log(`Geometry type ${geometryType} not supported for area repetition`);
             return;
         }
 
@@ -613,8 +752,10 @@ function applyAreaRepetitions(feature, modelFilename, modelConfig, tags) {
                         type: 'polygon_texture',
                         polygonCoordinates: rep.polygonCoordinates,
                         spacing: rep.spacing,
+                        textureRepeatCount: rep.textureRepeatCount,
                         rotation: rep.rotation || 0,
-                        textureRotationOffsetDegrees: rep.textureRotationOffsetDegrees
+                        textureRotationOffsetDegrees: rep.textureRotationOffsetDegrees,
+                        renderOrder: rep.renderOrder
                     };
 
                     feature.set(repetitionKey, repModelOptions);
@@ -631,7 +772,9 @@ function applyAreaRepetitions(feature, modelFilename, modelConfig, tags) {
                         uri: `/3dmodelsosm/src/models/${rep.model}`, // Use model from repetition config
                         scale: rep.scale === undefined ? 1.0 : rep.scale,
                         heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
-                        position: rep.position
+                        position: rep.position,
+                        textureRotationOffsetDegrees: rep.textureRotationOffsetDegrees,
+                        textureRepeatCount: rep.textureRepeatCount
                     };
 
                     feature.set(repetitionKey, repModelOptions);
@@ -640,6 +783,8 @@ function applyAreaRepetitions(feature, modelFilename, modelConfig, tags) {
                         rep.heightOffset === undefined ? 0 : rep.heightOffset);
                     feature.set(`${repetitionKey}_rotation`,
                         rep.rotation || [0, 0, 0]);
+                    feature.set(`${repetitionKey}_textureRotationOffsetDegrees`,
+                        rep.textureRotationOffsetDegrees !== undefined ? rep.textureRotationOffsetDegrees : 0);
 
                     if (areaRepetitionDebugConfig.enabled) console.log(`🏞️ Stored model instance repetition ${index + 1} configuration at [${rep.position[0].toFixed(6)}, ${rep.position[1].toFixed(6)}] with model: ${rep.model}`);
                 }

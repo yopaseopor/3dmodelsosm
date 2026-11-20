@@ -5,7 +5,7 @@
 const memoryConfig = {
     maxModelsPerFrame: 40,           // Limit models added per frame
     loadDistance: 2500,              // Load models within this distance (meters)
-    unloadDistance: 9000,            // Unload models beyond this distance (meters)
+    unloadDistance: 5000,            // Unload models beyond this distance (meters)
     lodDistances: {                  // Level of Detail distances
         high: 200,                    // High detail within 200m
         medium: 500,                  // Medium detail within 500m
@@ -32,7 +32,7 @@ const memoryConfig = {
     // Override it without editing this file:
     //   ?primitives=60000     in the URL, or
     //   modelRenderer.setBudget(60000)  in the console.
-    maxLivePrimitives: 30000,
+    maxLivePrimitives: 60000,
 
     // Evict down to this fraction of the budget rather than by one, so the
     // scan that finds the farthest entries is amortised over many placements.
@@ -1413,10 +1413,12 @@ window.modelRenderer = {
             if (entry.kind === 'texture') {
                 const list = Array.isArray(entry.primitives) ? entry.primitives
                     : (entry.primitives ? [entry.primitives] : []);
-                if (scene && scene.primitives) {
-                    for (let i = 0; i < list.length; i++) {
-                        const p = list[i];
-                        if (p && !isPrimitiveDestroyed(p)) scene.primitives.remove(p);
+                for (let i = 0; i < list.length; i++) {
+                    const p = list[i];
+                    if (p && p.polygon && entry.entityCollection) {
+                        entry.entityCollection.remove(p);
+                    } else if (scene && scene.primitives && p && !isPrimitiveDestroyed(p)) {
+                        scene.primitives.remove(p);
                     }
                 }
                 // createAreaEntity() early-returns on this property, so it has
@@ -2178,9 +2180,11 @@ window.modelRenderer = {
                     imageUri,
                     {
                         spacing: spacing,
+                        textureRepeatCount: repModel.textureRepeatCount,
                         rotation: textureRotation,
                         textureRotationOffsetDegrees: repModel.textureRotationOffsetDegrees,
                         scale: repModel.scale,
+                        renderOrder: repModel.renderOrder,
                         bridgeSurfaceHeight: isTunnelFeature(feature) ? null : flatSurfaceHeight,
                         fixedSurfaceHeight: isTunnelFeature(feature) ? getTunnelElevation() : null,
                         undergroundFeature: feature,
@@ -2192,13 +2196,21 @@ window.modelRenderer = {
                     },
                     cesiumScene
                 );
+                if (debugConfig.enabled) console.log(`🖼️ polygon_texture rep ${repIndex} model=${imageUri} textureRepeatCount=${repModel?.textureRepeatCount}`);
                 // addAreaTexture used to return nothing, so these primitives
                 // were unreachable: nothing could count them, destroy them, or
                 // notice a second sweep had made another one.
+                const usesOrderedGroundTexture = Number.isFinite(repModel.renderOrder) &&
+                    !isTunnelFeature(feature) &&
+                    !Number.isFinite(flatSurfaceHeight);
+                const textureDataSource = usesOrderedGroundTexture && window.areaTextureManager
+                    ? window.areaTextureManager.getDataSource()
+                    : null;
                 if (textureKey) {
                     this.trackEntry(textureKey, {
                         kind: 'texture',
                         primitives: created,
+                        entityCollection: textureDataSource ? textureDataSource.entities : null,
                         feature: feature,
                         isTunnel: isTunnelFeature(feature),
                         surfaceFeature: underBridgeFeature,
@@ -2346,6 +2358,9 @@ window.modelRenderer = {
                               feature.get(`repetition_${repIndex}_rotation`);
         }
         
+        // Note: textureRotationOffsetDegrees is already baked into the rotation field 
+        // during applyAreaRepetitions/generateAreaRepetitions calculation of effectiveBearing.
+
         if (repModelRotation && Array.isArray(repModelRotation) && repModelRotation.length >= 3) {
             if (repModelRotation[1] !== 0) {
                 const bearingRotation = Cesium.Matrix3.fromRotationZ(repModelRotation[1]);
@@ -2510,7 +2525,7 @@ window.modelRenderer = {
             if (areaEntity) {
                 if (debugConfig.enabled) console.log(`🎨 Successfully created area texture entity for feature ${fidx}`);
                 // createAreaEntity() does its own "already has one" early-return,
-                // so this cannot double-build; it just makes the primitive
+                // so this cannot double-build; it just makes the texture
                 // visible to the census and to the unload path.
                 //
                 // Deliberately NOT inside the surrounding try. If tracking threw,
@@ -2519,9 +2534,14 @@ window.modelRenderer = {
                 // exists to remove.
                 const key = getFeatureKey(feature);
                 if (key) {
+                    const areaEntities = Array.isArray(areaEntity) ? areaEntity : [areaEntity];
+                    const entityCollection = areaEntities.some(item => item && item.polygon)
+                        ? window.areaTextureManager.getDataSource().entities
+                        : null;
                     this.trackEntry('areatex_' + key, {
                         kind: 'texture',
                         primitives: areaEntity,
+                        entityCollection: entityCollection,
                         feature: feature,
                         isTunnel: isTunnel,
                         surfaceFeature: underBridgeFeature,
@@ -2666,9 +2686,27 @@ window.modelRenderer = {
             if (!Number.isFinite(desiredTileSize) || desiredTileSize <= 0) {
                 throw new RangeError('Area texture tile size must be a positive number');
             }
-            const shortImageSide = Math.min(imageWidth, imageHeight);
-            const tileWidthMeters = desiredTileSize * imageWidth / shortImageSide;
-            const tileHeightMeters = desiredTileSize * imageHeight / shortImageSide;
+            const textureRepeatCount = repModel && repModel.textureRepeatCount;
+            if (imageUri.includes('i_parking_space') || (repModel && repModel.uri && repModel.uri.includes('i_parking_space'))) {
+                console.warn(`🖼️ [DEBUG] i_parking_space texture path reached: textureRepeatCount=${textureRepeatCount}, spacing=${repModel?.spacing}, scale=${repModel?.scale}, imageUri=${imageUri}`);
+            }
+            let tileWidthMeters;
+            let tileHeightMeters;
+            let textureOffset = new Cesium.Cartesian2(0, 0);
+            if (textureRepeatCount !== undefined) {
+                if (!Number.isInteger(textureRepeatCount) || textureRepeatCount < 1) {
+                    throw new RangeError('Area texture repeat count must be a positive integer');
+                }
+                tileWidthMeters = widthMeters / textureRepeatCount;
+                tileHeightMeters = heightMeters / textureRepeatCount;
+                textureOffset = new Cesium.Cartesian2(textureRepeatCount / 2, textureRepeatCount / 2);
+                console.warn(`🖼️ [DEBUG] Using textureRepeatCount ${textureRepeatCount}: bbox=${widthMeters.toFixed(2)}x${heightMeters.toFixed(2)}m → tile=${tileWidthMeters.toFixed(3)}x${tileHeightMeters.toFixed(3)}m`);
+            } else {
+                const shortImageSide = Math.min(imageWidth, imageHeight);
+                tileWidthMeters = desiredTileSize * imageWidth / shortImageSide;
+                tileHeightMeters = desiredTileSize * imageHeight / shortImageSide;
+                console.warn(`🖼️ [DEBUG] Fallback native-resolution: tileSize=${desiredTileSize}m, img=${imageWidth}x${imageHeight}px → tile=${tileWidthMeters.toFixed(2)}x${tileHeightMeters.toFixed(2)}m across ${widthMeters.toFixed(2)}x${heightMeters.toFixed(2)}m area`);
+            }
             const textureRotationOffsetDegrees = Number.isFinite(repModel.textureRotationOffsetDegrees)
                 ? repModel.textureRotationOffsetDegrees
                 : 0;
@@ -2682,6 +2720,33 @@ window.modelRenderer = {
                 (window.ol3d && window.ol3d.getCesiumScene ? window.ol3d.getCesiumScene() : null);
             if (textureScene && polygonHierarchy) {
                 try {
+                    const renderOrder = Number.isFinite(repModel && repModel.renderOrder)
+                        ? repModel.renderOrder
+                        : null;
+                    if (bridgeSurfaceHeight === null && renderOrder !== null) {
+                        if (!window.areaTextureManager ||
+                            !window.areaTextureManager.getDataSource()) {
+                            throw new Error('Area texture data source is not available');
+                        }
+                        const showTexture = !repModel.undergroundFeature ||
+                            isUndergroundFeature(repModel.undergroundFeature) === isUndergroundViewEnabled();
+                        const entity = window.areaTextureManager.createOrderedGroundTexture(
+                            polygonHierarchy,
+                            {
+                                imageUrl: imageUri,
+                                areaSizeMeters: new Cesium.Cartesian2(widthMeters, heightMeters),
+                                tileSizeMeters: new Cesium.Cartesian2(tileWidthMeters, tileHeightMeters),
+                                textureOffset,
+                                textureRotation: -finalRotation +
+                                    textureRotationOffsetDegrees * Math.PI / 180
+                            },
+                            renderOrder,
+                            showTexture
+                        );
+                        created.push(entity);
+                        return;
+                    }
+
                     const texturePrimitive = bridgeSurfaceHeight === null
                         ? Cesium.GroundPrimitive
                         : Cesium.Primitive;
@@ -2704,6 +2769,7 @@ window.modelRenderer = {
                                         image: imageUri,
                                         areaSizeMeters: new Cesium.Cartesian2(widthMeters, heightMeters),
                                         tileSizeMeters: new Cesium.Cartesian2(tileWidthMeters, tileHeightMeters),
+                                        textureOffset,
                                         textureRotation: -finalRotation +
                                             textureRotationOffsetDegrees * Math.PI / 180
                                     },
@@ -2717,7 +2783,7 @@ window.modelRenderer = {
                                                 cosine * localPosition.x - sine * localPosition.y,
                                                 sine * localPosition.x + cosine * localPosition.y
                                             );
-                                            vec2 textureSt = rotatedPosition / tileSizeMeters;
+                                            vec2 textureSt = rotatedPosition / tileSizeMeters + textureOffset;
                                             vec4 texel = texture2D(image, fract(textureSt));
                                             material.diffuse = czm_gammaCorrect(texel.rgb);
                                             material.alpha = texel.a;
@@ -2782,11 +2848,12 @@ window.modelRenderer = {
 
         const isFootwayTexture = textureName.toLowerCase().includes('i_llamborda.jpg');
         const textureTags = tagsObj || {};
+        const isStepsArea = textureName.toLowerCase().includes('w_highway_steps.glb');
         const isFootwayArea = isFootwayTexture && (
             textureTags['area:highway'] === 'footway' ||
             textureTags.highway === 'footway' ||
             textureTags.footway === 'sidewalk'
-        );
+        ) || isStepsArea;
         const isCrossingTexture = textureName.toLowerCase().includes('i_crossing.png') ||
                                 textureName.toLowerCase().includes('crossing');
         const isParkingTexture = textureName.toLowerCase().includes('i_parking');
@@ -2860,7 +2927,9 @@ window.modelRenderer = {
                     feature.get && (
                         feature.get('highway') === 'footway' ||
                         feature.get('footway') === 'sidewalk' ||
-                        feature.get('area:highway') === 'footway'
+                        feature.get('area:highway') === 'footway' ||
+                        feature.get('highway') === 'steps' ||
+                        feature.get('area:highway') === 'steps'
                     )
                 );
                 sourceWays = footwayWays;

@@ -50,6 +50,93 @@ class AreaTextureManager {
         return this.dataSource;
     }
 
+    getRenderOrder(tagsObj, config) {
+        const values = [
+            tagsObj && tagsObj.render_order,
+            config && config.render_order
+        ];
+        for (const value of values) {
+            if ((typeof value !== 'number' && typeof value !== 'string') || String(value).trim() === '') {
+                continue;
+            }
+            const renderOrder = Number(value);
+            if (Number.isFinite(renderOrder)) return renderOrder;
+        }
+        return null;
+    }
+
+    createOrderedGroundTexture(hierarchy, materialOptions, renderOrder, show = true) {
+        const dataSource = this.getDataSource();
+        if (!dataSource) {
+            throw new Error('Area texture data source is not available');
+        }
+
+        const materialType = 'OrderedWorldScaleImage';
+        const materialSource = `
+            czm_material czm_getMaterial(czm_materialInput materialInput) {
+                czm_material material = czm_getDefaultMaterial(materialInput);
+                vec2 localPosition = (materialInput.st - vec2(0.5)) * areaSizeMeters;
+                float cosine = cos(textureRotation);
+                float sine = sin(textureRotation);
+                vec2 rotatedPosition = vec2(
+                    cosine * localPosition.x - sine * localPosition.y,
+                    sine * localPosition.x + cosine * localPosition.y
+                );
+                vec2 textureSt = rotatedPosition / tileSizeMeters + textureOffset;
+                vec4 texel = texture2D(image, fract(textureSt));
+                material.diffuse = czm_gammaCorrect(texel.rgb);
+                material.alpha = texel.a;
+                return material;
+            }
+        `;
+        if (!Cesium.Material._materialCache.getMaterial(materialType)) {
+            Cesium.Material._materialCache.addMaterial(materialType, {
+                fabric: {
+                    type: materialType,
+                    uniforms: {
+                        image: materialOptions.imageUrl,
+                        areaSizeMeters: materialOptions.areaSizeMeters,
+                        tileSizeMeters: materialOptions.tileSizeMeters,
+                        textureOffset: materialOptions.textureOffset || new Cesium.Cartesian2(0, 0),
+                        textureRotation: materialOptions.textureRotation
+                    },
+                    source: materialSource
+                },
+                translucent: true
+            });
+        }
+
+        const materialProperty = {
+            isConstant: true,
+            definitionChanged: new Cesium.Event(),
+            getType: () => materialType,
+            getValue: (time, result = {}) => {
+                result.image = materialOptions.imageUrl;
+                result.areaSizeMeters = materialOptions.areaSizeMeters;
+                result.tileSizeMeters = materialOptions.tileSizeMeters;
+                result.textureOffset = materialOptions.textureOffset || new Cesium.Cartesian2(0, 0);
+                result.textureRotation = materialOptions.textureRotation;
+                return result;
+            },
+            equals: other => other === materialProperty
+        };
+        const entity = dataSource.entities.add({
+            polygon: {
+                hierarchy,
+                material: materialProperty,
+                zIndex: renderOrder,
+                outline: false
+            }
+        });
+        entity.show = show;
+
+        const scene = window.ol3d && window.ol3d.getCesiumScene
+            ? window.ol3d.getCesiumScene()
+            : null;
+        if (scene && scene.requestRender) scene.requestRender();
+        return entity;
+    }
+
     /**
      * Create a Cesium entity for area texture
      * @param {Object} feature - OpenLayers feature
@@ -153,6 +240,7 @@ class AreaTextureManager {
             const isBridgeTexture = !(modelConfig && modelConfig.tunnelSurface) &&
                 (bridgeTag === true || bridgeTag === 1 ||
                     (bridgeValue !== '' && !['no', 'false', '0'].includes(bridgeValue)));
+            const renderOrder = this.getRenderOrder(tagsObj, modelConfig);
             const toWgs84 = (coord) => {
                 if (coord[0] >= -180 && coord[0] <= 180 && coord[1] >= -90 && coord[1] <= 90) {
                     return coord;
@@ -300,6 +388,26 @@ class AreaTextureManager {
                 // height; GroundPrimitive remains appropriate for terrain-draped
                 // surfaces beneath bridges and elsewhere.
                 try {
+                    if (bridgeSurfaceHeight === null && renderOrder !== null) {
+                        const areaSizeMeters = new Cesium.Cartesian2(
+                            repeatX * tileSizeMeters,
+                            repeatY * tileSizeMeters
+                        );
+                        const entity = this.createOrderedGroundTexture(
+                            hierarchy,
+                            {
+                                imageUrl,
+                                areaSizeMeters,
+                                tileSizeMeters: new Cesium.Cartesian2(tileSizeMeters, tileSizeMeters),
+                                textureRotation
+                            },
+                            renderOrder,
+                            shouldShowAreaTexture(tagsObj)
+                        );
+                        entities.push(entity);
+                        continue;
+                    }
+
                     const texturePrimitive = bridgeSurfaceHeight === null
                         ? Cesium.GroundPrimitive
                         : Cesium.Primitive;
