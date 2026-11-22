@@ -2707,6 +2707,10 @@ function refresh3DImagery() {
 function showReturnTo2DButton() {
     // Remove existing button if any
     hideReturnTo2DButton();
+
+    // 3D mode adds controls to the menu, which can then be taller than the
+    // viewport: scroll the whole menu so nothing gets cut off.
+    $('#menu').addClass('menu-3d');
     
     // Find the layer selector menu
     const layerMenu = $('.osmcat-menu');
@@ -2864,6 +2868,7 @@ function hideReturnTo2DButton() {
     if (returnButton) {
         returnButton.remove();
     }
+    $('#menu').removeClass('menu-3d');
 }
 
 function show3DBackgroundSelector() {

@@ -42,24 +42,80 @@
     var LEVEL_VIEW_OPACITY = 0.01;
     var ACTIVE_LEVEL_COLOR = Cesium.Color.fromCssColorString('#ffb000');
     var ACTIVE_LEVEL_OPACITY = 0.85; // Active level opacity (0-1; keep below 1 for transparency)
+    var indoorOpacity = 1;           // UI multiplier for every indoor surface fill (1 = as styled)
+
+    // One colour per Simple Indoor Tagging element kind (indoor=*).
+    var KIND_COLOR_CSS = {
+        room: '#4dabf7',       // blue — generic room
+        area: '#b197fc',       // lavender — untagged / legacy indoor area
+        corridor: '#ffd43b',   // yellow — circulation space
+        wall: '#dee2e6',       // light grey — indoor=wall
+        level: '#63e6be',      // teal — indoor=level floor plate
+        shell: '#a8dadc',      // pale blue — translucent building shell
+        steps: '#e9c46a',      // sand — stairs / steps
+        elevator: '#ff922b',   // orange — elevator shaft
+        escalator: '#f06595',  // pink — escalator
+        door: '#d4a373',       // brown — door slab
+        window: '#90e0ef',     // cyan — window glass
+        poi: '#f4a261'         // amber — named POI marker
+    };
+
+    // Room purpose colours (room=* / shop=* / amenity=* …), so a shopping
+    // centre level shows shops, food, offices and toilets in different tones.
+    var PURPOSE_COLOR_CSS = {
+        shop: '#f783ac',       // pink — retail
+        food: '#ffa94d',       // orange-peach — restaurant / cafe / bar
+        office: '#9775fa',     // violet — office / coworking
+        education: '#a9e34b',  // lime — classroom / school / library
+        health: '#ff8787',     // salmon — toilets / clinic / pharmacy
+        service: '#66d9e8',    // light cyan — bank / ATM / reception
+        sport: '#38d9a9',      // mint — gym / pool / fitness
+        technical: '#adb5bd',  // grey — plant / storage / utility
+        parking: '#868e96',    // dark grey — parking / garage
+        entrance: '#ffe066'    // pale yellow — entrance / hall / lobby
+    };
 
     var colorCache = null;
     function colorFor(kind) {
         if (!colorCache) {
-            colorCache = {
-                room: Cesium.Color.fromCssColorString('#7fc8f8'),
-                area: Cesium.Color.fromCssColorString('#bde0fe'),
-                corridor: Cesium.Color.fromCssColorString('#ffd166'),
-                wall: Cesium.Color.fromCssColorString('#e8e8e8'),
-                level: Cesium.Color.fromCssColorString('#7fd1ae'),
-                shell: Cesium.Color.fromCssColorString('#a8dadc'),
-                steps: Cesium.Color.fromCssColorString('#e9c46a'),
-                door: Cesium.Color.fromCssColorString('#d4a373'),
-                window: Cesium.Color.fromCssColorString('#90e0ef'),
-                poi: Cesium.Color.fromCssColorString('#f4a261')
-            };
+            colorCache = {};
+            Object.keys(KIND_COLOR_CSS).forEach(function (key) {
+                colorCache[key] = Cesium.Color.fromCssColorString(KIND_COLOR_CSS[key]);
+            });
+            Object.keys(PURPOSE_COLOR_CSS).forEach(function (key) {
+                colorCache[key] = Cesium.Color.fromCssColorString(PURPOSE_COLOR_CSS[key]);
+            });
         }
-        return colorCache[kind];
+        return colorCache[kind] || colorCache.area;
+    }
+
+    /** Purpose group carried by a room's tags, or null for a plain space. */
+    function purposeGroupFor(tags) {
+        var parts = [];
+        ['room', 'shop', 'amenity', 'office', 'leisure', 'healthcare', 'tourism', 'craft', 'building:use'].forEach(function (key) {
+            if (tags[key] !== undefined && tags[key] !== null && tags[key] !== '') parts.push(String(tags[key]));
+        });
+        // Legacy values (indoor=shop, indoor=classroom…) also act as purposes.
+        var indoor = (tags.indoor || '') + '';
+        if (indoor && !/^(room|area|corridor|wall|level|yes|no|door)$/i.test(indoor)) parts.push(indoor);
+        var hay = parts.join(' ').toLowerCase();
+        if (!hay) return null;
+        if (/parking|garage/.test(hay)) return 'parking';
+        if (/entrance|hall|lobby|foyer|reception|waiting|vestibule/.test(hay)) return 'entrance';
+        if (/toilet|bathroom|restroom|healthcare|clinic|hospital|doctor|dentist|pharmac|first_aid|medical|nursing/.test(hay)) return 'health';
+        if (/classroom|school|university|college|kindergarten|library|lecture|laboratory|education/.test(hay)) return 'education';
+        if (/restaurant|cafe|coffee|bar|pub|fast_food|food_court|ice_cream|kitchen|bakery|pastry/.test(hay)) return 'food';
+        if (/gym|fitness|swimming_pool|sauna|sport|exercise|yoga|dance/.test(hay)) return 'sport';
+        if (/technical|utility|storage|equipment|maintenance|server|electrical|plant_room/.test(hay)) return 'technical';
+        if (/office|coworking|workspace/.test(hay)) return 'office';
+        if (/bank|atm|post_office|customer_service/.test(hay)) return 'service';
+        if (/shop|mall|store|kiosk|supermarket|clothes|jewel|books|toys|optic|electronic|shoes|hairdress|convenience|florist/.test(hay)) return 'shop';
+        return null;
+    }
+
+    /** Colour for an indoor space: its purpose when tagged, else its SIT kind. */
+    function spaceColorFor(tags, kind) {
+        return colorFor(purposeGroupFor(tags) || kind);
     }
 
     // ------------------------------------------------------------------
@@ -166,10 +222,24 @@
         return isFinite(candidate) && isFinite(selected) && candidate === selected;
     }
 
+    /**
+     * Style for an element at a given level. When one level is selected, its
+     * elements keep their own tag colour (so rooms, corridors, shops… stay
+     * distinguishable) and only get the orange active-level outline plus the
+     * active-level opacity.
+     */
     function styleForLevel(level, color, defaultAlpha) {
-        if (activeLevel === null) return { color: color, alpha: defaultAlpha };
-        if (levelIsActive(level)) return { color: ACTIVE_LEVEL_COLOR, alpha: ACTIVE_LEVEL_OPACITY };
-        return { color: color, alpha: 0 };
+        var alpha = defaultAlpha;
+        var outline = color;
+        if (activeLevel !== null) {
+            if (levelIsActive(level)) {
+                alpha = Math.max(ACTIVE_LEVEL_OPACITY, defaultAlpha);
+                outline = ACTIVE_LEVEL_COLOR;
+            } else {
+                alpha = 0;
+            }
+        }
+        return { color: color, alpha: alpha * indoorOpacity, outline: outline };
     }
 
     function levelIsActive(level) {
@@ -269,6 +339,8 @@
         selector.value = selected === null ? '' : String(selected);
         selector.disabled = levels.length === 0;
         selector.parentElement.style.display = levels.length ? '' : 'none';
+        var opacityRow = document.getElementById('nav3d-indoor-opacity-row');
+        if (opacityRow) opacityRow.style.display = levels.length ? '' : 'none';
         return levels;
     }
 
@@ -304,6 +376,15 @@
         ACTIVE_LEVEL_OPACITY = clamp(value, 0, 1);
         if (indoorEnabled) rebuildIndoor();
         return ACTIVE_LEVEL_OPACITY;
+    }
+
+    /** Scale all indoor surface fills; 1 keeps the per-kind alpha untouched. */
+    function setIndoorOpacity(opacity) {
+        var value = Number(opacity);
+        if (!isFinite(value)) throw new TypeError('Indoor opacity must be a finite number');
+        indoorOpacity = clamp(value, 0, 1);
+        if (indoorEnabled) rebuildIndoor();
+        return indoorOpacity;
     }
 
     function isBuildingTags(tags) {
@@ -520,6 +601,7 @@
         var ds = dataSource();
         if (!ds) return null;
         ds.entities.add(entity);
+        if (feature) entity._olFeature = feature;
         if (!indoorEntities.has(feature)) indoorEntities.set(feature, []);
         indoorEntities.get(feature).push(entity);
         return entity;
@@ -527,6 +609,7 @@
 
     function addPrimitive(feature, prim) {
         if (feature) {
+            prim._olFeature = feature;
             if (!indoorEntities.has(feature)) indoorEntities.set(feature, []);
             indoorEntities.get(feature).push(prim);
         }
@@ -564,7 +647,7 @@
                 extrudedHeight: meanGround(groundHeights) + baseLift + wallHeight,
                 material: style.color.withAlpha(style.alpha),
                 outline: true,
-                outlineColor: style.color.withAlpha(style.alpha),
+                outlineColor: (style.outline || style.color).withAlpha(style.alpha),
                 closeSurface: true
             }
         };
@@ -586,7 +669,7 @@
                 extrudedHeight: meanGround(groundHeights) + topLift + thickness,
                 material: style.color.withAlpha(style.alpha),
                 outline: true,
-                outlineColor: style.color.withAlpha(style.alpha),
+                outlineColor: (style.outline || style.color).withAlpha(style.alpha),
                 closeSurface: true
             }
         };
@@ -672,7 +755,7 @@
         var repeatOn = parseLevelValues(tags.repeat_on) || [];
         var allLevels = levels.concat(repeatOn);
         var height = elementHeight(tags, kind === 'room' ? ROOM_HEIGHT : LEVEL_HEIGHT);
-        var color = colorFor(kind);
+        var color = spaceColorFor(tags, kind);
         var alpha = kind === 'corridor' ? 0.45 : 0.55;
 
         var groundHeights = sampleRingHeights(rings[0]);
@@ -776,7 +859,7 @@
         if (!levels.length) return;
         var minLevel = Math.min.apply(null, levels);
         var maxLevel = Math.max.apply(null, levels);
-        var color = colorFor('steps');
+        var color = colorFor(kind);
         var levelCount = maxLevel - minLevel + 1;
         var heightMeters = Math.round(levelCount * LEVEL_HEIGHT);
         var spanText = (minLevel === maxLevel ? 'L' + minLevel : 'L' + minLevel + '→L' + maxLevel) +
@@ -819,7 +902,7 @@
                 var top = levelBaseMeters(building, maxLevel, null) + LEVEL_HEIGHT;
                 var connectionLevel = levelIsActive(activeLevel) ? activeLevel : minLevel;
                 renderVolume(feature, rings, groundHeights, base,
-                    Math.max(LEVEL_HEIGHT, top - base), colorFor('area'), {
+                    Math.max(LEVEL_HEIGHT, top - base), color, {
                         alpha: kind === 'elevator' ? 0.35 : 0.5,
                         level: connectionLevel
                     });
@@ -1443,6 +1526,8 @@
         setLevelOpacity: setLevelOpacity,
         getLevelOpacity: function () { return LEVEL_VIEW_OPACITY; },
         setActiveLevelOpacity: setActiveLevelOpacity,
-        getActiveLevelOpacity: function () { return ACTIVE_LEVEL_OPACITY; }
+        getActiveLevelOpacity: function () { return ACTIVE_LEVEL_OPACITY; },
+        setIndoorOpacity: setIndoorOpacity,
+        getIndoorOpacity: function () { return indoorOpacity; }
     };
 })();

@@ -233,7 +233,17 @@ const areaRepetitionConfigs = [
            spacing: 1.0,
            maxModels: 10000,
            description: 'Other area-tagged highways'
-       },
+    },
+       {
+        tags: ['highway=elevator'],
+        model: 'w_highway_elevator.glb',
+		textureRotationOffsetDegrees: 0,
+		textureRepeatCount: 1,
+        config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] },
+        spacing: 1.0, // 5 meter spacing for area-tagged residential streets
+        maxModels: 10000,
+        description: ''
+    },
     {
         tags: ['highway=footway'],
         model: 'w_highway_footway.glb',

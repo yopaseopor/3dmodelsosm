@@ -29,6 +29,72 @@ function loaderLog() {
     console.log.apply(console, arguments);
 }
 
+/**
+ * Honour a model descriptor that is already present in the file.
+ *
+ * This is what makes a GeoJSON exported by the 3DMR rotation editor load back
+ * as the same 3DMR model instead of being re-matched to an unrelated OSM tag
+ * mapping. It also preserves the custom heading and height offset, which are
+ * written as `modelRotation` and `modelHeightOffset`.
+ *
+ * @returns {boolean} true when the feature carries its own model descriptor
+ */
+function applyExplicitModelProperties(feature) {
+    if (!feature || typeof feature.get !== 'function') return false;
+    var propertyName = window.OSM3D_MODEL_PROPERTY || 'osm3dModel';
+    var explicit = feature.get(propertyName);
+    var id = feature.get('3dmr:id') || feature.get('3dmr');
+
+    if ((!explicit || typeof explicit !== 'object' || !explicit.uri) && id) {
+        explicit = {
+            uri: 'https://3dmr.eu/api/model/' + encodeURIComponent(String(id)),
+            scale: 1
+        };
+    }
+    if (!explicit || typeof explicit !== 'object' || !explicit.uri) return false;
+
+    feature.set(propertyName, explicit);
+
+    var rotation = feature.get('modelRotation');
+    if (typeof rotation === 'string') {
+        try { rotation = JSON.parse(rotation); } catch (e) { rotation = null; }
+    }
+    if (Array.isArray(rotation) && rotation.length >= 3) {
+        feature.set('modelRotation', rotation.slice(0, 3).map(function (value) {
+            return Number(value) || 0;
+        }));
+    } else {
+        feature.set('modelRotation', [0, 0, 0]);
+    }
+
+    var heightOffset = Number(feature.get('modelHeightOffset'));
+    feature.set('modelHeightOffset', isFinite(heightOffset) ? heightOffset : 0);
+
+    if (id) {
+        if (!feature.get('3dmr')) feature.set('3dmr', String(id));
+        if (!feature.get('3dmr:id')) feature.set('3dmr:id', String(id));
+        if (!feature.get('3dmr:url')) {
+            feature.set('3dmr:url', 'https://3dmr.eu/model/' + encodeURIComponent(String(id)));
+        }
+        if (!feature.get('3dmr:license')) {
+            feature.set('3dmr:license', 'CC0 1.0 / CC BY 4.0 — attribution: 3D Model Repository');
+        }
+        if (!feature.get('source')) feature.set('source', feature.get('3dmr:url'));
+        if (!feature.get('name') && !feature.get('title')) {
+            feature.set('name', '3DMR model #' + id);
+        }
+    }
+
+    // A downloaded 3DMR file is the user's saved orientation. Make it the
+    // default for the same id in later API searches too.
+    if (id && window.threedmr &&
+        typeof window.threedmr.rememberImportedTransform === 'function') {
+        window.threedmr.rememberImportedTransform(feature);
+    }
+
+    return true;
+}
+
 function applyEmptyAreaModelMapping(feature, modelMapping, tags) {
     if (!modelMapping || modelMapping.geometryType !== 'area' || !window.areaRepetition) {
         return false;
@@ -51,9 +117,12 @@ class GeoJSONLoader {
     constructor() {
         this.loadedLayers = new Map(); // Store loaded GeoJSON layers
         this.layerCounter = 0;
+        // Loaded surfaces stay deliberately light: the polygons are context,
+        // not the subject, so the basemap must remain readable underneath.
+        // The same alpha reaches 3D (the plain renderer reads the OL fill).
         this.defaultStyle = {
             fill: {
-                color: 'rgba(117,63,79,0.4)',
+                color: 'rgba(117,63,79,0.18)',
                 outlineColor: 'rgba(117,63,79,1)',
                 outlineWidth: 1
             },
@@ -64,7 +133,7 @@ class GeoJSONLoader {
             circle: {
                 radius: 6,
                 fill: {
-                    color: 'rgba(117,63,79,0.4)'
+                    color: 'rgba(117,63,79,0.18)'
                 },
                 stroke: {
                     color: 'rgba(117,63,79,1)',
@@ -236,6 +305,15 @@ class GeoJSONLoader {
                                 }
                             });
                             
+                            // A downloaded 3DMR file already names its model. Do not
+                            // re-match it through OSM tags, and do not extrude a
+                            // building over it: the explicit descriptor, turn and
+                            // height offset are the user's settings.
+                            if (applyExplicitModelProperties(feature)) {
+                                loaderLog(`📍 Feature ${index}: kept explicit 3D model descriptor`);
+                                return;
+                            }
+
                             // Process for building extrusion
                             if (window.buildings && window.buildings.isBuildingFeature(tags)) {
                                 loaderLog(`📍 Feature ${index}: Found building feature with tags:`, tags);
@@ -621,7 +699,7 @@ class GeoJSONLoader {
             
             // Create fill and stroke using overlay selector colors
             const fill = new ol.style.Fill({
-                color: styleConfig.fill?.color || 'rgba(117,63,79,0.4)'
+                color: styleConfig.fill?.color || 'rgba(117,63,79,0.18)'
             });
             const stroke = new ol.style.Stroke({
                 color: styleConfig.stroke?.color || 'rgba(117,63,79,1)',
@@ -663,7 +741,7 @@ class GeoJSONLoader {
                 imageStyle = new ol.style.Circle({
                     radius: styleConfig.circle?.radius || 6,
                     fill: new ol.style.Fill({
-                        color: styleConfig.circle?.fill?.color || 'rgba(117,63,79,0.4)'
+                        color: styleConfig.circle?.fill?.color || 'rgba(117,63,79,0.18)'
                     }),
                     stroke: new ol.style.Stroke({
                         color: styleConfig.circle?.stroke?.color || 'rgba(117,63,79,1)',

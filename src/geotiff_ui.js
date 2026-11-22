@@ -46,7 +46,7 @@ class GeoTIFFUI {
 
         // Panel content
         this.panel.innerHTML = `
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+            <div id="geotiff-drag-handle" title="Drag to move" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; cursor: move; user-select: none;">
                 <h3 style="margin: 0; color: #4CAF50;">🏔️ Terrain Control</h3>
                 <button id="geotiff-close" style="background: none; border: none; color: white; font-size: 18px; cursor: pointer;">×</button>
             </div>
@@ -82,6 +82,12 @@ class GeoTIFFUI {
 
         // Add to document
         document.body.appendChild(this.panel);
+
+        // Let the title bar drag the panel out of the way of the map.
+        const dragHandle = this.panel.querySelector('#geotiff-drag-handle');
+        if (dragHandle && window.panelDrag && typeof window.panelDrag.makeDraggable === 'function') {
+            window.panelDrag.makeDraggable(this.panel, dragHandle);
+        }
 
         // Store references
         this.fileInput = document.getElementById('geotiff-file');

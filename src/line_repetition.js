@@ -62,7 +62,6 @@
         { tags: ['barrier=guard_rail', 'bridge=yes'], model: 'w_barrier_guard_rail_bridge.glb', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
         { tags: ['barrier=guard_rail'], model: 'w_barrier_guard_rail.glb', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
         { tags: ['waterway=drain'], model: 'w_waterway_drain_intermittent.glb', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
-		{ tags: ['highway'], model: 'w_highway_residential.gltf', config: { scale: 3.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
 		{ tags: ['waterway=stream'], model: 'w_waterway_stream.gltf', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }
     ];
 

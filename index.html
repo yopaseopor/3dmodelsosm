@@ -62,7 +62,7 @@
 			  <button id="geojson-download-btn" type="button" style="width: 100%; padding: 8px; background: #673AB7; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">
 				⬇️ GeoJSON Downloader from Openstreetmap data
 			  </button>
-			  <small id="geojson-download-status" role="status" aria-live="polite" style="color: #ccc; display: block; margin-top: 5px; text-align: center;">Available from zoom 19</small>
+			  <small id="geojson-download-status" role="status" aria-live="polite" style="color: #ccc; display: block; margin-top: 5px; text-align: center;">Available from zoom 18</small>
 			  <div id="geojson-download-result" style="margin-top: 6px; text-align: center;"></div>
 			</div>
 			
@@ -74,6 +74,28 @@
 			  <small style="color: #ccc; display: block; margin-top: 5px; text-align: center;">Press Ctrl+G to toggle</small>
 			</div>
 			
+			<!-- 3D Model Repository (3DMR) -->
+			<div class="threedmr-control">
+			  <label for="threedmr-toggle" class="threedmr-label">
+				<input type="checkbox" id="threedmr-toggle">
+				<span>3D Model Repository (3DMR)</span>
+			  </label>
+			  <small id="threedmr-status" class="threedmr-status" role="status" aria-live="polite">
+				Show 3DMR model locations. The same models load in 3D mode.
+			  </small>
+			  <button id="threedmr-download" class="threedmr-download-btn" type="button" title="Download the 3DMR models currently on the map with their turn and height offset">
+				⬇ Download 3DMR GeoJSON
+			  </button>
+			  <small class="threedmr-rotate-note">
+				In 3D, click a 3DMR model to adjust its turn and height.
+			  </small>
+			  <div id="threedmr-selected" class="threedmr-info"></div>
+			  <small class="threedmr-credit-note">
+				Models © <a href="https://3dmr.eu" target="_blank" rel="noopener">3D Model Repository</a>,
+				CC0 1.0 / CC BY 4.0.
+			  </small>
+			</div>
+
 			<!-- Element Type Filter -->
 			<div class="element-type-filter">
 			  <label data-i18n="nodesCheckbox"><input type="checkbox" class="element-type-checkbox" value="node" checked> Nodes</label>
@@ -163,6 +185,10 @@
 	<script src="src/assets/customyopaseopor-style.js"></script>
 	<script src="src/config.js"></script>
 
+	<!-- Single attribution/credits control: reads visible layer credits and
+	     credits registered by optional services (3DMR, terrain, rendering). -->
+	<script src="src/attributions.js"></script>
+
 	<!-- Modules -->
 	<script type="module" src="src/components/LanguageSelector.js"></script>
 	<script type="module" src="src/language_init.js"></script>
@@ -178,6 +204,8 @@
 	<script src="src/cesium_models.js"></script>
 	<script src="src/mapterhorn_terrain.js"></script>
 	<script src="src/debug_config.js"></script>
+	<!-- Shared drag helper for the floating 3D panels (navigation, stats). -->
+	<script src="src/draggable_panel.js"></script>
 	<!-- Progress/ETA/memory panel. It remains visible until the initial 3D,
 	     terrain, model-asset, and building work is actually ready. -->
 	<script src="src/loading_progress.js"></script>
@@ -213,8 +241,11 @@
 	<script src="src/nominatim_search.js"></script>
 	<script src="src/panoramax_viewer.js"></script>
 	<script src="src/mapillary_viewer.js"></script>
+	<script src="src/object_info.js"></script>
 	<script src="src/nav_controls_3d.js"></script>
 	<script src="src/router.js"></script>
 	<script src="src/index.js"></script>
+	<!-- 3D Model Repository markers in 2D and glTF models in 3D. -->
+	<script src="src/threedmr.js"></script>
 </body>
 </html>

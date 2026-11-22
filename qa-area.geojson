@@ -1,0 +1,47 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": { "name": "QA asphalt", "area:highway": "residential" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [2.29520, 48.85790],
+          [2.29570, 48.85790],
+          [2.29570, 48.85820],
+          [2.29520, 48.85820],
+          [2.29520, 48.85790]
+        ]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "QA parking", "amenity": "parking", "orientation": "parallel" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [2.29575, 48.85790],
+          [2.29620, 48.85790],
+          [2.29620, 48.85820],
+          [2.29575, 48.85820],
+          [2.29575, 48.85790]
+        ]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "QA sidewalk", "area:highway": "footway", "footway": "sidewalk" },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [2.29520, 48.85825],
+          [2.29570, 48.85825],
+          [2.29570, 48.85840],
+          [2.29520, 48.85840],
+          [2.29520, 48.85825]
+        ]]
+      }
+    }
+  ]
+}

@@ -91,6 +91,9 @@
 
         host.innerHTML =
             '<div style="display:flex;align-items:center;gap:8px;pointer-events:none">' +
+                '<span class="lp-grip" title="Drag to move" aria-hidden="true" ' +
+                    'style="pointer-events:auto;cursor:move;touch-action:none;user-select:none;' +
+                    'opacity:.55;font:14px/1 system-ui,sans-serif">⠿</span>' +
                 '<div class="lp-title" style="flex:1;font-weight:600;letter-spacing:.2px"></div>' +
                 '<button class="lp-close" type="button" aria-label="Hide loading statistics" title="Hide loading statistics" ' +
                     'style="pointer-events:auto;cursor:pointer;width:22px;height:22px;line-height:1;' +
@@ -108,6 +111,11 @@
             '<div class="lp-bytes" style="margin-top:2px;font-size:12px;opacity:.72;font-variant-numeric:tabular-nums"></div>';
 
         document.body.appendChild(host);
+        // Same corner problem as the navigation panel: the grip moves the whole
+        // stats panel so the scene (or the other panel) is not covered.
+        if (window.panelDrag) {
+            window.panelDrag.makeDraggable(host, host.querySelector('.lp-grip'));
+        }
         var reopen = document.createElement('button');
         reopen.type = 'button';
         reopen.textContent = '3D loading stats';

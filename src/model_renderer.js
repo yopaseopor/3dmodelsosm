@@ -279,7 +279,8 @@ const PLAIN_MARKER_PIXEL_SIZE = 7;
 const hasCesium = typeof Cesium !== 'undefined';
 const PLAIN_MARKER_COLOR = hasCesium ? Cesium.Color.fromCssColorString('#e6a01a') : null;
 const PLAIN_LINE_COLOR = hasCesium ? Cesium.Color.fromCssColorString('#e6a01a').withAlpha(0.9) : null;
-const PLAIN_AREA_COLOR = hasCesium ? Cesium.Color.fromCssColorString('#e6a01a').withAlpha(0.25) : null;
+// Unstyled polygon surfaces are context only, so keep them light in 3D too.
+const PLAIN_AREA_COLOR = hasCesium ? Cesium.Color.fromCssColorString('#e6a01a').withAlpha(0.15) : null;
 
 /** Best-effort read of the OL style so the 3D marker resembles the 2D one. */
 function readPlainStyle(feature, layer) {
@@ -347,6 +348,33 @@ function getFeatureModelOptions(feature) {
 // Expose for modules loaded after this one (repetitions, geojson loader, ...).
 window.OSM3D_MODEL_PROPERTY = OSM3D_MODEL_PROPERTY;
 window.getFeatureModelOptions = getFeatureModelOptions;
+
+/**
+ * Apply a feature's [x, yaw, z] rotation to an ENU model matrix.
+ *
+ * The existing convention (models.js, model_repetition.js) stores the
+ * horizontal heading in index 1 and rotates around the local Z axis. Keeping
+ * that in one helper means the live rotation control cannot drift from the
+ * placement path.
+ */
+function applyFeatureRotationToMatrix(modelMatrix, modelRotation) {
+    if (!modelMatrix || !modelRotation || !Array.isArray(modelRotation) || modelRotation.length < 3) {
+        return modelMatrix;
+    }
+    if (modelRotation[1] !== 0) {
+        const bearingRotation = Cesium.Matrix3.fromRotationZ(modelRotation[1]);
+        modelMatrix = Cesium.Matrix4.multiplyByMatrix3(modelMatrix, bearingRotation, new Cesium.Matrix4());
+    }
+    if (modelRotation[0] !== 0) {
+        const xRotation = Cesium.Matrix3.fromRotationX(modelRotation[0]);
+        modelMatrix = Cesium.Matrix4.multiplyByMatrix3(modelMatrix, xRotation, new Cesium.Matrix4());
+    }
+    if (modelRotation[2] !== 0) {
+        const zRotation = Cesium.Matrix3.fromRotationZ(modelRotation[2]);
+        modelMatrix = Cesium.Matrix4.multiplyByMatrix3(modelMatrix, zRotation, new Cesium.Matrix4());
+    }
+    return modelMatrix;
+}
 
 /**
  * Ground elevation (metres) for a lon/lat, from whichever DEM is in use.
@@ -1026,6 +1054,7 @@ window.modelRenderer = {
             if (pooledModel) {
                 pooledModel.isVisible = false;
                 pooledModel.model.show = false;
+                pooledModel.model._olFeature = null;
                 if (debugConfig.enabled) console.log(`♻️ Returned model to pool: ${modelUrl}`);
                 // Clean up pool periodically when returning models
                 if (Math.random() < 0.1) { // 10% chance to clean up
@@ -1350,6 +1379,91 @@ window.modelRenderer = {
         if (scene.requestRender) scene.requestRender();
     },
 
+    /**
+     * Change a model's horizontal rotation without reloading its glb.
+     *
+     * Used by the 3DMR rotation handle. The feature property is updated even
+     * when the primitive has not been placed yet (it may be far away or still
+     * loading), so the next renderer pass picks the new orientation up.
+     *
+     * @returns {boolean} true when a live primitive was updated as well
+     */
+    setFeatureRotation: function(feature, rotation, cesiumScene) {
+        if (!feature || typeof feature.set !== 'function') return false;
+        const normalized = Array.isArray(rotation)
+            ? rotation.slice(0, 3).map(function (value) { return Number(value) || 0; })
+            : [0, 0, 0];
+        feature.set('modelRotation', normalized);
+
+        const key = getFeatureKey(feature);
+        const entry = key && this.loadedModels ? this.loadedModels.get(key) : null;
+        if (!entry || !entry.model || entry.kind !== 'model') return false;
+
+        try {
+            const matrix = entry.model.modelMatrix;
+            if (!matrix) return false;
+            const translation = Cesium.Matrix4.getTranslation(matrix, new Cesium.Cartesian3());
+            let base = Cesium.Transforms.eastNorthUpToFixedFrame(translation);
+            if (!entry.isTunnel && !entry.isBridge && !entry.isUnderBridge &&
+                window.mapterhornTerrain && window.mapterhornTerrain.applySlopeTilt) {
+                try {
+                    base = window.mapterhornTerrain.applySlopeTilt(base, entry.lon, entry.lat);
+                } catch (e) { /* no DEM tile yet */ }
+            }
+            entry.model.modelMatrix = applyFeatureRotationToMatrix(base, normalized);
+            const scene = cesiumScene || (window.ol3d && window.ol3d.getCesiumScene
+                ? window.ol3d.getCesiumScene() : null);
+            if (scene && scene.requestRender) scene.requestRender();
+            return true;
+        } catch (e) {
+            return false;
+        }
+    },
+
+    /**
+     * Change a placed model's vertical offset without reloading its glb.
+     * The translation is the only part of the matrix that moves; rotation and
+     * slope tilt stay untouched.
+     *
+     * @returns {boolean} true when a live primitive was updated as well
+     */
+    setFeatureHeightOffset: function(feature, offset, cesiumScene) {
+        if (!feature || typeof feature.set !== 'function') return false;
+        const next = Number(offset);
+        if (!isFinite(next)) return false;
+        const previous = Number(feature.get('modelHeightOffset')) || 0;
+        feature.set('modelHeightOffset', next);
+
+        const key = getFeatureKey(feature);
+        const entry = key && this.loadedModels ? this.loadedModels.get(key) : null;
+        if (!entry || !entry.model || entry.kind !== 'model') return false;
+
+        try {
+            const matrix = entry.model.modelMatrix;
+            if (!matrix || entry.lon === undefined || entry.lat === undefined) return false;
+            const oldOffset = entry.heightOffset !== undefined && entry.heightOffset !== null
+                ? Number(entry.heightOffset) : previous;
+            const oldHeight = Cesium.Cartographic.fromCartesian(
+                Cesium.Matrix4.getTranslation(matrix, new Cesium.Cartesian3())).height;
+            if (!isFinite(oldHeight)) return false;
+
+            const updated = Cesium.Matrix4.clone(matrix);
+            Cesium.Matrix4.setTranslation(
+                updated,
+                Cesium.Cartesian3.fromDegrees(entry.lon, entry.lat, oldHeight + (next - oldOffset)),
+                updated
+            );
+            entry.model.modelMatrix = updated;
+            entry.heightOffset = next;
+            const scene = cesiumScene || (window.ol3d && window.ol3d.getCesiumScene
+                ? window.ol3d.getCesiumScene() : null);
+            if (scene && scene.requestRender) scene.requestRender();
+            return true;
+        } catch (e) {
+            return false;
+        }
+    },
+
     /** Stop counting `key` and forget it. Does NOT destroy the primitive. */
     untrackEntry: function(key) {
         const entry = this.loadedModels.get(key);
@@ -1469,6 +1583,14 @@ window.modelRenderer = {
         const stale = [];
         this.loadedModels.forEach(function(entry, key) {
             if (entry.lon === undefined || entry.lat === undefined) return;
+            // 3DMR is an explicitly enabled, capped (100 models) layer. Its
+            // models must not be dropped by the generic camera range cleanup:
+            // the camera flight into 3D can put a model outside unloadDistance
+            // after it has rendered, and it then vanishes without a way to
+            // place it again until the layer is refreshed. The layer itself
+            // releases models when they leave its search results or are
+            // disabled.
+            if (entry.feature && entry.feature.get && entry.feature.get('3dmr:id')) return;
             if (this._roughDistance(entry, camLon, camLat, camHeight) > memoryConfig.unloadDistance) {
                 stale.push(key);
             }
@@ -1507,6 +1629,10 @@ window.modelRenderer = {
         const eligible = [];
         this.loadedModels.forEach(function(entry, key) {
             if (entry.lon === undefined || entry.lat === undefined) return;
+            // See unloadDistantModels: a user-enabled 3DMR layer stays resident
+            // across camera moves; only a 3DMR refresh or disabling the layer
+            // releases it.
+            if (entry.feature && entry.feature.get && entry.feature.get('3dmr:id')) return;
             const d = this._roughDistance(entry, camLon, camLat, camHeight);
             if (d > memoryConfig.unloadDistance) eligible.push([d, key]);
         }, this);
@@ -1968,23 +2094,9 @@ window.modelRenderer = {
         
         // Apply model rotation if specified
         const modelRotation = feature.get('modelRotation');
-        if (modelRotation && Array.isArray(modelRotation) && modelRotation.length >= 3) {
-            if (modelRotation[1] !== 0) {
-                const bearingRotation = Cesium.Matrix3.fromRotationZ(modelRotation[1]);
-                modelMatrix = Cesium.Matrix4.multiplyByMatrix3(modelMatrix, bearingRotation, new Cesium.Matrix4());
-            }
-            
-            if (modelRotation[0] !== 0) {
-                const xRotation = Cesium.Matrix3.fromRotationX(modelRotation[0]);
-                modelMatrix = Cesium.Matrix4.multiplyByMatrix3(modelMatrix, xRotation, new Cesium.Matrix4());
-            }
-            
-            if (modelRotation[2] !== 0) {
-                const zRotation = Cesium.Matrix3.fromRotationZ(modelRotation[2]);
-                modelMatrix = Cesium.Matrix4.multiplyByMatrix3(modelMatrix, zRotation, new Cesium.Matrix4());
-            }
-            
-            if (debugConfig.enabled) console.log(`🎯 Applied rotation to model: [${modelRotation.map(r => (r * 180 / Math.PI).toFixed(2) + '°').join(', ')}]`);
+        modelMatrix = applyFeatureRotationToMatrix(modelMatrix, modelRotation);
+        if (debugConfig.enabled && modelRotation && Array.isArray(modelRotation) && modelRotation.length >= 3) {
+            console.log(`🎯 Applied rotation to model: [${modelRotation.map(r => (r * 180 / Math.PI).toFixed(2) + '°').join(', ')}]`);
         }
         
         // IMPORTANT: no distance-based scaling. Shrinking far models made them
@@ -1998,6 +2110,10 @@ window.modelRenderer = {
         // way beneath a bridge onto the bridge surface.
         pooledModel.model.heightReference = Cesium.HeightReference.NONE;
         pooledModel.model.show = true; // Ensure it's visible
+        // Object inspector support: a Cesium.Model has no entity properties, so
+        // keep the OL feature here too. Pooled models are reassigned to a new
+        // feature on every placement, so this always reflects the visible model.
+        pooledModel.model._olFeature = feature;
 
         // Track loaded model for the current 3D session only
         this.trackEntry(featureId, {
@@ -2311,7 +2427,7 @@ window.modelRenderer = {
         if (!repIsTunnel && window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
             try { window.mapterhornTerrain.warmUp(repLonLat[0], repLonLat[1]); } catch (e) { /* no DEM yet */ }
         }
-        
+
         // Get terrain elevation. For bridges: cache reference DEM height on
         // first repetition so the whole bridge stays FLAT at one elevation
         // (no undulation down mountains). Non-bridge ways sample per-position
@@ -2358,7 +2474,7 @@ window.modelRenderer = {
                               feature.get(`repetition_${repIndex}_rotation`);
         }
         
-        // Note: textureRotationOffsetDegrees is already baked into the rotation field 
+        // Note: textureRotationOffsetDegrees is already baked into the rotation field
         // during applyAreaRepetitions/generateAreaRepetitions calculation of effectiveBearing.
 
         if (repModelRotation && Array.isArray(repModelRotation) && repModelRotation.length >= 3) {
@@ -2394,6 +2510,8 @@ window.modelRenderer = {
             scale: repModel.scale || 1.0,
             show: true
         }));
+        // Each repetition is its own primitive, so it can carry its own feature.
+        repCesiumModel._olFeature = feature;
         this.trackModelReadiness(repCesiumModel, repModel.uri);
         
         // Keep the sampled height explicit. Ground-clamping can snap an
@@ -3642,7 +3760,7 @@ window.modelRenderer = {
             const created = [];
             paths.forEach(path => {
                 if (!path || path.length < 2) return;
-                created.push(dataSource.entities.add({
+                const entity = dataSource.entities.add({
                     id: this._nextPlainId(),
                     polyline: {
                         positions: path,
@@ -3651,7 +3769,9 @@ window.modelRenderer = {
                         // Drapes the line over hills, valleys and inclines.
                         clampToGround: true
                     }
-                }));
+                });
+                entity._olFeature = feature;
+                created.push(entity);
             });
             if (!created.length) return;
             this.plainResults.set(feature, { entities: created, layer: layer, sessionId: this._session3dId });
@@ -3685,6 +3805,7 @@ window.modelRenderer = {
             id: this._nextPlainId(),
             position: positions[0]
         }, graphics));
+        entity._olFeature = feature;
         this.plainResults.set(feature, { entities: [entity], layer: layer, sessionId: this._session3dId });
         if (debugConfig.enabled) console.log('➖ Plain ' + type + ' draped on ground');
     },
@@ -3720,6 +3841,31 @@ window.modelRenderer = {
     },
 
     /**
+     * Place one layer's features without waiting for an in-flight sweep.
+     *
+     * Only used for small, user-invoked layers such as 3DMR. The normal
+     * addAllModels() path is still responsible for the full pass and its
+     * progress reporting; placing already-tracked features is a no-op there.
+     */
+    placeLayerImmediately: function(layer, cesiumScene) {
+        if (!layer || !cesiumScene) return 0;
+        const groups = this.collectPlaceGroups([layer], cesiumScene, []);
+        let placed = 0;
+        groups.forEach(function(group) {
+            group.features.forEach(function(feature, index) {
+                try {
+                    this.placeFeature(feature, index, cesiumScene, group.layer);
+                    placed++;
+                } catch (error) {
+                    console.error('🎯 Priority layer feature failed, skipping:', error);
+                }
+            }, this);
+        }, this);
+        this.recountLive();
+        return placed;
+    },
+
+    /**
      * Release the plain markers that belong to one layer.
      *
      * Removing a GeoJSON layer frees its models and textures through
@@ -3749,7 +3895,7 @@ window.modelRenderer = {
         return released;
     },
 
-    addAllModels: function() {
+    addAllModels: function(options) {
         if (debugConfig.enabled) console.log('🎯 addAllModels: scanning layers for 3D models');
         if (!window.ol3d) {
             if (debugConfig.enabled) console.log('🎯 ol3d unavailable');
@@ -3805,10 +3951,28 @@ window.modelRenderer = {
                 // One pass at a time: a second sweep arriving mid-pass (a new
                 // query, the +3s retry) waits for this one instead of placing
                 // the same features concurrently.
-                if (this._placing) { this._pendingSweep = true; return; }
+                if (this._placing) {
+                    // A GeoJSON file can keep a sweep busy for a long time. When
+                    // the user ticks 3DMR while that is happening, placing its
+                    // layer now is the difference between the model appearing
+                    // immediately and appearing after every GeoJSON feature.
+                    if (options && options.priorityLayer) {
+                        this.placeLayerImmediately(options.priorityLayer, cesiumScene);
+                    }
+                    this._pendingSweep = true;
+                    return;
+                }
 
                 const layers = window.map.getLayers().getArray();
                 const groups = this.collectPlaceGroups(layers, cesiumScene, []);
+                // 3DMR is a small, explicitly enabled layer. Walk it before
+                // large GeoJSON/OSM layers so its glbs are not queued behind
+                // thousands of other features or lose the primitive budget race.
+                groups.sort(function(a, b) {
+                    const aPriority = a.layer && a.layer.get && a.layer.get('is3dmr') ? 0 : 1;
+                    const bPriority = b.layer && b.layer.get && b.layer.get('is3dmr') ? 0 : 1;
+                    return aPriority - bPriority;
+                });
                 const featureTotal = groups.reduce(function(count, group) { return count + group.features.length; }, 0);
                 // Tell the panel the real total BEFORE any work starts, so the
                 // percentage it shows is a percentage of something.

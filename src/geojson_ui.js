@@ -54,7 +54,7 @@ class GeoJSONUI {
 
         // Panel content
         this.panel.innerHTML = `
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+            <div id="geojson-drag-handle" title="Drag to move" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; cursor: move; user-select: none;">
                 <h3 style="margin: 0; color: #2196F3;">📍 GeoJSON Loader</h3>
                 <button id="geojson-close" style="background: none; border: none; color: white; font-size: 18px; cursor: pointer;">×</button>
             </div>
@@ -94,6 +94,15 @@ class GeoJSONUI {
 
         // Add to document
         document.body.appendChild(this.panel);
+
+        // The panel floats over the map, so let its title bar move it out of
+        // the way. Buttons and fields keep their own behaviour.
+        if (window.panelDrag) {
+            window.panelDrag.makeDraggable(
+                this.panel,
+                this.panel.querySelector('#geojson-drag-handle')
+            );
+        }
 
         // Store references
         this.fileInput = document.getElementById('geojson-file');
@@ -172,8 +181,8 @@ class GeoJSONUI {
         await new Promise(resolve => window.requestAnimationFrame(resolve));
 
         const view = map.getView();
-        if (view.getZoom() < 19) {
-            this.setDownloadStatus('Zoom to level 19 or higher to download.');
+        if (view.getZoom() < 18) {
+            this.setDownloadStatus('Zoom to level 18 or higher to download.');
             return;
         }
 

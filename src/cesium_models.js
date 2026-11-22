@@ -32,8 +32,29 @@ class AreaTextureManager {
      * Initialize or get the AreaTextures data source
      */
     getDataSource() {
-        if (!this.dataSource && window.ol3d && window.ol3d.getDataSources) {
-            const dataSources = window.ol3d.getDataSources();
+        const dataSources = window.ol3d && window.ol3d.getDataSources
+            ? window.ol3d.getDataSources() : null;
+
+        // A 3D session replaces ol-cesium's DataSourceCollection, but this
+        // manager lives for the whole page. Never hand back the previous
+        // session's data source: entities added to it belong to a destroyed
+        // scene and render nowhere.
+        if (this.dataSource) {
+            let attached = false;
+            if (dataSources) {
+                for (let i = 0; i < dataSources.length; i++) {
+                    if (dataSources.get(i) === this.dataSource) {
+                        attached = true;
+                        break;
+                    }
+                }
+            }
+            const destroyed = typeof this.dataSource.isDestroyed === 'function' &&
+                this.dataSource.isDestroyed();
+            if (!attached || destroyed) this.dataSource = null;
+        }
+
+        if (!this.dataSource && dataSources) {
             for (let i = 0; i < dataSources.length; i++) {
                 const ds = dataSources.get(i);
                 if (ds.name === 'AreaTextures') {
@@ -48,6 +69,39 @@ class AreaTextureManager {
             }
         }
         return this.dataSource;
+    }
+
+    /**
+     * Forget everything tied to the Cesium scene that is being destroyed.
+     *
+     * Features keep `areaEntity` after the scene disappears. `createAreaEntity`
+     * treats that stale property as "already built" and skips the feature on
+     * the next entry into 3D, so the flags must be cleared with the scene.
+     */
+    resetScene() {
+        this.dataSource = null;
+        this.areaEntities.clear();
+        if (!window.map || typeof window.map.getLayers !== 'function') return;
+
+        const clearFeatures = function (featureSource) {
+            if (!featureSource || typeof featureSource.getFeatures !== 'function') return;
+            featureSource.getFeatures().forEach(function (feature) {
+                if (feature && typeof feature.set === 'function' && feature.get('areaEntity')) {
+                    feature.set('areaEntity', undefined);
+                }
+            });
+        };
+        const walk = function (layers) {
+            (layers || []).forEach(function (layer) {
+                if (!layer) return;
+                if (typeof layer.getLayers === 'function') {
+                    walk(layer.getLayers().getArray());
+                    return;
+                }
+                if (typeof layer.getSource === 'function') clearFeatures(layer.getSource());
+            });
+        };
+        walk(window.map.getLayers().getArray());
     }
 
     getRenderOrder(tagsObj, config) {
@@ -404,6 +458,7 @@ class AreaTextureManager {
                             renderOrder,
                             shouldShowAreaTexture(tagsObj)
                         );
+                        entity._olFeature = feature;
                         entities.push(entity);
                         continue;
                     }
@@ -443,6 +498,7 @@ class AreaTextureManager {
                         const scene = window.ol3d.getCesiumScene();
                         if (scene && scene.primitives) scene.primitives.add(gpTexture);
                     }
+                    gpTexture._olFeature = feature;
                     entities.push(gpTexture);
                     if (cesiumModelsVerbose()) console.log(`🎨 Created GroundPrimitive for polygon ${pIdx}`);
                 } catch (e) {
@@ -1067,6 +1123,15 @@ class AreaTextureManager {
 
 // Global area texture manager instance
 window.areaTextureManager = new AreaTextureManager();
+
+// ol-cesium destroys the scene (and its DataSourceCollection) on every exit
+// from 3D. The manager is a page-level singleton, so its cached scene objects
+// must be dropped explicitly before the next 3D session.
+window.addEventListener('ol3dDestroyed', function () {
+    if (window.areaTextureManager && typeof window.areaTextureManager.resetScene === 'function') {
+        window.areaTextureManager.resetScene();
+    }
+});
 
 // Export for use in other modules
 if (typeof module !== 'undefined' && module.exports) {

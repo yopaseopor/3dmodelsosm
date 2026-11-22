@@ -6,6 +6,7 @@
 // Global storage for building entities
 let buildingEntities = new Map(); // feature -> cesium entity
 let ol3dInstance = null;
+let buildingsHidden = false; // 3D nav-panel toggle: hide every OSM/GeoJSON building
 window.buildings = window.buildings || {};
 
 // Walls extend this far below the sampled ground base, so the building can
@@ -793,6 +794,10 @@ function buildRoofPrimitive(params) {
  */
 function addRoofVisual(feature, kind, ref) {
     if (!feature || !ref) return;
+    // Roof caps and pitched roofs are separate Cesium objects: let the object
+    // inspector resolve a click on them to the building feature.
+    ref._olFeature = feature;
+    if (buildingsHidden && ref.show !== undefined) ref.show = false;
     if (!roofVisuals.has(feature)) roofVisuals.set(feature, []);
     roofVisuals.get(feature).push({ kind: kind, ref: ref });
 }
@@ -1460,6 +1465,10 @@ function createBuildingEntity(buildingData, container) {
             try { window.indoor.syncBuildingEntity(entity, layerOffset < 0); } catch (e) { /* noop */ }
         }
 
+        // The nav-panel hide toggle must also win over indoor/underground mode
+        // updates that ran while this entity was being created.
+        if (buildingsHidden) entity.show = false;
+
         if (buildingLog()) console.log(`🏗️ Created Cesium entity for building with height ${height}m (${roofShape} roof) at position:`, positions[0]); // Log first position for debugging
         return entity;
 
@@ -1695,6 +1704,7 @@ function addBuildingsToScene(ol3d) {
     } else {
         console.log('🏗️ Using existing Buildings data source');
     }
+    dataSource.show = !buildingsHidden;
 
     // Process all features that have building data.
     //
@@ -1831,18 +1841,50 @@ function cleanupBuildingEntities() {
  * @param {boolean} visible - Whether buildings should be visible
  */
 function setBuildingsVisible(visible) {
-    buildingEntities.forEach(entity => {
-        entity.show = visible;
-    });
-    roofVisuals.forEach(visuals => {
-        visuals.forEach(v => {
-            if (v.ref) v.ref.show = visible;
-            if (v.ref && v.ref.polyline) v.ref.polyline.show = visible;
-            if (v.ref && v.ref.polygon) v.ref.polygon.show = visible;
-            if (v.ref && v.ref.wall) v.ref.wall.show = visible;
+    buildingsHidden = !visible;
+
+    // The data source covers walls created by index.js/geojson_loader that
+    // were never registered in buildingEntities. Setting show there is the
+    // strongest guarantee that every OSM/GeoJSON building disappears.
+    const dataSource = getBuildingsDataSource();
+    if (dataSource) dataSource.show = !!visible;
+
+    if (!visible) {
+        buildingEntities.forEach(entity => {
+            if (entity) entity.show = false;
         });
-    });
+        forEachBuildingWallEntity(entity => {
+            entity.show = false;
+        });
+        roofVisuals.forEach(visuals => {
+            visuals.forEach(v => {
+                if (!v || !v.ref) return;
+                v.ref.show = false;
+                if (v.ref.polyline) v.ref.polyline.show = false;
+                if (v.ref.polygon) v.ref.polygon.show = false;
+                if (v.ref.wall) v.ref.wall.show = false;
+            });
+        });
+    } else {
+        // Restore the normal mode-aware visibility instead of blindly showing
+        // layer<0 parts or surface buildings in underground view.
+        const indoor = window.indoor;
+        const underground = !!(indoor && typeof indoor.isUndergroundEnabled === 'function' &&
+            indoor.isUndergroundEnabled());
+        const activeLevel = indoor && typeof indoor.isEnabled === 'function' &&
+            indoor.isEnabled() && typeof indoor.getActiveLevel === 'function'
+            ? indoor.getActiveLevel() : null;
+        setUndergroundView(underground);
+        if (activeLevel !== null && activeLevel !== undefined && activeLevel !== '') {
+            setBuildingLevelVisibility(activeLevel, underground);
+        }
+    }
     console.log(`🏗️ Set building visibility to: ${visible}`);
+}
+
+/** True unless the user used the 3D nav-panel building toggle to hide them. */
+function areBuildingsVisible() {
+    return !buildingsHidden;
 }
 
 /**
@@ -1858,12 +1900,12 @@ function setUndergroundView(enabled) {
         const below = entityIsUnderground(entity, feature);
         // Underground mode: keep ONLY layer<0 volumes; normal mode: show only
         // surface volumes (layer>=0).
-        entity.show = enabled ? below : !below;
+        entity.show = !buildingsHidden && (enabled ? below : !below);
     });
     roofVisuals.forEach((visuals, feature) => {
         const data = feature && feature.get ? feature.get('extrudedBuilding') : null;
         const below = !!(data && data.layerOffset < 0);
-        const show = enabled ? below : !below;
+        const show = !buildingsHidden && (enabled ? below : !below);
         visuals.forEach(v => {
             if (!v || !v.ref) return;
             if (v.ref.show !== undefined) v.ref.show = show;
@@ -1933,6 +1975,7 @@ function buildingEntityMatchesLevel(tags, level) {
 }
 
 function isBuildingEntityVisibleAtLevel(entity, level, undergroundEnabled, feature) {
+    if (buildingsHidden) return false;
     if (level === null || level === undefined || level === '') return true;
     const underground = entityIsUnderground(entity, feature);
     const tags = getBuildingEntityTags(entity, feature);
@@ -1942,13 +1985,15 @@ function isBuildingEntityVisibleAtLevel(entity, level, undergroundEnabled, featu
 function setBuildingLevelVisibility(level, undergroundEnabled) {
     if (level === null || level === undefined || level === '') return;
     forEachBuildingWallEntity((entity, feature) => {
-        entity.show = isBuildingEntityVisibleAtLevel(entity, level, undergroundEnabled, feature);
+        entity.show = !buildingsHidden &&
+            isBuildingEntityVisibleAtLevel(entity, level, undergroundEnabled, feature);
     });
     roofVisuals.forEach((visuals, feature) => {
         const data = feature && feature.get ? feature.get('extrudedBuilding') : null;
         const tags = (data && data.tags) || (feature && feature.get ? feature.get('buildingTags') : null);
         const underground = !!(data && data.layerOffset < 0);
-        const visible = (!undergroundEnabled || underground) && buildingEntityMatchesLevel(tags, level);
+        const visible = !buildingsHidden &&
+            (!undergroundEnabled || underground) && buildingEntityMatchesLevel(tags, level);
         visuals.forEach(v => {
             if (v && v.ref && v.ref.show !== undefined) v.ref.show = visible;
         });
@@ -2151,6 +2196,7 @@ window.buildings = {
     removeBuildingsFromScene,
     cleanupBuildingEntities,
     setBuildingsVisible,
+    areBuildingsVisible,
     setBuildingsTranslucent,
     applyWallTranslucency,
     setUndergroundView,

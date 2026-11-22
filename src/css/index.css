@@ -539,26 +539,38 @@ CLEAR ACTIVE OVERLAY BUTTON
 	.menu{
 		height: 100%;
 		width: 300px;
+		/* One scrollbar for the whole sidebar, in both 2D and 3D mode. */
+		overflow-y: auto;
+		overflow-x: hidden;
+		padding-bottom: 16px;
 	}
 	.osmcat-menu{
 		display: flex;
 		flex-direction: column;
-		height: 100%;
+		flex: 0 0 auto;
+		height: auto;
+		max-height: none;
+		overflow-y: visible;
 	}
 
-	/* Layers and Overlays side by side - Overlay takes 1/3, Layers take 2/3 */
+	/* Let the layer and overlay sections keep their natural height so the
+	   sidebar itself scrolls, instead of giving each section its own tiny
+	   scrollbar. */
+	.osmcat-layer,
+	.osmcat-content,
+	.osmcat-overlay {
+		flex: 0 0 auto;
+		max-height: none;
+		overflow-y: visible;
+	}
+
 	.osmcat-layer {
 		width: 100%;
-		flex: 1 1 66.67%; /* Take 2/3 of the space */
-		max-height: 100%; /* Allow full height */
-		overflow-y: auto;
 	}
 
 	.osmcat-overlay {
 		width: 100%;
-		flex: 1 1 33.33%; /* Take 1/3 of the space */
-		height: 100%; /* Use full allocated height */
-		overflow-y: auto;
+		height: auto;
 		display: flex;
 		flex-direction: column;
 	}
@@ -566,6 +578,13 @@ CLEAR ACTIVE OVERLAY BUTTON
 	.osmcat-content > div:hover {
 		cursor: pointer;
 		background-color: rgba(36,0,136,.3);
+	}
+
+	/* Keep the way back to 2D in view while the menu is scrolled. */
+	#return-to-2d-btn {
+		position: sticky;
+		top: 0;
+		z-index: 6;
 	}
 }
 
@@ -1158,4 +1177,567 @@ mark {
     height: 12px;
     border-radius: 2px;
     border: 1px solid rgba(0,0,0,0.1);
+}
+
+/* ====================================
+   3D MODEL REPOSITORY (3DMR)
+   ==================================== */
+
+.threedmr-control {
+    margin: 10px 8px;
+    padding: 8px;
+    background: #fff;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+}
+
+.threedmr-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: #333;
+    cursor: pointer;
+    font-weight: 700;
+}
+
+.threedmr-label input {
+    margin: 0;
+}
+
+.threedmr-status {
+    display: block;
+    margin-top: 5px;
+    color: #666;
+    font-size: 11px;
+    line-height: 1.3;
+}
+
+.threedmr-credit-note {
+    display: block;
+    margin-top: 5px;
+    color: #777;
+    font-size: 10px;
+    line-height: 1.3;
+}
+
+.threedmr-credit-note a {
+    color: #673AB7;
+}
+
+.threedmr-download-btn {
+    display: block;
+    width: 100%;
+    margin-top: 7px;
+    padding: 6px 8px;
+    border: 1px solid #7e57c2;
+    border-radius: 4px;
+    background: #f3e5f5;
+    color: #4a148c;
+    font-weight: 700;
+    font-size: 11px;
+    cursor: pointer;
+}
+
+.threedmr-download-btn:hover {
+    background: #ede7f6;
+}
+
+.threedmr-rotate-note {
+    display: block;
+    margin-top: 5px;
+    color: #666;
+    font-size: 10px;
+    line-height: 1.3;
+}
+
+.threedmr-info {
+    display: none;
+    margin-top: 8px;
+    padding: 7px;
+    background: #f3e5f5;
+    border: 1px solid #ce93d8;
+    border-radius: 4px;
+    font-size: 11px;
+    line-height: 1.4;
+    color: #333;
+}
+
+.threedmr-info-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 4px;
+}
+
+.threedmr-info-head strong {
+    font-size: 12px;
+}
+
+.threedmr-info-close {
+    flex: 0 0 auto;
+    border: 0;
+    background: transparent;
+    color: #6a1b9a;
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0 2px;
+}
+
+.threedmr-info a {
+    display: inline-block;
+    margin-bottom: 4px;
+    color: #673AB7;
+}
+
+.threedmr-info-meta {
+    color: #555;
+    font-size: 10px;
+}
+
+/* One coherent attribution control for 2D and 3D. The native OL attribution
+   and Cesium credit widget are hidden because this control reads their
+   credits and presents them in a single, non-overlapping place. */
+.attributions-ready .ol-attribution {
+    display: none !important;
+}
+
+/* Cesium 1.95 splits its credit widget into a logo container and a text
+   container, not just .cesium-widget-credits. Hide those native pieces: their
+   Cesium/Mapterhorn credits are already present in #map-attributions, and the
+   native row overlaps the scale line. */
+.cesium-widget-credits,
+.cesium-credit-logoContainer,
+.cesium-credit-textContainer,
+.cesium-credit-expand-link,
+.cesium-credit-lightbox-overlay {
+    display: none !important;
+}
+
+#map-attributions {
+    position: fixed;
+    left: 8px;
+    bottom: 34px; /* clear of the OpenLayers/3D scale line */
+    z-index: 1400;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    max-width: min(70vw, 760px);
+    color: #222;
+    font: 11px/1.35 Arial, sans-serif;
+}
+
+.map-attributions-ticker {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    padding: 3px 8px;
+    background: rgba(255, 255, 255, 0.94);
+    border: 1px solid rgba(0, 0, 0, 0.22);
+    border-radius: 4px;
+    color: #333;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.14);
+}
+
+.map-attributions-track {
+    display: inline-flex;
+    width: max-content;
+    white-space: nowrap;
+}
+
+.map-attributions-sequence {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    white-space: nowrap;
+}
+
+/* Keep each credit as ordinary inline text. Using a nested inline-flex here
+   turned the words and the <a> into separate flex items, which stripped the
+   spaces around the link ("©OpenStreetMapcontributors"). */
+.map-attributions-credit {
+    display: inline-block;
+    white-space: nowrap;
+}
+
+.map-attributions-credit a {
+    color: #00447b;
+}
+
+.map-attributions-separator {
+    margin: 0 3px;
+    color: #888;
+}
+
+.map-attributions-scrolling .map-attributions-sequence {
+    padding-right: 28px;
+}
+
+.map-attributions-scrolling .map-attributions-track {
+    animation-name: map-attributions-marquee;
+    animation-timing-function: linear;
+    animation-iteration-count: infinite;
+}
+
+#map-attributions:hover .map-attributions-track,
+#map-attributions:focus-within .map-attributions-track {
+    animation-play-state: paused;
+}
+
+@keyframes map-attributions-marquee {
+    from { transform: translateX(0); }
+    to { transform: translateX(-50%); }
+}
+
+#map-attributions-toggle {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 24px;
+    padding: 0;
+    background: rgba(255, 255, 255, 0.94);
+    border: 1px solid rgba(0, 0, 0, 0.22);
+    border-radius: 4px;
+    color: #333;
+    font: 700 12px/1 Arial, sans-serif;
+    cursor: pointer;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.14);
+}
+
+#map-attributions-toggle:hover,
+#map-attributions-toggle[aria-expanded="true"] {
+    background: #fff;
+    border-color: #555;
+}
+
+#map-attributions-toggle:focus-visible,
+#map-attributions-panel button:focus-visible {
+    outline: 2px solid #1a73e8;
+    outline-offset: 1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .map-attributions-scrolling .map-attributions-track {
+        animation: none;
+        transform: none;
+    }
+
+    .map-attributions-sequence-clone {
+        display: none;
+    }
+
+    .map-attributions-ticker {
+        overflow-x: auto;
+        scrollbar-width: thin;
+    }
+}
+
+#map-attributions-panel {
+    position: absolute;
+    left: 0;
+    bottom: calc(100% + 6px);
+    width: 430px;
+    max-width: calc(100vw - 16px);
+    max-height: min(52vh, 440px);
+    overflow-y: auto;
+    padding: 8px 10px 9px;
+    background: rgba(255, 255, 255, 0.98);
+    border: 1px solid #aaa;
+    border-radius: 6px;
+    box-shadow: 0 4px 18px rgba(0, 0, 0, 0.24);
+}
+
+#map-attributions-panel[hidden] {
+    display: none;
+}
+
+.map-attributions-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: -8px -10px 8px;
+    padding: 6px 8px;
+    background: #f1f3f4;
+    border-bottom: 1px solid #ddd;
+    border-radius: 6px 6px 0 0;
+}
+
+.map-attributions-head strong {
+    flex: 1 1 auto;
+    color: #202124;
+    font-size: 12px;
+}
+
+.map-attributions-close {
+    flex: 0 0 auto;
+    width: 22px;
+    height: 20px;
+    padding: 0;
+    border: 1px solid #bbb;
+    border-radius: 3px;
+    background: #fff;
+    color: #333;
+    font-size: 15px;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.map-attributions-modes {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 7px;
+}
+
+.map-attributions-modes button {
+    flex: 1 1 50%;
+    padding: 4px 6px;
+    border: 1px solid #bbb;
+    border-radius: 4px;
+    background: #fff;
+    color: #444;
+    font: inherit;
+    cursor: pointer;
+}
+
+.map-attributions-modes button.active,
+.map-attributions-modes button[aria-pressed="true"] {
+    border-color: #1a73e8;
+    background: #e8f0fe;
+    color: #174ea6;
+    font-weight: 700;
+}
+
+.map-attributions-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.map-attributions-item {
+    padding: 5px 6px;
+    background: #f8f9fa;
+    border-left: 3px solid #1a73e8;
+    border-radius: 2px;
+}
+
+.map-attributions-item-inactive {
+    border-left-color: #9aa0a6;
+    opacity: 0.78;
+}
+
+.map-attributions-source {
+    margin-bottom: 2px;
+    color: #5f6368;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+}
+
+.map-attributions-text {
+    color: #202124;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+}
+
+.map-attributions-text a {
+    color: #00447b;
+}
+
+.map-attributions-empty {
+    padding: 7px;
+    background: #f8f9fa;
+    border-radius: 3px;
+    color: #666;
+}
+
+.map-attributions-note {
+    margin-top: 7px;
+    color: #70757a;
+    font-size: 10px;
+    line-height: 1.35;
+}
+
+/* Do not cover the floating 3DMR editor when it is open on a narrow screen. */
+body.threedmr-rotate-open #map-attributions {
+    max-width: calc(100vw - 292px);
+}
+
+body.threedmr-rotate-open #map-attributions-panel {
+    max-width: calc(100vw - 292px);
+}
+
+/* Full-screen photo viewers already carry their own credits; do not stack the
+   map credit control on top of them. */
+body:has(.panoramax-viewer.active) #map-attributions,
+body:has(#map.viewer-active) #map-attributions {
+    display: none;
+}
+
+@media only screen and (max-width: 599px) {
+    body.threedmr-rotate-open #map-attributions {
+        display: none;
+    }
+
+    /* The mobile menu replaces the map, so its credits should not float on it. */
+    .flex-row.menu-active ~ #map-attributions {
+        display: none;
+    }
+}
+
+/* Floating editor for the selected 3DMR model. The round handle itself is a
+   Cesium billboard at the model's base, not part of this panel. */
+#threedmr-rotate-panel {
+    display: none;
+    position: fixed;
+    right: 12px;
+    bottom: 12px;
+    z-index: 1450;
+    width: 260px;
+    max-width: calc(100vw - 24px);
+    padding: 8px 10px 10px;
+    background: rgba(255, 255, 255, 0.98);
+    border: 1px solid #b39ddb;
+    border-radius: 8px;
+    box-shadow: 0 4px 18px rgba(0, 0, 0, 0.28);
+    color: #222;
+    font: 12px/1.35 Arial, sans-serif;
+}
+
+#threedmr-rotate-panel.threedmr-rotate-visible {
+    display: block;
+}
+
+.threedmr-rotate-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: -8px -10px 8px;
+    padding: 6px 8px;
+    background: #ede7f6;
+    border-bottom: 1px solid #d1c4e9;
+    border-radius: 8px 8px 0 0;
+    cursor: move;
+    user-select: none;
+    touch-action: none;
+}
+
+.threedmr-rotate-head strong {
+    color: #4a148c;
+    font-size: 12px;
+}
+
+.threedmr-rotate-close {
+    margin-left: auto;
+    width: 22px;
+    height: 20px;
+    padding: 0;
+    border: 1px solid #b39ddb;
+    border-radius: 4px;
+    background: #fff;
+    color: #4a148c;
+    font-size: 15px;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.threedmr-rotate-title {
+    margin-bottom: 6px;
+    font-weight: 700;
+    color: #4a148c;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.threedmr-rotate-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 6px 0;
+}
+
+.threedmr-rotate-row label,
+.threedmr-rotate-row span {
+    flex: 0 0 50px;
+    color: #555;
+    font-size: 11px;
+}
+
+.threedmr-rotate-row input[type="range"] {
+    flex: 1 1 auto;
+    min-width: 0;
+    accent-color: #673AB7;
+}
+
+.threedmr-rotate-row input[type="number"] {
+    width: 76px;
+    padding: 3px 4px;
+    border: 1px solid #b39ddb;
+    border-radius: 3px;
+}
+
+.threedmr-rotate-output {
+    flex: 0 0 44px;
+    text-align: right;
+    color: #4a148c;
+    font-weight: 700;
+}
+
+.threedmr-rotate-hint {
+    margin: 5px 0 7px;
+    color: #666;
+    font-size: 10px;
+    line-height: 1.3;
+}
+
+.threedmr-rotate-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 8px;
+}
+
+.threedmr-rotate-actions button {
+    flex: 1 1 auto;
+    padding: 5px 6px;
+    border: 1px solid #9575cd;
+    border-radius: 4px;
+    background: #f3e5f5;
+    color: #4a148c;
+    font-weight: 700;
+    font-size: 11px;
+    cursor: pointer;
+}
+
+.threedmr-rotate-actions button:hover {
+    background: #ede7f6;
+}
+
+@media only screen and (max-width: 599px) {
+    #threedmr-rotate-panel {
+        right: 4px;
+        bottom: 4px;
+        width: calc(100vw - 8px);
+    }
+
+    #map-attributions {
+        left: 4px;
+        bottom: 48px; /* above the mobile scale line */
+        max-width: calc(100vw - 8px);
+    }
+
+    #map-attributions-panel {
+        width: calc(100vw - 8px);
+        max-width: calc(100vw - 8px);
+        max-height: calc(100vh - 120px);
+    }
+
+    #map-attributions-toggle {
+        width: 24px;
+        height: 26px;
+    }
 }

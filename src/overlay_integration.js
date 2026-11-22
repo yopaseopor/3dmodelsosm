@@ -494,6 +494,7 @@ function assignModelToFeature(feature, allFeatures = null) {
                             }
                         });
                         
+                        areaEntity._olFeature = feature;
                         feature.set('areaEntity', areaEntity);
                         
                         // If we're in 3D mode, immediately add the area to the scene
@@ -558,6 +559,7 @@ function assignModelToFeature(feature, allFeatures = null) {
                             }
                         });
                         
+                        areaEntity._olFeature = feature;
                         feature.set('areaEntity', areaEntity);
                         
                         // If we're in 3D mode, immediately add the polyline to the scene

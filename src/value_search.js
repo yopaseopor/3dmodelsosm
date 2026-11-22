@@ -476,6 +476,7 @@ function processQueryResults(allFeatures, key, value) {
                         if (debugConfig.enabled && debugConfig.logAreaProcessing) console.log(`🎨 Created area entity:`, areaEntity);
 
                         // Store the entity on the feature for later management
+                        areaEntity._olFeature = feature;
                         feature.set('areaEntity', areaEntity);
 
                         // Add to data source if in 3D mode

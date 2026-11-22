@@ -902,6 +902,12 @@
                 #nav3d-controls #nav3d-indoor-btn.nav3d-indoor-active {
                     background: #c8e6c9; border-color: #2e7d32;
                 }
+                #nav3d-controls #nav3d-buildings-btn.nav3d-buildings-hidden {
+                    background: #ffcdd2; border-color: #c62828;
+                }
+                #nav3d-controls #nav3d-inspect-btn.nav3d-inspect-active {
+                    background: #c8daf8; border-color: #1a73e8;
+                }
                 #nav3d-controls #nav3d-flat-ground-btn {
                     font-size: 7px; letter-spacing: -0.4px;
                 }
@@ -910,6 +916,7 @@
                 }
                 #nav3d-controls .nav3d-title {
                     text-align: center; font-size: 9px; color: #555; margin-bottom: 2px;
+                    cursor: move; touch-action: none;
                 }
                 #nav3d-controls .nav3d-pointer-settings {
                     border-bottom: 1px solid #ddd; margin-bottom: 3px; padding-bottom: 3px;
@@ -958,7 +965,7 @@
                     font-size: 9px; border: 1px solid #bbb; border-radius: 4px; background: #fff;
                 }
             </style>
-            <div class="nav3d-title">3D navigation</div>
+            <div class="nav3d-title" title="Drag to move">⠿ 3D navigation</div>
             <div class="nav3d-pointer-settings">
                 <div class="nav3d-actions">
                     
@@ -1014,13 +1021,31 @@
 				
 				                <button data-act="roll-left" title="Roll left">&#8634;</button>
                 <button data-act="roll-right" title="Roll right">&#8635;</button>
+                <button id="nav3d-inspect-btn" type="button" aria-label="Inspect 3D object" aria-pressed="false" title="Inspect object (click a 3D object)">&#128269;</button>
                 <button id="nav3d-indoor-btn" title="Show / hide indoor view (Simple Indoor Tagging)">&#127963;</button>
+                <button id="nav3d-buildings-btn" type="button" aria-label="Hide buildings from OSM and GeoJSON" aria-pressed="false" title="Hide buildings from OSM and GeoJSON">&#127961;</button>
                 <button id="nav3d-flat-ground-btn" type="button" aria-label="Disable DEM and flatten ground" aria-pressed="false" title="Disable DEM and flatten ground">DEM OFF</button>
 				
             </div>
 			<label class="nav3d-level-select" style="display:none">
                 Level
                 <select id="nav3d-level-select" aria-label="Select indoor level"></select>
+            </label>
+            <label class="nav3d-level-select" id="nav3d-indoor-opacity-row" style="display:none">
+                Opacity
+                <select id="nav3d-indoor-opacity" aria-label="Opacity of indoor surfaces">
+                    <option value="100" selected>100%</option>
+                    <option value="90">90%</option>
+                    <option value="80">80%</option>
+                    <option value="70">70%</option>
+                    <option value="60">60%</option>
+                    <option value="50">50%</option>
+                    <option value="40">40%</option>
+                    <option value="30">30%</option>
+                    <option value="20">20%</option>
+                    <option value="10">10%</option>
+                    <option value="0">0%</option>
+                </select>
             </label>
             <label class="nav3d-layer-select">
                 Layer
@@ -1043,6 +1068,16 @@
             
         `;
         document.body.appendChild(panel);
+        // The panel is pinned to a corner by the styles above and can end up
+        // over the stats panel; dragging it moves it out of the way.
+        if (window.panelDrag) {
+            // Grab it anywhere that is not a control: the title bar, the panel
+            // padding and the gaps between rows all move it. Buttons and
+            // selects keep their own behaviour, so the pad still works.
+            window.panelDrag.makeDraggable(panel, panel, {
+                skip: 'button, select, option, input, textarea, output',
+            });
+        }
         const pointerToggle = panel.querySelector('#nav3d-pointer-toggle');
         const pointerMode = panel.querySelector('#nav3d-pointer-mode');
         const pointerHeight = panel.querySelector('#nav3d-pointer-height');
@@ -1099,6 +1134,18 @@
                 }
             });
         }
+        const indoorOpacitySelect = panel.querySelector('#nav3d-indoor-opacity');
+        if (indoorOpacitySelect) {
+            if (window.indoor && typeof window.indoor.getIndoorOpacity === 'function') {
+                indoorOpacitySelect.value = String(Math.round(window.indoor.getIndoorOpacity() * 100));
+            }
+            indoorOpacitySelect.addEventListener('change', function (ev) {
+                ev.stopPropagation();
+                if (window.indoor && typeof window.indoor.setIndoorOpacity === 'function') {
+                    window.indoor.setIndoorOpacity(Number(indoorOpacitySelect.value) / 100);
+                }
+            });
+        }
         const layerSelect = panel.querySelector('#nav3d-layer-select');
         if (layerSelect) {
             layerSelect.addEventListener('change', function (ev) {
@@ -1120,6 +1167,51 @@
                     indoorBtn.title = on ? 'Hide indoor view (Simple Indoor Tagging)'
                                          : 'Show indoor view (Simple Indoor Tagging)';
                 }
+            });
+        }
+        const buildingsBtn = panel.querySelector('#nav3d-buildings-btn');
+        if (buildingsBtn) {
+            const updateBuildingsButton = function (hidden) {
+                buildingsBtn.classList.toggle('nav3d-buildings-hidden', hidden);
+                buildingsBtn.setAttribute('aria-pressed', String(hidden));
+                const label = hidden
+                    ? 'Show buildings from OSM and GeoJSON'
+                    : 'Hide buildings from OSM and GeoJSON';
+                buildingsBtn.title = label;
+                buildingsBtn.setAttribute('aria-label', label);
+            };
+            if (!window.buildings ||
+                typeof window.buildings.setBuildingsVisible !== 'function' ||
+                typeof window.buildings.areBuildingsVisible !== 'function') {
+                buildingsBtn.disabled = true;
+                console.error('3D navigation: building visibility controls are unavailable');
+            } else {
+                updateBuildingsButton(!window.buildings.areBuildingsVisible());
+                buildingsBtn.addEventListener('click', function (ev) {
+                    ev.stopPropagation();
+                    const visible = window.buildings.areBuildingsVisible();
+                    window.buildings.setBuildingsVisible(!visible);
+                    updateBuildingsButton(visible);
+                });
+            }
+        }
+        const inspectBtn = panel.querySelector('#nav3d-inspect-btn');
+        if (inspectBtn) {
+            const syncInspectButton = function (on) {
+                inspectBtn.classList.toggle('nav3d-inspect-active', !!on);
+                inspectBtn.setAttribute('aria-pressed', String(!!on));
+                inspectBtn.title = on
+                    ? 'Object info is on — click a 3D object to inspect it'
+                    : 'Inspect object (click a 3D object)';
+            };
+            if (window.objectInfo && typeof window.objectInfo.isEnabled === 'function') {
+                syncInspectButton(window.objectInfo.isEnabled());
+            }
+            if (!window.objectInfo) inspectBtn.disabled = true;
+            inspectBtn.addEventListener('click', function (ev) {
+                ev.stopPropagation();
+                if (!window.objectInfo || typeof window.objectInfo.setEnabled !== 'function') return;
+                syncInspectButton(window.objectInfo.setEnabled(!window.objectInfo.isEnabled()));
             });
         }
         const flatGroundBtn = panel.querySelector('#nav3d-flat-ground-btn');
