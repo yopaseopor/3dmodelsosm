@@ -52,6 +52,7 @@
     let panel = null;
     let toggleBtn = null;
     let userHidden = false; // tracks manual hide so auto-show doesn't override
+    let syncSignsButton = null; // set by buildPanel; reflects the sign toggle
     let watchedCamera = null;
     let lastSafeCameraCheck = 0;
     let lastSafeCamera = null;
@@ -905,6 +906,9 @@
                 #nav3d-controls #nav3d-buildings-btn.nav3d-buildings-hidden {
                     background: #ffcdd2; border-color: #c62828;
                 }
+                #nav3d-controls #nav3d-signs-btn.nav3d-signs-hidden {
+                    background: #ffcdd2; border-color: #c62828;
+                }
                 #nav3d-controls #nav3d-inspect-btn.nav3d-inspect-active {
                     background: #c8daf8; border-color: #1a73e8;
                 }
@@ -1024,6 +1028,7 @@
                 <button id="nav3d-inspect-btn" type="button" aria-label="Inspect 3D object" aria-pressed="false" title="Inspect object (click a 3D object)">&#128269;</button>
                 <button id="nav3d-indoor-btn" title="Show / hide indoor view (Simple Indoor Tagging)">&#127963;</button>
                 <button id="nav3d-buildings-btn" type="button" aria-label="Hide buildings from OSM and GeoJSON" aria-pressed="false" title="Hide buildings from OSM and GeoJSON">&#127961;</button>
+                <button id="nav3d-signs-btn" type="button" aria-label="Hide name and house-number signs" aria-pressed="false" title="Hide name and house-number signs">&#127991;</button>
                 <button id="nav3d-flat-ground-btn" type="button" aria-label="Disable DEM and flatten ground" aria-pressed="false" title="Disable DEM and flatten ground">DEM OFF</button>
 				
             </div>
@@ -1195,6 +1200,35 @@
                 });
             }
         }
+        // 3D signs toggle: name boards and house-number plaques only
+        const signsBtn = panel.querySelector('#nav3d-signs-btn');
+        if (signsBtn) {
+            syncSignsButton = function () {
+                const available = !!(window.modelRenderer &&
+                    typeof window.modelRenderer.areSignsVisible === 'function');
+                const visible = available ? window.modelRenderer.areSignsVisible() : true;
+                signsBtn.classList.toggle('nav3d-signs-hidden', !visible);
+                signsBtn.setAttribute('aria-pressed', String(!visible));
+                const label = visible
+                    ? 'Hide name and house-number signs'
+                    : 'Show name and house-number signs';
+                signsBtn.title = label;
+                signsBtn.setAttribute('aria-label', label);
+                signsBtn.disabled = !available;
+                if (!available) {
+                    console.error('3D navigation: sign visibility controls are unavailable');
+                }
+            };
+            syncSignsButton();
+            signsBtn.addEventListener('click', function (ev) {
+                ev.stopPropagation();
+                if (!window.modelRenderer ||
+                    typeof window.modelRenderer.setSignsVisible !== 'function') return;
+                window.modelRenderer.setSignsVisible(
+                    !window.modelRenderer.areSignsVisible());
+                syncSignsButton();
+            });
+        }
         const inspectBtn = panel.querySelector('#nav3d-inspect-btn');
         if (inspectBtn) {
             const syncInspectButton = function (on) {
@@ -1267,6 +1301,7 @@
         // Show the toggle button whenever 3D is active
         toggleBtn.classList.toggle('nav3d-toggle-visible', active);
         if (window._updateNav3dToggleState) window._updateNav3dToggleState();
+        if (syncSignsButton) syncSignsButton();
         if (!active) {
             // Leaving 3D – reset everything
             setPointerActive(false);
