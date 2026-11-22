@@ -399,8 +399,10 @@ class GeoJSONLoader {
                                 // Skip if model filename is empty
                                 if (!modelFilename || modelFilename.trim() === '') {
                                     if (applyEmptyAreaModelMapping(feature, modelMapping, tags)) return;
-                                    loaderLog(`📍 Feature ${index}: Skipping empty model filename for tags:`, tags);
-                                    return; // Skip to next feature
+                                    // For point features with no model file (e.g. addr:housenumber),
+                                    // skip setting osm3dModel so addPlainResult can render them as plain markers.
+                                    loaderLog(`📍 Feature ${index}: Point with no model file, will be handled as plain marker`);
+                                    return; // Skip to next feature — addPlainResult will handle it
                                 }
 
                                 // Set the model property for ol-cesium to use - EXACT same as existing system

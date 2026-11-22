@@ -319,6 +319,69 @@ const plainMarkerConfig = (function () {
 // Expose for runtime override and inspection
 window.plainMarkerConfig = plainMarkerConfig;
 
+// ---------------------------------------------------------------------------
+// addr:housenumber wall labels — blue square with white number, stuck to walls
+// ---------------------------------------------------------------------------
+const houseNumberCanvasCache = new Map();
+
+const HOUSE_NUMBER_CONFIG = {
+    bgColor: '#0066cc',       // blue background
+    textColor: '#ffffff',     // white text
+    outlineColor: '#000000',  // black outline around white text for readability
+    canvasSize: 256,          // px (bigger = more readable)
+    borderRadius: 32,         // rounded corners
+    fontSize: 110,            // px, auto-shrinks if text is long
+    heightAboveGroundMeters: 1.6, // door height
+    scale: 0.10,              // Cesium billboard scale (bigger = more visible)
+    offsetLeftMeters: 0.6     // horizontal offset to place plaque to the LEFT of door
+};
+
+/** Generate a blue-square-with-white-number canvas data URL, cached per text. */
+function createHouseNumberCanvas(text) {
+    if (houseNumberCanvasCache.has(text)) return houseNumberCanvasCache.get(text);
+
+    const canvas = document.createElement('canvas');
+    const s = HOUSE_NUMBER_CONFIG.canvasSize;
+    canvas.width = s;
+    canvas.height = s;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+
+    // Fit font size to text length (max ~3 chars comfortably, shrink beyond)
+    const len = String(text).length;
+    const fontSize = Math.max(24, Math.floor(HOUSE_NUMBER_CONFIG.fontSize / Math.max(1, len / 2)));
+
+    // Blue rounded square background
+    ctx.fillStyle = HOUSE_NUMBER_CONFIG.bgColor;
+    ctx.beginPath();
+    ctx.roundRect(0, 0, s, s, HOUSE_NUMBER_CONFIG.borderRadius);
+    ctx.fill();
+
+    // White number text with black outline for maximum readability
+    ctx.fillStyle = HOUSE_NUMBER_CONFIG.textColor;
+    ctx.strokeStyle = HOUSE_NUMBER_CONFIG.outlineColor;
+    ctx.lineWidth = fontSize * 0.14;   // thick black outline
+    ctx.lineJoin = 'round';
+    ctx.font = `bold ${fontSize}px Arial, sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const y = s / 2 + fontSize * 0.05;
+    ctx.strokeText(String(text), s / 2, y);
+    ctx.fillText(String(text), s / 2, y);
+
+    const dataUrl = canvas.toDataURL('image/png');
+    houseNumberCanvasCache.set(text, dataUrl);
+    return dataUrl;
+}
+
+/** Check if a feature carries an addr:housenumber tag. */
+function getHouseNumber(feature) {
+    if (!feature || typeof feature.get !== 'function') return null;
+    const value = feature.get('addr:housenumber');
+    if (value === undefined || value === null || String(value).trim() === '') return null;
+    return String(value).trim();
+}
+
 /** Best-effort read of the OL style so the 3D marker resembles the 2D one. */
 function readPlainStyle(feature, layer) {
     let style = null;
@@ -3758,6 +3821,42 @@ window.modelRenderer = {
             if (image && image.src) {
                 graphics = { billboard: { image: image.src, heightReference: Cesium.HeightReference.CLAMP_TO_GROUND } };
             } else {
+                // addr:housenumber: render as blue square with white number on wall
+                const houseNumber = getHouseNumber(feature);
+                if (houseNumber) {
+                    const canvasDataUrl = createHouseNumberCanvas(houseNumber);
+                    if (canvasDataUrl) {
+                        const pointCoords = geometry.getCoordinates();
+                        const lonLat = ol.proj.toLonLat(pointCoords);
+                        // Offset to the LEFT of the door (west): subtract meters from longitude
+                        const metersPerDegreeLon = 111320 * Math.cos(lonLat[1] * Math.PI / 180);
+                        const offsetLonDeg = HOUSE_NUMBER_CONFIG.offsetLeftMeters / metersPerDegreeLon;
+                        const offsetLon = lonLat[0] - offsetLonDeg;
+                        graphics = {
+                            billboard: {
+                                image: canvasDataUrl,
+                                heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+                                scale: HOUSE_NUMBER_CONFIG.scale,
+                                verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+                                disableDepthTestDistance: Number.POSITIVE_INFINITY
+                            },
+                            position: Cesium.Cartesian3.fromDegrees(
+                                offsetLon, lonLat[1],
+                                sampleGroundElevation(lonLat[0], lonLat[1]) + HOUSE_NUMBER_CONFIG.heightAboveGroundMeters
+                            )
+                        };
+                        const entity = dataSource.entities.add({
+                            id: `housenumber-${getFeatureKey(feature)}-${houseNumber}`,
+                            position: graphics.position,
+                            billboard: graphics.billboard
+                        });
+                        this.plainResults.set(feature, { entities: [entity], layer: layer, sessionId: this._session3dId });
+                        if (debugConfig.enabled) {
+                            console.log('🏠 Plain house-number label placed: ' + houseNumber);
+                        }
+                        return;
+                    }
+                }
                 let size = plainMarkerConfig.size;
                 let color = plainMarkerConfig.color;
                 if (style && style.getImage && style.getImage()) {

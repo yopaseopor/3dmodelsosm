@@ -49,36 +49,44 @@
 			  <button id="execute-query-btn" style="display:none; margin-top:5px; width:100%; padding:5px; background:#007cba; color:white; border:none; border-radius:3px; cursor:pointer; font-size:12px;" data-i18n="executeQuery">Execute Query</button>
 			  <button id="clear-search-btn" style="display:none; margin-top:3px; width:100%; padding:3px; background:#666; color:white; border:none; border-radius:3px; cursor:pointer; font-size:12px;" data-i18n="clearButton">Clear</button>
 			</div>
-			<!-- GeoTIFF Terrain Control -->
-			<div style="margin: 10px 0;">
-			  <button id="geotiff-toggle-btn" style="width: 100%; padding: 8px; background: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">
-				🏔️ Terrain Control
-			  </button>
-			  <small style="color: #ccc; display: block; margin-top: 5px; text-align: center;">Press Ctrl+T to toggle</small>
-			</div>
-
 			<!-- GeoJSON Downloader Control -->
 			<div style="margin: 10px 0;">
 			  <button id="geojson-download-btn" type="button" style="width: 100%; padding: 8px; background: #673AB7; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">
-				⬇️ GeoJSON Downloader from Openstreetmap data
+				1 ⬇️ GeoJSON Downloader from Openstreetmap data
 			  </button>
 			  <small id="geojson-download-status" role="status" aria-live="polite" style="color: #ccc; display: block; margin-top: 5px; text-align: center;">Available from zoom 18</small>
 			  <div id="geojson-download-result" style="margin-top: 6px; text-align: center;"></div>
 			</div>
-			
+
 			<!-- GeoJSON Loader Control -->
 			<div style="margin: 10px 0;">
 			  <button id="geojson-toggle-btn" style="width: 100%; padding: 8px; background: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">
-				📍 GeoJSON Loader
+				2 📍 GeoJSON Loader
 			  </button>
 			  <small style="color: #ccc; display: block; margin-top: 5px; text-align: center;">Press Ctrl+G to toggle</small>
 			</div>
-			
+
+			<!-- 3D Models Toggle -->
+			<div style="margin: 10px 0;">
+			  <button id="models3d-toggle-btn" style="width: 100%; padding: 8px; background: #9C27B0; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">
+				3 🧊 3D Models
+			  </button>
+			  <small style="color: #ccc; display: block; margin-top: 5px; text-align: center;">Toggle 3D View</small>
+			</div>
+
+			<!-- GeoTIFF Terrain Control -->
+			<div style="margin: 10px 0;">
+			  <button id="geotiff-toggle-btn" style="width: 100%; padding: 8px; background: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">
+				OPTIONAL 🏔️ Terrain Control
+			  </button>
+			  <small style="color: #ccc; display: block; margin-top: 5px; text-align: center;">Press Ctrl+T to toggle</small>
+			</div>
+
 			<!-- 3D Model Repository (3DMR) -->
 			<div class="threedmr-control">
 			  <label for="threedmr-toggle" class="threedmr-label">
 				<input type="checkbox" id="threedmr-toggle">
-				<span>3D Model Repository (3DMR)</span>
+				<span>OPTIONAL 3D Model Repository (3DMR)</span>
 			  </label>
 			  <small id="threedmr-status" class="threedmr-status" role="status" aria-live="polite">
 				Show 3DMR model locations. The same models load in 3D mode.
@@ -247,5 +255,17 @@
 	<script src="src/index.js"></script>
 	<!-- 3D Model Repository markers in 2D and glTF models in 3D. -->
 	<script src="src/threedmr.js"></script>
+
+	<!-- Wire up the 3D Models big button to the same click handler as the map's 3D toggle -->
+	<script>
+		document.getElementById('models3d-toggle-btn').addEventListener('click', function() {
+			const toggle3dButton = document.querySelector('.ol-3d-toggle button');
+			if (toggle3dButton && toggle3dButton._clickHandler) {
+				toggle3dButton._clickHandler();
+			} else if (window.ol3d && window.ol3d.setEnabled) {
+				window.ol3d.setEnabled(!window.is3d);
+			}
+		});
+	</script>
 </body>
 </html>
