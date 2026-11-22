@@ -141,8 +141,8 @@ class GeoJSONLoader {
                 }
             },
             image: {
-                src: 'icones/maxspeed_empty.svg',
-                scale: 0.03
+                src: 'icones/round_marker.svg',
+                scale: 0.05
             },
             text: {
                 fill: {
