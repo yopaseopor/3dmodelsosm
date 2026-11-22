@@ -274,13 +274,50 @@ function modelRendererTexLog() {
 // only when the terrain provider exposes `availability`; the MapTerhorn
 // provider does not, so on a Model primitive it is a silent no-op.
 
-/** Default marker look when the OL style gives us nothing usable. */
-const PLAIN_MARKER_PIXEL_SIZE = 7;
-const hasCesium = typeof Cesium !== 'undefined';
-const PLAIN_MARKER_COLOR = hasCesium ? Cesium.Color.fromCssColorString('#e6a01a') : null;
-const PLAIN_LINE_COLOR = hasCesium ? Cesium.Color.fromCssColorString('#e6a01a').withAlpha(0.9) : null;
-// Unstyled polygon surfaces are context only, so keep them light in 3D too.
-const PLAIN_AREA_COLOR = hasCesium ? Cesium.Color.fromCssColorString('#e6a01a').withAlpha(0.15) : null;
+// ---------------------------------------------------------------------------
+// Plain marker configuration — overrideable at runtime:
+//   window.plainMarkerConfig.size = 12;
+//   window.plainMarkerConfig.color = '#ff0000';
+//   window.plainMarkerConfig.lineAlpha = 0.9;
+//   window.plainMarkerConfig.areaAlpha = 0.15;
+//   Or via URL: ?plainMarkerSize=12&plainMarkerColor=red&plainMarkerLineAlpha=0.5
+// ---------------------------------------------------------------------------
+const plainMarkerConfig = (function () {
+    const defaults = {
+        size: 7,
+        color: '#e6a01a',
+        lineAlpha: 0.9,
+        areaAlpha: 0.15
+    };
+
+    // Allow URL parameter overrides: ?plainMarkerSize=12&plainMarkerColor=red
+    try {
+        const params = new URLSearchParams(window.location.search);
+        if (params.has('plainMarkerSize')) defaults.size = parseFloat(params.get('plainMarkerSize'));
+        if (params.has('plainMarkerColor')) defaults.color = params.get('plainMarkerColor');
+        if (params.has('plainMarkerLineAlpha')) defaults.lineAlpha = parseFloat(params.get('plainMarkerLineAlpha'));
+        if (params.has('plainMarkerAreaAlpha')) defaults.areaAlpha = parseFloat(params.get('plainMarkerAreaAlpha'));
+    } catch (e) { /* URLSearchParams not available */ }
+
+    // Allow runtime override via window.plainMarkerConfig before this module loads
+    if (window.plainMarkerConfig) {
+        if (window.plainMarkerConfig.size !== undefined) defaults.size = window.plainMarkerConfig.size;
+        if (window.plainMarkerConfig.color !== undefined) defaults.color = window.plainMarkerConfig.color;
+        if (window.plainMarkerConfig.lineAlpha !== undefined) defaults.lineAlpha = window.plainMarkerConfig.lineAlpha;
+        if (window.plainMarkerConfig.areaAlpha !== undefined) defaults.areaAlpha = window.plainMarkerConfig.areaAlpha;
+    }
+
+    const hasCesium = typeof Cesium !== 'undefined';
+    return {
+        size: defaults.size,
+        color: hasCesium ? Cesium.Color.fromCssColorString(defaults.color) : null,
+        lineColor: hasCesium ? Cesium.Color.fromCssColorString(defaults.color).withAlpha(defaults.lineAlpha) : null,
+        areaColor: hasCesium ? Cesium.Color.fromCssColorString(defaults.color).withAlpha(defaults.areaAlpha) : null
+    };
+})();
+
+// Expose for runtime override and inspection
+window.plainMarkerConfig = plainMarkerConfig;
 
 /** Best-effort read of the OL style so the 3D marker resembles the 2D one. */
 function readPlainStyle(feature, layer) {
@@ -3721,8 +3758,8 @@ window.modelRenderer = {
             if (image && image.src) {
                 graphics = { billboard: { image: image.src, heightReference: Cesium.HeightReference.CLAMP_TO_GROUND } };
             } else {
-                let size = PLAIN_MARKER_PIXEL_SIZE;
-                let color = PLAIN_MARKER_COLOR;
+                let size = plainMarkerConfig.size;
+                let color = plainMarkerConfig.color;
                 if (style && style.getImage && style.getImage()) {
                     const img = style.getImage();
                     if (img.size) size = Math.max(3, Math.round(img.size[0]));
@@ -3747,7 +3784,7 @@ window.modelRenderer = {
         } else if (type === 'LineString' || type === 'MultiLineString' || type === 'LinearRing') {
             const stroke = style && style.getStroke && style.getStroke();
             let width = 3;
-            let color = PLAIN_LINE_COLOR;
+            let color = plainMarkerConfig.lineColor;
             if (stroke) {
                 if (stroke.getWidth && stroke.getWidth()) width = Math.max(1, stroke.getWidth());
                 if (stroke.getColor && stroke.getColor()) color = olColorToCesium(stroke.getColor(), color);
@@ -3789,7 +3826,7 @@ window.modelRenderer = {
                 .map(r => plainCoordsToCartesian(r));
             if (!rings.length) return;
             const fill = style && style.getFill && style.getFill();
-            let color = PLAIN_AREA_COLOR;
+            let color = plainMarkerConfig.areaColor;
             if (fill && fill.getColor && fill.getColor()) color = olColorToCesium(fill.getColor(), color);
             graphics = {
                 polygon: {
