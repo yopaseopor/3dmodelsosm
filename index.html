@@ -26,9 +26,10 @@
 	<div class="flex-row">
 	<!--@@ Modificar comentario de Javascript -->
 		<div id="map" class="map">Loading... You need Javascript...Cargando necesitas Javascript...Carregant...necessites Javascript</div>
-		<div id="menu" class="menu"><!-- Language Selector -->
+		<div id="menu" class="menu">
+			<!-- Language Selector -->
 			<div id="language-selector-container" class="language-selector-wrapper"></div>
-				<!-- GeoJSON Downloader Control -->
+			<!-- GeoJSON Downloader Control -->
 			<div style="margin: 10px 0;">
 			  <button id="geojson-download-btn" type="button" style="width: 100%; padding: 8px; background: #673AB7; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">
 				1 ⬇️ GeoJSON Downloader from Openstreetmap data
@@ -99,17 +100,17 @@
 											<span data-i18n="useYesNoDefinitions">Use yes/no definitions (focus on definitions)</span>
 									</label>
 								</div>
-				<!-- Element Type Filter -->
-				<div class="element-type-filter" style="margin: 10px 0;">
-				  <label data-i18n="nodesCheckbox"><input type="checkbox" class="element-type-checkbox" value="node" checked> Nodes</label>
-				  <label data-i18n="waysCheckbox"><input type="checkbox" class="element-type-checkbox" value="way" checked> Ways</label>
-				  <label data-i18n="relationsCheckbox"><input type="checkbox" class="element-type-checkbox" value="relation" checked> Relations</label>
-				</div>
-				  <div id="value-search-dropdown"></div>
-				  <button id="execute-query-btn" style="display:none; margin-top:5px; width:100%; padding:5px; background:#007cba; color:white; border:none; border-radius:3px; cursor:pointer; font-size:12px;" data-i18n="executeQuery">Execute Query</button>
-				  <button id="clear-search-btn" style="display:none; margin-top:3px; width:100%; padding:3px; background:#666; color:white; border:none; border-radius:3px; cursor:pointer; font-size:12px;" data-i18n="clearButton">Clear</button>
-				</div>
+			  <div id="value-search-dropdown"></div>
+			  <button id="execute-query-btn" style="display:none; margin-top:5px; width:100%; padding:5px; background:#007cba; color:white; border:none; border-radius:3px; cursor:pointer; font-size:12px;" data-i18n="executeQuery">Execute Query</button>
+			  <button id="clear-search-btn" style="display:none; margin-top:3px; width:100%; padding:3px; background:#666; color:white; border:none; border-radius:3px; cursor:pointer; font-size:12px;" data-i18n="clearButton">Clear</button>
+			</div>
 
+			<!-- Element Type Filter -->
+			<div class="element-type-filter">
+			  <label data-i18n="nodesCheckbox"><input type="checkbox" class="element-type-checkbox" value="node" checked> Nodes</label>
+			  <label data-i18n="waysCheckbox"><input type="checkbox" class="element-type-checkbox" value="way" checked> Ways</label>
+			  <label data-i18n="relationsCheckbox"><input type="checkbox" class="element-type-checkbox" value="relation" checked> Relations</label>
+			</div>
 			<!-- Query Statistics - moved inside menu next to layers -->
 			<div id="query-statistics" class="query-statistics" style="display: none; margin: 0; padding: 8px; background: #f5f5f5; border-radius: 0;">
 			  <h4 style="margin: 0 0 8px 0; font-size: 12px; color: #333;" data-i18n="currentQuery">📊 Consulta Actual</h4>
@@ -232,6 +233,9 @@
 	<!-- Size- and memory-bounded background pre-charge; precharge.take() hands
 	     small parsed overlays to the loader and releases the cache reference. -->
 	<script src="src/precharge.js"></script>
+	<!-- Colored 3D POI signs: emoji + name + tag + localized CSV description.
+	     Configurable at runtime through window.poiSigns.config. -->
+	<script src="src/poi_signs.js"></script>
 	<script src="src/model_renderer.js"></script>
 	<script src="src/model_repetition.js"></script>
 	<script src="src/line_repetition.js"></script>

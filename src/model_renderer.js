@@ -5,7 +5,7 @@
 const memoryConfig = {
     maxModelsPerFrame: 40,           // Limit models added per frame
     loadDistance: 2500,              // Load models within this distance (meters)
-    unloadDistance: 9000,            // Unload models beyond this distance (meters)
+    unloadDistance: 5000,            // Unload models beyond this distance (meters)
     lodDistances: {                  // Level of Detail distances
         high: 200,                    // High detail within 200m
         medium: 500,                  // Medium detail within 500m
@@ -32,7 +32,7 @@ const memoryConfig = {
     // Override it without editing this file:
     //   ?primitives=60000     in the URL, or
     //   modelRenderer.setBudget(60000)  in the console.
-    maxLivePrimitives: 30000,
+    maxLivePrimitives: 60000,
 
     // Evict down to this fraction of the budget rather than by one, so the
     // scan that finds the farthest entries is amortised over many placements.
@@ -45,6 +45,127 @@ const memoryConfig = {
     // ranges overlap and a sweep re-creates what the last one just destroyed.
     placementRangeFactor: 2
 };
+
+// ---------------------------------------------------------------------------
+// Draw order between the groups of primitives this renderer places
+// ---------------------------------------------------------------------------
+// Cesium gives a 3D model no z-index. Two surfaces in the same place - a garage
+// door node standing on the building wall, a kerb under a road, a bench inside
+// a hedge - fight over the depth buffer and one of them is swallowed whole, so
+// "which one is in front" has to come from the data, not from a style rule.
+//
+// The only lever that works from every viewing angle is to nudge the primitive
+// TOWARD THE CAMERA before the depth test runs; that is exactly what the
+// house-number plaques do with billboard `eyeOffset`, but a mesh has no such
+// option, so the nudge is applied to its modelMatrix every frame instead.
+//
+// Values are METRES of horizontal nudge, so:
+//   bigger = drawn in front of the other groups, and of the wall it shares
+//   0      = group left exactly where the data puts it (feature off)
+//
+// 0.4 m clears a facade the model is coplanar with, and is a couple of pixels
+// at street distance. Tunable while the app runs, no reload:
+//
+//   modelRenderer.setRenderOrder({ pointModels: 0.8 })
+//   window.renderOrderConfig.pointModels = 0.8
+const DEFAULT_RENDER_ORDER = {
+    pointModels: 0.4,        // single models: poles, trees, benches… (models.js)
+    // Doors (entrance=garage / entrance=yes) lie flat ON the building wall, so
+    // they have nothing but their own thickness between them and the facade.
+    // They get their own, larger nudge: 1 m is still only a step's width, and it
+    // is what makes the garage door readable instead of a sliver in the wall.
+    doors: 0.6,
+    lineRepetitions: 0,      // models repeated along a way: kerbs, markings… (line_repetition.js)
+    areaRepetitions: 0       // model instances filling a polygon (area_repetition.js)
+};
+
+const renderOrderConfig = Object.assign({}, DEFAULT_RENDER_ORDER);
+const RENDER_ORDER_GROUPS = ['pointModels', 'doors', 'lineRepetitions', 'areaRepetitions'];
+window.renderOrderConfig = renderOrderConfig;
+
+// Scratch vectors: the nudge runs once per rendered frame, so it must not
+// allocate. Built on demand rather than at load, so this file still loads in
+// the headless harnesses (tools/*.js) that stub Cesium.
+let renderOrderScratch = null;
+function renderOrderScratchState() {
+    if (!renderOrderScratch) {
+        renderOrderScratch = {
+            up: new Cesium.Cartesian3(),
+            direction: new Cesium.Cartesian3(),
+            translation: new Cesium.Cartesian3(),
+            targets: {
+                pointModels: new Cesium.Cartesian3(),
+                doors: new Cesium.Cartesian3(),
+                lineRepetitions: new Cesium.Cartesian3(),
+                areaRepetitions: new Cesium.Cartesian3()
+            },
+            deltas: {
+                pointModels: new Cesium.Cartesian3(),
+                doors: new Cesium.Cartesian3(),
+                lineRepetitions: new Cesium.Cartesian3(),
+                areaRepetitions: new Cesium.Cartesian3()
+            }
+        };
+    }
+    return renderOrderScratch;
+}
+
+/** Metres of nudge for one group; non-numbers and negatives mean "off". */
+function renderOrderMetres(group) {
+    const metres = Number(renderOrderConfig[group]);
+    return isFinite(metres) && metres > 0 ? metres : 0;
+}
+
+/**
+ * Unit vector, world space, pointing from the scene back at the camera and
+ * flattened onto the local horizontal plane.
+ *
+ * Flat on purpose: the surface a model has to clear is a WALL, which is
+ * vertical, so a nudge with a vertical component would only lift the base of
+ * the model off the ground. Returns null when the camera looks straight down -
+ * no wall is in the way then.
+ */
+function horizontalTowardCamera(camera, result) {
+    const scratch = renderOrderScratchState();
+    const up = Cesium.Ellipsoid.WGS84.geodeticSurfaceNormal(camera.positionWC, scratch.up);
+    const direction = camera.directionWC;
+    const pitch = Cesium.Cartesian3.dot(direction, up);
+    Cesium.Cartesian3.multiplyByScalar(up, pitch, result);
+    Cesium.Cartesian3.subtract(direction, result, result);   // horizontal part, still pointing into the scene
+    const length = Cesium.Cartesian3.magnitude(result);
+    if (!(length > 1e-6)) return null;
+    Cesium.Cartesian3.divideByScalar(result, length, result);
+    return Cesium.Cartesian3.negate(result, result);         // flip: now points at the camera
+}
+
+/** Shift a placed primitive by `delta` in world space; rotation is untouched. */
+function nudgeModelMatrix(model, delta) {
+    if (!model || !model.modelMatrix || !delta) return;
+    const translation = Cesium.Matrix4.getTranslation(model.modelMatrix, renderOrderScratchState().translation);
+    Cesium.Cartesian3.add(translation, delta, translation);
+    Cesium.Matrix4.setTranslation(model.modelMatrix, translation, model.modelMatrix);
+}
+
+/**
+ * Which draw-order group a repetition belongs to: a polygon filled with model
+ * instances is an AREA repetition, anything repeated along a way is a LINE
+ * repetition.
+ */
+/**
+ * Which draw-order group a single model belongs to. Doors sit flush on a
+ * facade, so `entrance=*` features are pulled forward harder than the rest.
+ */
+function pointModelRenderOrderGroup(feature) {
+    if (!feature || typeof feature.get !== 'function') return 'pointModels';
+    const entrance = feature.get('entrance');
+    return entrance ? 'doors' : 'pointModels';
+}
+
+function repetitionRenderOrderGroup(feature) {
+    const geometry = feature && typeof feature.getGeometry === 'function' ? feature.getGeometry() : null;
+    const type = geometry && typeof geometry.getType === 'function' ? geometry.getType() : null;
+    return (type === 'Polygon' || type === 'MultiPolygon') ? 'areaRepetitions' : 'lineRepetitions';
+}
 
 // Feature property holding this renderer's stable internal identity.
 //
@@ -71,10 +192,57 @@ function parseOsNumber(value) {
     return match ? parseFloat(match[1]) : NaN;
 }
 
+function normalizeOsmLayer(value) {
+    if (value === undefined || value === null || String(value).trim() === '') return '0';
+    const text = String(value).trim();
+    const numeric = text.replace(',', '.');
+    if (/^[+-]?\d+(?:\.\d+)?$/.test(numeric)) {
+        const number = Number(numeric);
+        return number === 0 ? '0' : String(number);
+    }
+    return text.toLowerCase();
+}
+
+function getOsmLayerValue(properties) {
+    if (!properties || typeof properties !== 'object') return undefined;
+    if (properties.layer !== undefined && properties.layer !== null && String(properties.layer).trim() !== '') {
+        return properties.layer;
+    }
+    const tagSets = [properties.tags, properties.osmTags, properties.buildingTags,
+        properties.extrudedBuilding && properties.extrudedBuilding.tags];
+    for (let i = 0; i < tagSets.length; i++) {
+        const tags = tagSets[i];
+        if (tags && typeof tags === 'object' && tags.layer !== undefined &&
+            tags.layer !== null && String(tags.layer).trim() !== '') {
+            return tags.layer;
+        }
+    }
+    return undefined;
+}
+
+function getOsmLayer(feature) {
+    if (!feature) return '0';
+    let value;
+    if (typeof feature.get === 'function') value = feature.get('layer');
+    if (value === undefined || value === null || String(value).trim() === '') {
+        const properties = typeof feature.getProperties === 'function'
+            ? feature.getProperties()
+            : feature;
+        value = getOsmLayerValue(properties);
+    }
+    return normalizeOsmLayer(value);
+}
+
 function isTunnelFeature(feature) {
     if (!feature || typeof feature.get !== 'function') return false;
     const tunnel = String(feature.get('tunnel') || '').trim().toLowerCase();
     return tunnel === 'yes' && parseOsNumber(feature.get('layer')) === -1;
+}
+
+function isFlatGroundMode() {
+    return !!(window.mapterhornTerrain &&
+        typeof window.mapterhornTerrain.isFlatGroundMode === 'function' &&
+        window.mapterhornTerrain.isFlatGroundMode());
 }
 
 function isUndergroundFeature(feature) {
@@ -84,6 +252,7 @@ function isUndergroundFeature(feature) {
 }
 
 function getTunnelElevation() {
+    if (isFlatGroundMode()) return 0;
     // Treat OSM layer -1 as one storey below a flat, DEM-independent datum.
     return -3;
 }
@@ -226,12 +395,166 @@ function modelRendererTexLog() {
 // only when the terrain provider exposes `availability`; the MapTerhorn
 // provider does not, so on a Model primitive it is a silent no-op.
 
-/** Default marker look when the OL style gives us nothing usable. */
-const PLAIN_MARKER_PIXEL_SIZE = 7;
-const hasCesium = typeof Cesium !== 'undefined';
-const PLAIN_MARKER_COLOR = hasCesium ? Cesium.Color.fromCssColorString('#e6a01a') : null;
-const PLAIN_LINE_COLOR = hasCesium ? Cesium.Color.fromCssColorString('#e6a01a').withAlpha(0.9) : null;
-const PLAIN_AREA_COLOR = hasCesium ? Cesium.Color.fromCssColorString('#e6a01a').withAlpha(0.25) : null;
+// ---------------------------------------------------------------------------
+// Plain marker configuration — overrideable at runtime:
+//   window.plainMarkerConfig.size = 12;
+//   window.plainMarkerConfig.color = '#ff0000';
+//   window.plainMarkerConfig.lineAlpha = 0.9;
+//   window.plainMarkerConfig.areaAlpha = 0.15;
+//   Or via URL: ?plainMarkerSize=12&plainMarkerColor=red&plainMarkerLineAlpha=0.5
+// ---------------------------------------------------------------------------
+const plainMarkerConfig = (function () {
+    const defaults = {
+        size: 7,
+        color: '#e6a01a',
+        lineAlpha: 0.9,
+        areaAlpha: 0.15
+    };
+
+    // Allow URL parameter overrides: ?plainMarkerSize=12&plainMarkerColor=red
+    try {
+        const params = new URLSearchParams(window.location.search);
+        if (params.has('plainMarkerSize')) defaults.size = parseFloat(params.get('plainMarkerSize'));
+        if (params.has('plainMarkerColor')) defaults.color = params.get('plainMarkerColor');
+        if (params.has('plainMarkerLineAlpha')) defaults.lineAlpha = parseFloat(params.get('plainMarkerLineAlpha'));
+        if (params.has('plainMarkerAreaAlpha')) defaults.areaAlpha = parseFloat(params.get('plainMarkerAreaAlpha'));
+    } catch (e) { /* URLSearchParams not available */ }
+
+    // Allow runtime override via window.plainMarkerConfig before this module loads
+    if (window.plainMarkerConfig) {
+        if (window.plainMarkerConfig.size !== undefined) defaults.size = window.plainMarkerConfig.size;
+        if (window.plainMarkerConfig.color !== undefined) defaults.color = window.plainMarkerConfig.color;
+        if (window.plainMarkerConfig.lineAlpha !== undefined) defaults.lineAlpha = window.plainMarkerConfig.lineAlpha;
+        if (window.plainMarkerConfig.areaAlpha !== undefined) defaults.areaAlpha = window.plainMarkerConfig.areaAlpha;
+    }
+
+    const hasCesium = typeof Cesium !== 'undefined';
+    return {
+        size: defaults.size,
+        color: hasCesium ? Cesium.Color.fromCssColorString(defaults.color) : null,
+        lineColor: hasCesium ? Cesium.Color.fromCssColorString(defaults.color).withAlpha(defaults.lineAlpha) : null,
+        areaColor: hasCesium ? Cesium.Color.fromCssColorString(defaults.color).withAlpha(defaults.areaAlpha) : null
+    };
+})();
+
+// Expose for runtime override and inspection
+window.plainMarkerConfig = plainMarkerConfig;
+
+// ---------------------------------------------------------------------------
+// addr:housenumber wall labels — blue square with white number, stuck to walls
+// ---------------------------------------------------------------------------
+const houseNumberCanvasCache = new Map();
+
+const HOUSE_NUMBER_CONFIG = {
+    bgColor: '#0066cc',       // blue background
+    textColor: '#ffffff',     // white text
+    outlineColor: '#000000',  // black outline around white text for readability
+    canvasSize: 256,          // px height (and minimum width) of the plaque
+    maxWidth: 1024,           // px cap for very long numbers like '110-114'
+    borderRadius: 32,         // rounded corners
+    fontSize: 120,            // px, same height for every number; width grows
+    heightAboveGroundMeters: 4.5, // plaque height above ground (above the door)
+    scale: 0.13,              // Cesium billboard scale (a little bigger than the original 0.10)
+    duplicateRadiusMeters: 2.5, // same number this close = same entrance
+    signGapPx: 8,             // screen gap between plaque and a POI sign above it
+    // The address/entrance point lies ON the building footprint, so the wall is
+    // at the same depth as the plaque and wins the depth test. Shifting the
+    // billboard this far towards the viewer in eye space keeps it depth-tested
+    // (so other buildings still hide it) while always sitting in front of the
+    // wall it is mounted on.
+    depthOffsetMeters: 1.0
+};
+
+/**
+ * Screen-space lift that keeps a house-number plaque above the POI sign of
+ * the same feature (a shop node can carry both addr:housenumber and
+ * shop=*). Signs are screen-sized billboards, so a world-space offset would
+ * still overlap them at some zoom levels; lifting the plaque by the sign's
+ * displayed height keeps the two apart at every zoom.
+ *
+ * @returns {number} pixels to move the plaque up, 0 when there is no sign
+ */
+function houseNumberSignLiftPx(feature) {
+    if (!window.poiSigns || typeof window.poiSigns.describe !== 'function' ||
+        typeof window.poiSigns.buildImage !== 'function') {
+        return 0;
+    }
+    const info = window.poiSigns.describe(feature);
+    if (!info) return 0;
+    const image = window.poiSigns.buildImage(info);
+    if (!image || !image.width || !image.height) return 0;
+    const config = window.poiSigns.config || {};
+    const signHeightPx = (config.displayWidthPx || 300) * image.height / image.width;
+    return signHeightPx + HOUSE_NUMBER_CONFIG.signGapPx;
+}
+
+/**
+ * Generate a blue plaque with a white number, cached per text.
+ *
+ * The canvas height is fixed and the plaque grows sideways for long numbers.
+ * Because the billboard scale therefore multiplies the font by the same
+ * factor for every house number, all plaques show the number at the same
+ * readable height instead of shrinking long ones to nothing.
+ */
+function createHouseNumberCanvas(text) {
+    if (houseNumberCanvasCache.has(text)) return houseNumberCanvasCache.get(text);
+
+    const label = String(text);
+    const height = HOUSE_NUMBER_CONFIG.canvasSize;
+    const padding = 34;
+
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+
+    let fontSize = HOUSE_NUMBER_CONFIG.fontSize;
+    ctx.font = `bold ${fontSize}px Arial, sans-serif`;
+    let textWidth = ctx.measureText(label).width;
+    let width = Math.max(height, Math.ceil(textWidth + padding * 2));
+
+    // A number too long for even the widest plaque shrinks to fit instead of
+    // producing a ribbon across the street.
+    const maxWidth = HOUSE_NUMBER_CONFIG.maxWidth;
+    if (width > maxWidth) {
+        width = maxWidth;
+        fontSize = Math.max(24, Math.floor(fontSize * (maxWidth - padding * 2) / textWidth));
+    }
+
+    canvas.width = width;
+    canvas.height = height;
+
+    // Setting canvas.width resets the context state, so restate the font.
+    ctx.font = `bold ${fontSize}px Arial, sans-serif`;
+
+    // Blue rounded plaque background
+    ctx.fillStyle = HOUSE_NUMBER_CONFIG.bgColor;
+    ctx.beginPath();
+    ctx.roundRect(0, 0, width, height, HOUSE_NUMBER_CONFIG.borderRadius);
+    ctx.fill();
+
+    // White number text with black outline for maximum readability
+    ctx.fillStyle = HOUSE_NUMBER_CONFIG.textColor;
+    ctx.strokeStyle = HOUSE_NUMBER_CONFIG.outlineColor;
+    ctx.lineWidth = fontSize * 0.14;   // thick black outline
+    ctx.lineJoin = 'round';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const y = height / 2 + fontSize * 0.05;
+    ctx.strokeText(label, width / 2, y);
+    ctx.fillText(label, width / 2, y);
+
+    const dataUrl = canvas.toDataURL('image/png');
+    houseNumberCanvasCache.set(text, dataUrl);
+    return dataUrl;
+}
+
+/** Check if a feature carries an addr:housenumber tag. */
+function getHouseNumber(feature) {
+    if (!feature || typeof feature.get !== 'function') return null;
+    const value = feature.get('addr:housenumber');
+    if (value === undefined || value === null || String(value).trim() === '') return null;
+    return String(value).trim();
+}
 
 /** Best-effort read of the OL style so the 3D marker resembles the 2D one. */
 function readPlainStyle(feature, layer) {
@@ -301,6 +624,33 @@ window.OSM3D_MODEL_PROPERTY = OSM3D_MODEL_PROPERTY;
 window.getFeatureModelOptions = getFeatureModelOptions;
 
 /**
+ * Apply a feature's [x, yaw, z] rotation to an ENU model matrix.
+ *
+ * The existing convention (models.js, model_repetition.js) stores the
+ * horizontal heading in index 1 and rotates around the local Z axis. Keeping
+ * that in one helper means the live rotation control cannot drift from the
+ * placement path.
+ */
+function applyFeatureRotationToMatrix(modelMatrix, modelRotation) {
+    if (!modelMatrix || !modelRotation || !Array.isArray(modelRotation) || modelRotation.length < 3) {
+        return modelMatrix;
+    }
+    if (modelRotation[1] !== 0) {
+        const bearingRotation = Cesium.Matrix3.fromRotationZ(modelRotation[1]);
+        modelMatrix = Cesium.Matrix4.multiplyByMatrix3(modelMatrix, bearingRotation, new Cesium.Matrix4());
+    }
+    if (modelRotation[0] !== 0) {
+        const xRotation = Cesium.Matrix3.fromRotationX(modelRotation[0]);
+        modelMatrix = Cesium.Matrix4.multiplyByMatrix3(modelMatrix, xRotation, new Cesium.Matrix4());
+    }
+    if (modelRotation[2] !== 0) {
+        const zRotation = Cesium.Matrix3.fromRotationZ(modelRotation[2]);
+        modelMatrix = Cesium.Matrix4.multiplyByMatrix3(modelMatrix, zRotation, new Cesium.Matrix4());
+    }
+    return modelMatrix;
+}
+
+/**
  * Ground elevation (metres) for a lon/lat, from whichever DEM is in use.
  *
  * The local GeoTIFF terrain manager keeps priority when one is loaded, but the
@@ -322,6 +672,7 @@ window.getFeatureModelOptions = getFeatureModelOptions;
  * @returns {number} elevation in metres
  */
 function sampleGroundElevation(lon, lat) {
+    if (isFlatGroundMode()) return 0;
     if (window.terrainManager && window.terrainManager.getElevation) {
         const local = window.terrainManager.getElevation(lon, lat);
         if (local !== null && local !== undefined && isFinite(local)) return local;
@@ -333,516 +684,112 @@ function sampleGroundElevation(lon, lat) {
     return 0;
 }
 
-
-// ---------------------------------------------------------------------------
-// House number wall labels — blue square with white number, stuck to walls
-// ---------------------------------------------------------------------------
-const houseNumberCanvasCache = new Map();
-
-// Plaques of features that also have a shop/POI name board: those are shifted
-// in screen space to sit immediately beside the board.
-const houseNumberBesideSigns = new WeakMap();
-
-/**
- * Screen-space distance from the shared anchor to the centre of a house-number
- * plaque parked beside a name board: half the board, the gap, and half the
- * plaque, all in rendered pixels. Both billboards are bottom-anchored on the
- * same ground point, so a horizontal pixel offset puts them side by side at
- * any zoom instead of one hiding the other.
- */
-function houseNumberBesideSignPixelOffset(signWidthPx) {
-    return (signWidthPx * CATEGORY_CONFIG.scale +
-        HOUSE_NUMBER_CONFIG.canvasSize * HOUSE_NUMBER_CONFIG.scale) / 2 +
-        HOUSE_NUMBER_CONFIG.besideSignGapPixels;
-}
-
-const HOUSE_NUMBER_CONFIG = {
-    bgColor: '#0066cc',       // blue background
-    textColor: '#ffffff',     // white text
-    canvasSize: 256,          // px (bigger = more readable)
-    borderRadius: 32,         // rounded corners
-    fontSize: 120,            // px, auto-shrinks if text is long
-    heightAboveGroundMeters: 1.6, // door height
-    scale: 0.13,              // Cesium billboard scale (bigger = more visible)
-    offsetLeftMeters: 0.6,    // horizontal offset to place plaque to the LEFT of door
-    besideSignGapPixels: 4    // screen-space gap between plaque and a name board
-};
-
-/** Generate a blue-square-with-white-number canvas data URL, cached per text. */
-function createHouseNumberCanvas(text) {
-    if (houseNumberCanvasCache.has(text)) return houseNumberCanvasCache.get(text);
-
-    const canvas = document.createElement('canvas');
-    const s = HOUSE_NUMBER_CONFIG.canvasSize;
-    canvas.width = s;
-    canvas.height = s;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return null;
-
-    const label = String(text);
-    const maxWidth = s - 36;
-    let fontSize = HOUSE_NUMBER_CONFIG.fontSize;
-    do {
-        ctx.font = `bold ${fontSize}px Arial, sans-serif`;
-        if (ctx.measureText(label).width <= maxWidth) break;
-        fontSize -= 4;
-    } while (fontSize > 56);
-
-    ctx.fillStyle = HOUSE_NUMBER_CONFIG.bgColor;
-    ctx.beginPath();
-    ctx.roundRect(0, 0, s, s, HOUSE_NUMBER_CONFIG.borderRadius);
-    ctx.fill();
-
-    ctx.fillStyle = HOUSE_NUMBER_CONFIG.textColor;
-    ctx.font = `bold ${fontSize}px Arial, sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    const y = s / 2 + fontSize * 0.05;
-    // Plain white digits, no outline/shadow.
-    ctx.fillText(String(text), s / 2, y);
-
-    const dataUrl = canvas.toDataURL('image/png');
-    houseNumberCanvasCache.set(text, dataUrl);
-    return dataUrl;
-}
-
-/** Check if a feature carries an addr:housenumber tag. */
-function getHouseNumber(feature) {
-    if (!feature || typeof feature.get !== 'function') return null;
-    const value = feature.get('addr:housenumber');
-    if (value === undefined || value === null || String(value).trim() === '') return null;
-    return String(value).trim();
-}
-
-// ---------------------------------------------------------------------------
-// POI name signs — shop/office/amenity/... name boards, like big shop signs
-// ---------------------------------------------------------------------------
-const TYPE_LABEL_CACHE = new Map();
-
-// Name-board entity -> its canvas width in px, so a house-number plaque can
-// park itself just beside that specific board.
-const poiSignWidths = new WeakMap();
-
-// One strong colour per category, so the colour alone tells you what it is.
-const CATEGORY_COLORS = {
-    shop:       { bg: '#e11d48', dark: '#9f1239' },  // red — shopping
-    office:     { bg: '#2563eb', dark: '#1e40af' },  // blue — business
-    amenity:    { bg: '#059669', dark: '#065f46' },  // green — services
-    tourism:    { bg: '#d97706', dark: '#92400e' },  // amber — tourism
-    leisure:    { bg: '#7c3aed', dark: '#5b21b6' },  // violet — leisure
-    healthcare: { bg: '#0891b2', dark: '#155e75' },  // cyan — health
-    historic:   { bg: '#92400e', dark: '#78350f' },  // brown — historic
-    craft:      { bg: '#ea580c', dark: '#9a3412' },  // orange — crafts
-    building:   { bg: '#475569', dark: '#334155' }   // slate — named buildings
-};
-
-const CATEGORY_ICONS = {
-    shop: '🛍', office: '🏢', amenity: '⭐', tourism: '📷',
-    leisure: '🎭', healthcare: '🏥', historic: '🏛', craft: '🔨', building: '🏠'
-};
-
-// Which OSM key turns a feature into a sign, most specific first.
-const CATEGORY_KEYS = ['shop', 'office', 'amenity', 'tourism', 'leisure', 'healthcare', 'historic', 'craft', 'building'];
-
-const CATEGORY_CONFIG = {
-    scale: 0.24,                    // Cesium billboard scale (a big sign)
-    heightAboveGroundMeters: 2.6,   // above the door / roof line
-    offsetLeftMeters: 0.6,          // point features: same offset as the house-number plaque
-    fontSize: 84,                   // name font, in canvas px
-    minFontSize: 36,                // floor when a long name has to shrink
-    captionFontSize: 32,
-    emojiFontSize: 84,
-    maxTextWidth: 760,              // canvas px before the name starts shrinking
-    maxCharsBeforeTrim: 22,
-};
-
-/** Name to put on the sign, or null when the feature is unnamed. */
-function getFeatureName(props) {
-    const candidates = [props.name, props['name:en'], props.brand, props.operator];
-    for (const value of candidates) {
-        if (value === undefined || value === null) continue;
-        const text = String(value).trim();
-        if (text !== '') return text;
-    }
-    return null;
-}
-
-/**
- * Matching category for a feature, with the name and tag value to sign.
- * Unnamed POIs return null: they already have a 3D model or a plain marker.
- */
-function getCategoryFromFeature(feature) {
-    if (!feature || typeof feature.get !== 'function') return null;
-    const props = feature.getProperties() || {};
-    const name = getFeatureName(props);
-    if (!name) return null;
-    for (const key of CATEGORY_KEYS) {
-        const raw = props[key];
-        if (raw === undefined || raw === null || String(raw).trim() === '') continue;
-        return { type: key, name: name, value: String(raw).trim() };
-    }
-    return null;
-}
-
-/** Caption under the name: the tag value, e.g. SUPERMARKET. */
-function getCategoryCaption(type, value) {
-    if (type === 'building' && value === 'yes') return 'BUILDING';
-    return String(value).toUpperCase();
-}
-
-// ---------------------------------------------------------------------------
-// Where a name sign goes: the entrance / door node when the data has one,
-// otherwise the footprint centre.
-//
-// House numbers already sit at doors because they ARE nodes. A shop is often a
-// polygon instead, and a board over the middle of its roof names the building
-// but not where you walk in. Entrance and address nodes of the loaded layers
-// are collected once and reused for every area sign.
-// ---------------------------------------------------------------------------
-const POI_ANCHOR_MAX_NODES = 20000;
-const POI_ANCHOR_EDGE_TOLERANCE_METERS = 3;
-
-let poiAnchorCache = null;        // { map, featureCount, nodes: [{ lonLat, kind }] }
-
-// 3D signs (shop/POI name boards and house-number plaques) can be switched
-// off from the 3D navigation panel.
-let signsVisible = true;
-
-function poiDistanceMeters(a, b) {
-    const latRad = (a[1] + b[1]) * Math.PI / 360;
-    const dx = (a[0] - b[0]) * 111320 * Math.cos(latRad);
-    const dy = (a[1] - b[1]) * 110540;
-    return Math.sqrt(dx * dx + dy * dy);
-}
-
-/** Ray casting on a lon/lat ring. */
-function pointInLonLatRing(point, ring) {
-    let inside = false;
-    const x = point[0], y = point[1];
-    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-        const xi = ring[i][0], yi = ring[i][1];
-        const xj = ring[j][0], yj = ring[j][1];
-        if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) {
-            inside = !inside;
-        }
-    }
-    return inside;
-}
-
-/** Shortest distance from a lon/lat point to a lon/lat ring, in metres. */
-function distanceToLonLatRingMeters(point, ring) {
-    const latRad = point[1] * Math.PI / 180;
-    const mx = 111320 * Math.cos(latRad);
-    const my = 110540;
-    let best = Infinity;
-    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-        const ax = (ring[j][0] - point[0]) * mx;
-        const ay = (ring[j][1] - point[1]) * my;
-        const bx = (ring[i][0] - point[0]) * mx;
-        const by = (ring[i][1] - point[1]) * my;
-        const dx = bx - ax, dy = by - ay;
-        const lengthSq = dx * dx + dy * dy;
-        let t = lengthSq > 0 ? -(ax * dx + ay * dy) / lengthSq : 0;
-        t = Math.max(0, Math.min(1, t));
-        const px = ax + t * dx, py = ay + t * dy;
-        const distance = Math.sqrt(px * px + py * py);
-        if (distance < best) best = distance;
-    }
-    return best;
-}
-
-/** Outer rings of a Polygon/MultiPolygon, in lon/lat. */
-function getOuterRingsLonLat(geometry) {
-    const rings = [];
-    try {
-        if (geometry.getType() === 'Polygon') {
-            const coords = geometry.getCoordinates();
-            if (coords && coords[0]) rings.push(coords[0]);
-        } else if (geometry.getType() === 'MultiPolygon') {
-            (geometry.getCoordinates() || []).forEach(function (polygon) {
-                if (polygon && polygon[0]) rings.push(polygon[0]);
-            });
-        }
-    } catch (e) { return []; }
-    return rings
-        .map(function (ring) { return ring.map(function (coord) { return ol.proj.toLonLat(coord); }); })
-        .filter(function (ring) { return ring.length > 2; });
-}
-
-/**
- * Door/entrance nodes of the loaded layers, cached. Entrance and door nodes
- * rank above address nodes: they are the actual way in. The cache is rebuilt
- * when the map or its feature count changes, so a new query is picked up.
- */
-function collectPoiAnchorNodes() {
-    const map = window.map;
-    if (!map || !window.modelRenderer || typeof window.modelRenderer.getAllMapLayers !== 'function') return null;
-    let layers;
-    try {
-        layers = window.modelRenderer.getAllMapLayers(map.getLayers().getArray());
-    } catch (e) { return null; }
-
-    let featureCount = 0;
-    for (let i = 0; i < layers.length; i++) {
-        const layer = layers[i];
-        const source = layer && layer.getSource && layer.getSource();
-        const features = source && source.getFeatures ? source.getFeatures() : null;
-        if (features) featureCount += features.length;
-    }
-    if (poiAnchorCache && poiAnchorCache.map === map && poiAnchorCache.featureCount === featureCount) {
-        return poiAnchorCache;
-    }
-
-    const nodes = [];
-    for (let i = 0; i < layers.length && nodes.length < POI_ANCHOR_MAX_NODES; i++) {
-        const layer = layers[i];
-        const source = layer && layer.getSource && layer.getSource();
-        const features = source && source.getFeatures ? source.getFeatures() : null;
-        if (!features) continue;
-        for (let j = 0; j < features.length && nodes.length < POI_ANCHOR_MAX_NODES; j++) {
-            const candidate = features[j];
-            const props = candidate.getProperties ? candidate.getProperties() : null;
-            if (!props) continue;
-            let kind = -1;
-            if (props.entrance !== undefined || props.door !== undefined) kind = 0;
-            else if (props['addr:housenumber'] !== undefined) kind = 1;
-            if (kind < 0) continue;
-            const geometry = candidate.getGeometry && candidate.getGeometry();
-            if (!geometry || geometry.getType() !== 'Point') continue;
-            let lonLat;
-            try { lonLat = ol.proj.toLonLat(geometry.getCoordinates()); } catch (e) { continue; }
-            if (!lonLat || !isFinite(lonLat[0]) || !isFinite(lonLat[1])) continue;
-            nodes.push({ lonLat: lonLat, kind: kind });
-        }
-    }
-    poiAnchorCache = { map: map, featureCount: featureCount, nodes: nodes };
-    return poiAnchorCache;
-}
-
-/** Nearest entrance, door or address node inside the footprint, in lon/lat. */
-function findPoiSignAnchorLonLat(geometry) {
-    const cache = collectPoiAnchorNodes();
-    if (!cache || !cache.nodes.length) return null;
-    const rings = getOuterRingsLonLat(geometry);
-    if (!rings.length) return null;
-    let center;
-    try {
-        center = ol.proj.toLonLat(ol.extent.getCenter(geometry.getExtent()));
-    } catch (e) { return null; }
-
-    let best = null;
-    let bestKind = 2;
-    let bestDistance = Infinity;
-    for (let i = 0; i < cache.nodes.length; i++) {
-        const node = cache.nodes[i];
-        let inside = false;
-        for (let r = 0; r < rings.length; r++) {
-            if (pointInLonLatRing(node.lonLat, rings[r])) { inside = true; break; }
-        }
-        if (!inside) {
-            // Entrance nodes sit ON the outline, where ray casting can miss them.
-            let edgeDistance = Infinity;
-            for (let r = 0; r < rings.length; r++) {
-                const distance = distanceToLonLatRingMeters(node.lonLat, rings[r]);
-                if (distance < edgeDistance) edgeDistance = distance;
-            }
-            if (edgeDistance > POI_ANCHOR_EDGE_TOLERANCE_METERS) continue;
-        }
-        // Entrances win over address nodes; within a kind, the node nearest the
-        // centre wins, so a shop with two doors still gets a single sign.
-        const distance = poiDistanceMeters(node.lonLat, center);
-        if (node.kind < bestKind || (node.kind === bestKind && distance < bestDistance)) {
-            bestKind = node.kind;
-            bestDistance = distance;
-            best = node.lonLat;
-        }
-    }
-    return best;
-}
-
-/**
- * Generate a colored sign board canvas — cached per category+value+name.
- *
- * The board is sized to its own content: letter and emoji sizes are unchanged,
- * but the padding, gaps and circle shrink to the text, so a short name gets a
- * short sign and a long name a wider one. There is no fixed empty area.
- * Returns { dataUrl, width, height } because the house-number plaque needs the
- * real board width to park itself beside it.
- */
-function createCategoryLabelCanvas(type, value, name) {
-    const cacheKey = type + '|' + value + '|' + name;
-    if (TYPE_LABEL_CACHE.has(cacheKey)) return TYPE_LABEL_CACHE.get(cacheKey);
-
-    const colors = CATEGORY_COLORS[type] || CATEGORY_COLORS.amenity;
-
-    // Layout metrics in canvas pixels. Content sizes are unchanged from the
-    // fixed-size board; only the space around them is computed from the text.
-    const padX = 16;
-    const padY = 12;
-    const badgeGap = 16;
-    const lineGap = 8;
-    const rim = 4;
-
-    const emoji = CATEGORY_ICONS[type] || CATEGORY_ICONS.amenity;
-    const emojiSize = CATEGORY_CONFIG.emojiFontSize;
-    const emojiFont = emojiSize +
-        'px "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", Arial, sans-serif';
-    const badgeRadius = Math.round(emojiSize * 0.6);
-    const badgeDiameter = badgeRadius * 2;
-    const captionFontSize = CATEGORY_CONFIG.captionFontSize;
-    const caption = getCategoryCaption(type, value);
-    const captionFont = 'bold ' + captionFontSize + 'px Arial, sans-serif';
-
-    const maxChars = CATEGORY_CONFIG.maxCharsBeforeTrim;
-    const displayName = name.length > maxChars
-        ? name.slice(0, maxChars - 1).trimEnd() + '…'
-        : name;
-
-    // A scratch context measures the text before the real canvas exists.
-    const measure = document.createElement('canvas').getContext('2d');
-    if (!measure) return null;
-
-    let fontSize = CATEGORY_CONFIG.fontSize;
-    let nameWidth = 0;
-    do {
-        measure.font = `bold ${fontSize}px Arial, sans-serif`;
-        nameWidth = measure.measureText(displayName).width;
-        if (nameWidth <= CATEGORY_CONFIG.maxTextWidth) break;
-        fontSize -= 2;
-    } while (fontSize > CATEGORY_CONFIG.minFontSize);
-
-    measure.font = captionFont;
-    const captionWidth = measure.measureText(caption).width;
-
-    const textWidth = Math.ceil(Math.max(nameWidth, captionWidth));
-    const textHeight = fontSize + lineGap + captionFontSize;
-    const contentHeight = Math.max(badgeDiameter, textHeight);
-
-    const w = Math.ceil(padX * 2 + badgeDiameter + badgeGap + textWidth);
-    const h = Math.ceil(contentHeight + padY * 2 + rim * 2);
-
-    const canvas = document.createElement('canvas');
-    canvas.width = w;
-    canvas.height = h;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return null;
-
-    // Board: category colour with a darker rim. No baked shadow: it would be
-    // clipped by the tight canvas and would only add empty space around it.
-    ctx.fillStyle = colors.bg;
-    ctx.beginPath();
-    ctx.roundRect(rim, rim, w - rim * 2, h - rim * 2, Math.min(28, Math.round(h * 0.2)));
-    ctx.fill();
-
-    ctx.strokeStyle = colors.dark;
-    ctx.lineWidth = 5;
-    ctx.beginPath();
-    ctx.roundRect(rim + 3, rim + 3, w - (rim + 3) * 2, h - (rim + 3) * 2,
-        Math.min(24, Math.round(h * 0.17)));
-    ctx.stroke();
-
-    // Emoji badge, hugging the glyph instead of reserving a large circle.
-    const centerY = h / 2;
-    const badgeCenterX = padX + badgeRadius;
-    ctx.fillStyle = 'rgba(255,255,255,0.22)';
-    ctx.beginPath();
-    ctx.arc(badgeCenterX, centerY, badgeRadius, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.font = emojiFont;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillStyle = '#ffffff';
-    ctx.fillText(emoji, badgeCenterX, centerY + Math.round(emojiSize * 0.06));
-
-    // Name above the type caption, both left-aligned to the emoji badge.
-    const textLeft = padX + badgeDiameter + badgeGap;
-    const textTop = centerY - textHeight / 2;
-    const nameCenterY = textTop + fontSize / 2;
-    const captionCenterY = textTop + fontSize + lineGap + captionFontSize / 2;
-
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'middle';
-    ctx.font = `bold ${fontSize}px Arial, sans-serif`;
-    ctx.fillStyle = '#ffffff';
-    ctx.fillText(displayName, textLeft, nameCenterY);
-
-    ctx.font = captionFont;
-    ctx.fillText(caption, textLeft, captionCenterY);
-
-    const result = {
-        dataUrl: canvas.toDataURL('image/png'),
-        width: w,
-        height: h
-    };
-    TYPE_LABEL_CACHE.set(cacheKey, result);
-    return result;
-}
-
-/**
- * Add a name sign for a point or area feature, or return null.
- *
- * Points are placed like the house-number plaque (just to the left of the
- * node). Areas are anchored at their entrance/door node (or address node)
- * when the loaded data has one, so the board marks the way in; only when no
- * such node exists does it fall back to the footprint centre.
- */
-function createPoiSignEntity(feature, geometry, dataSource) {
-    const category = getCategoryFromFeature(feature);
-    if (!category) return null;
-    const label = createCategoryLabelCanvas(category.type, category.value, category.name);
-    if (!label) return null;
-
-    let lonLat;
-    try {
-        if (geometry.getType() === 'Point') {
-            lonLat = ol.proj.toLonLat(geometry.getCoordinates());
-            const metersPerDegreeLon = 111320 * Math.cos(lonLat[1] * Math.PI / 180);
-            lonLat = [lonLat[0] - CATEGORY_CONFIG.offsetLeftMeters / metersPerDegreeLon, lonLat[1]];
-        } else {
-            lonLat = findPoiSignAnchorLonLat(geometry) ||
-                ol.proj.toLonLat(ol.extent.getCenter(geometry.getExtent()));
-        }
-    } catch (e) { return null; }
-    if (!lonLat || !isFinite(lonLat[0]) || !isFinite(lonLat[1])) return null;
-
-    try {
-        const entity = dataSource.entities.add({
-            id: `poi-sign-${category.type}-${getFeatureKey(feature)}`,
-            show: signsVisible,
-            position: Cesium.Cartesian3.fromDegrees(
-                lonLat[0], lonLat[1],
-                sampleGroundElevation(lonLat[0], lonLat[1]) + CATEGORY_CONFIG.heightAboveGroundMeters
-            ),
-            billboard: {
-                image: label.dataUrl,
-                heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
-                scale: CATEGORY_CONFIG.scale,
-                verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-                disableDepthTestDistance: Number.POSITIVE_INFINITY
-            }
-        });
-        poiSignWidths.set(entity, label.width);
-        return entity;
-    } catch (e) {
-        // The same OSM object can arrive in two layers: the first sign wins and
-        // the duplicate reuses it instead of spamming a duplicate-id warning.
-        const id = `poi-sign-${category.type}-${getFeatureKey(feature)}`;
-        const existing = dataSource.entities.getById ? dataSource.entities.getById(id) : null;
-        if (existing) return existing;
-        // A real Cesium failure: say so instead of silently falling back to the
-        // generic marker, which is what made the signs "missing".
-        console.warn('POI sign not placed for ' + feature.get('name') + ':', e);
-        return null;
-    }
-}
-
 const bridgeSurfaceFeatureCache = new WeakMap();
 const BRIDGE_SURFACE_MATCH_DISTANCE_METERS = 30;
+const UNDER_BRIDGE_CONFIG = {
+    transitionMeters: 5,
+    defaultClearanceMeters: 4.5,
+    defaultWidthMeters: 7,
+    highwayRules: {
+        motorway: { widthMeters: 20, clearanceMeters: 10 },
+        motorway_link: { widthMeters: 20, clearanceMeters: 10 },
+        trunk: { widthMeters: 14, clearanceMeters: 8 },
+        trunk_link: { widthMeters: 14, clearanceMeters: 8 },
+        primary: { widthMeters: 12, clearanceMeters: 7 },
+        primary_link: { widthMeters: 12, clearanceMeters: 7 },
+        secondary: { widthMeters: 10, clearanceMeters: 6 },
+        secondary_link: { widthMeters: 10, clearanceMeters: 6 },
+        tertiary: { widthMeters: 8, clearanceMeters: 5 },
+        tertiary_link: { widthMeters: 8, clearanceMeters: 5 },
+        residential: { widthMeters: 3, clearanceMeters: 4.5 },
+        cycleway: { widthMeters: 3, demOnly: true },
+        footway: { widthMeters: 3, demOnly: true },
+        path: { widthMeters: 3, demOnly: true },
+        pedestrian: { widthMeters: 3, demOnly: true },
+        crossing: { widthMeters: 3, demOnly: true },
+        bridleway: { widthMeters: 3, demOnly: true },
+        corridor: { widthMeters: 3, demOnly: true },
+        steps: { widthMeters: 3, demOnly: true },
+        service: { widthMeters: 5, clearanceMeters: 4 },
+        living_street: { widthMeters: 5, clearanceMeters: 4 }
+    }
+};
+
+function getHighwayType(feature) {
+    return String(feature && feature.get &&
+        (feature.get('highway') || feature.get('area:highway')) || '').trim().toLowerCase();
+}
+
+function getHighwayWidthMeters(feature) {
+    const rule = UNDER_BRIDGE_CONFIG.highwayRules[getHighwayType(feature)];
+    return rule ? rule.widthMeters : UNDER_BRIDGE_CONFIG.defaultWidthMeters;
+}
+
+function getUnderBridgeClearanceMeters(feature) {
+    const rule = UNDER_BRIDGE_CONFIG.highwayRules[getHighwayType(feature)];
+    return rule ? rule.clearanceMeters : UNDER_BRIDGE_CONFIG.defaultClearanceMeters;
+}
+
+function isDemOnlyFeature(feature) {
+    if (!feature || !feature.get) return false;
+    const highwayTypes = [
+        feature.get('highway'),
+        feature.get('area:highway')
+    ].map(value => String(value || '').trim().toLowerCase());
+    return highwayTypes.some(highway => {
+        const rule = UNDER_BRIDGE_CONFIG.highwayRules[highway];
+        return !!(rule && rule.demOnly);
+    });
+}
+
+function getBridgeCrossingInfo(feature, bridge, position, projection) {
+    // OSM bridge=yes also appears on railings; they cannot be overhead surfaces.
+    if (!getHighwayType(bridge) && !bridge.get('railway')) return null;
+    if (isDemOnlyFeature(feature)) return null;
+    const bridgeLines = getGeometryLines(bridge.getGeometry && bridge.getGeometry());
+    const edgeMargin = getHighwayWidthMeters(bridge) / 2;
+    const crossings = getFeatureBridgeCrossings(feature, bridge, projection).filter(crossing => {
+        let closestEndpointDistance = Infinity;
+        for (const line of bridgeLines) {
+            if (line.length === 0) continue;
+            const start = ol.proj.transform(line[0], projection, 'EPSG:4326');
+            const end = ol.proj.transform(line[line.length - 1], projection, 'EPSG:4326');
+            closestEndpointDistance = Math.min(
+                closestEndpointDistance,
+                distanceBetweenLonLat(crossing, start),
+                distanceBetweenLonLat(crossing, end)
+            );
+        }
+        return closestEndpointDistance > edgeMargin;
+    });
+    if (crossings.length === 0) return null;
+
+    let closestPosition = crossings[0];
+    let closestDistance = distanceBetweenLonLat(position, closestPosition);
+    for (let i = 1; i < crossings.length; i++) {
+        const distance = distanceBetweenLonLat(position, crossings[i]);
+        if (distance < closestDistance) {
+            closestPosition = crossings[i];
+            closestDistance = distance;
+        }
+    }
+
+    const innerRadius = getHighwayWidthMeters(bridge) / 2;
+    const transition = Math.max(UNDER_BRIDGE_CONFIG.transitionMeters, innerRadius);
+    const progress = Math.max(0, Math.min(1, (closestDistance - innerRadius) / transition));
+    const smoothProgress = progress * progress * (3 - 2 * progress);
+    return {
+        position: closestPosition,
+        distance: closestDistance,
+        influence: 1 - smoothProgress,
+        maxDistance: innerRadius + transition
+    };
+}
 
 function findBridgeSurfaceFeature(feature, position) {
     if (!feature || !position || !window.map || !window.modelRenderer) return feature;
     const featureGeometry = feature.getGeometry && feature.getGeometry();
-    if (feature.get('highway') && featureGeometry &&
+    if (getHighwayType(feature) && featureGeometry &&
         ['LineString', 'MultiLineString'].includes(featureGeometry.getType())) return feature;
     const cached = bridgeSurfaceFeatureCache.get(feature);
     if (cached) return cached;
@@ -859,7 +806,7 @@ function findBridgeSurfaceFeature(feature, position) {
         if (!source || !source.getFeatures) continue;
         for (const candidate of source.getFeatures()) {
             if (candidate === feature || !isBridgeFeature(candidate) ||
-                !candidate.get('highway')) continue;
+                !getHighwayType(candidate)) continue;
             const candidateLayer = parseOsNumber(candidate.get('layer'));
             if ((isFinite(candidateLayer) ? candidateLayer : 0) !== featureLevel) continue;
 
@@ -894,12 +841,13 @@ function getBridgeReferenceHeight(feature, lonLat) {
     const surfaceAnchor = surfaceFeature === feature
         ? lonLat
         : (getFeatureAnchorLonLat(surfaceFeature) || lonLat);
+    if (isFlatGroundMode()) return 0;
     let referenceHeight = surfaceFeature.get('bridgeRefHeight');
     if (referenceHeight === undefined || referenceHeight === null || !isFinite(referenceHeight)) {
         if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
             try { window.mapterhornTerrain.warmUp(surfaceAnchor[0], surfaceAnchor[1]); } catch (e) { /* no DEM yet */ }
         }
-        referenceHeight = sampleGroundElevation(surfaceAnchor[0], surfaceAnchor[1]);
+        referenceHeight = sampleFeatureMedianGroundElevation(surfaceFeature, surfaceAnchor);
         if (referenceHeight === null || !isFinite(referenceHeight)) referenceHeight = 0;
         surfaceFeature.set('bridgeRefHeight', referenceHeight);
         surfaceFeature.set('bridgeRefPosition', surfaceAnchor.slice(0, 2));
@@ -965,6 +913,7 @@ const underBridgeCandidateCache = new WeakMap();
 
 function findBridgeAboveFeature(feature, lonLatPosition = null) {
     if (!feature || isBridgeFeature(feature) || !window.map || !window.modelRenderer) return null;
+    if (isDemOnlyFeature(feature)) return null;
     const geometry = feature.getGeometry && feature.getGeometry();
     if (!geometry) return null;
     const featureLayer = parseOsNumber(feature.get('layer'));
@@ -998,17 +947,9 @@ function findBridgeAboveFeature(feature, lonLatPosition = null) {
     }
 
     for (const bridge of cached.candidates) {
-        if (!point) return bridge;
-        const bridgeGeometry = bridge.getGeometry();
-        for (const line of getGeometryLines(bridgeGeometry)) {
-            for (let i = 0; i < line.length - 1; i++) {
-                const start = ol.proj.transform(line[i], projection, 'EPSG:4326');
-                const end = ol.proj.transform(line[i + 1], projection, 'EPSG:4326');
-                if (window.modelRenderer.pointToSegmentDistanceMeters(lonLatPosition, start, end) <= 15) {
-                    return bridge;
-                }
-            }
-        }
+        if (!lonLatPosition) return bridge;
+        const crossing = getBridgeCrossingInfo(feature, bridge, lonLatPosition, projection);
+        if (crossing && crossing.distance <= crossing.maxDistance) return bridge;
     }
     return null;
 }
@@ -1025,6 +966,105 @@ function getFeatureAnchorLonLat(feature) {
     }
     const extent = geometry.getExtent();
     return ol.proj.toLonLat(ol.extent.getCenter(extent));
+}
+
+function sampleFeatureMedianGroundElevation(feature, fallbackPosition) {
+    const geometry = feature && feature.getGeometry && feature.getGeometry();
+    const projection = window.map && window.map.getView
+        ? window.map.getView().getProjection()
+        : 'EPSG:4326';
+    const positions = [];
+    if (geometry) {
+        for (const line of getGeometryLines(geometry)) {
+            for (const coordinate of line) {
+                if (!Array.isArray(coordinate) || !isFinite(coordinate[0]) || !isFinite(coordinate[1])) continue;
+                const lonLat = ol.proj.transform(coordinate, projection, 'EPSG:4326');
+                positions.push(lonLat);
+            }
+        }
+        if (positions.length === 0 && geometry.getType() === 'Point') {
+            positions.push(ol.proj.toLonLat(geometry.getCoordinates(), projection));
+        }
+    }
+    if (positions.length === 0 && fallbackPosition &&
+        isFinite(fallbackPosition[0]) && isFinite(fallbackPosition[1])) {
+        positions.push(fallbackPosition);
+    }
+
+    const elevations = positions
+        .map(position => sampleGroundElevation(position[0], position[1]))
+        .filter(height => isFinite(height))
+        .sort((a, b) => a - b);
+    if (elevations.length === 0) return 0;
+
+    const middle = Math.floor(elevations.length / 2);
+    return elevations.length % 2 === 0
+        ? (elevations[middle - 1] + elevations[middle]) / 2
+        : elevations[middle];
+}
+
+function getSegmentIntersection(firstStart, firstEnd, secondStart, secondEnd) {
+    const firstX = firstEnd[0] - firstStart[0];
+    const firstY = firstEnd[1] - firstStart[1];
+    const secondX = secondEnd[0] - secondStart[0];
+    const secondY = secondEnd[1] - secondStart[1];
+    const denominator = firstX * secondY - firstY * secondX;
+    if (Math.abs(denominator) < 1e-9) return null;
+
+    const deltaX = secondStart[0] - firstStart[0];
+    const deltaY = secondStart[1] - firstStart[1];
+    const firstFraction = (deltaX * secondY - deltaY * secondX) / denominator;
+    const secondFraction = (deltaX * firstY - deltaY * firstX) / denominator;
+    if (firstFraction < -1e-9 || firstFraction > 1 + 1e-9 ||
+        secondFraction < -1e-9 || secondFraction > 1 + 1e-9) return null;
+    return [
+        firstStart[0] + firstFraction * firstX,
+        firstStart[1] + firstFraction * firstY
+    ];
+}
+
+function getFeatureBridgeCrossings(feature, bridge, projection) {
+    const featureGeometry = feature && feature.getGeometry && feature.getGeometry();
+    const bridgeGeometry = bridge && bridge.getGeometry && bridge.getGeometry();
+    if (!featureGeometry || !bridgeGeometry) return [];
+    const crossings = [];
+    const featureLines = getGeometryLines(featureGeometry);
+    const bridgeLines = getGeometryLines(bridgeGeometry);
+    for (const featureLine of featureLines) {
+        for (let i = 0; i < featureLine.length - 1; i++) {
+            for (const bridgeLine of bridgeLines) {
+                for (let j = 0; j < bridgeLine.length - 1; j++) {
+                    const crossing = getSegmentIntersection(
+                        featureLine[i], featureLine[i + 1],
+                        bridgeLine[j], bridgeLine[j + 1]
+                    );
+                    if (crossing) crossings.push(ol.proj.toLonLat(crossing, projection));
+                }
+            }
+        }
+    }
+
+    if (crossings.length === 0 && featureGeometry.intersectsCoordinate) {
+        for (const line of bridgeLines) {
+            for (const coordinate of line) {
+                if (featureGeometry.intersectsCoordinate(coordinate)) {
+                    crossings.push(ol.proj.toLonLat(coordinate, projection));
+                }
+            }
+        }
+    }
+    return crossings;
+}
+
+function distanceBetweenLonLat(first, second) {
+    const radians = Math.PI / 180;
+    const lat1 = first[1] * radians;
+    const lat2 = second[1] * radians;
+    const deltaLat = lat2 - lat1;
+    const deltaLon = (second[0] - first[0]) * radians;
+    const haversine = Math.sin(deltaLat / 2) ** 2 +
+        Math.cos(lat1) * Math.cos(lat2) * Math.sin(deltaLon / 2) ** 2;
+    return 12742000 * Math.asin(Math.sqrt(Math.min(1, haversine)));
 }
 
 function findUnderBridgeWayFeature(areaFeature, bridge, areaCentre) {
@@ -1046,8 +1086,47 @@ function findUnderBridgeWayFeature(areaFeature, bridge, areaCentre) {
             if (!geometry || !['LineString', 'MultiLineString'].includes(geometry.getType())) continue;
             if (!geometriesIntersect(areaGeometry, geometry)) continue;
             const candidateLayer = parseOsNumber(candidate.get('layer'));
+            if (isDemOnlyFeature(candidate) ||
+                (isFinite(candidateLayer) ? candidateLayer : 0) >= bridgeLevel) continue;
+            const crossing = getBridgeCrossingInfo(candidate, bridge, areaCentre, projection);
+            if (!crossing || crossing.distance > crossing.maxDistance) continue;
+            if (crossing.distance < closestDistance) {
+                closestFeature = candidate;
+                closestDistance = crossing.distance;
+            }
+        }
+    }
+    return closestFeature;
+}
+
+function findUnderBridgeSupportFeature(feature, bridge, position) {
+    // Ancillary ways such as guardrails should share the nearby underpass road's
+    // height rather than receive an unrelated default clearance of their own.
+    if (!feature || getHighwayType(feature) || feature.get('railway') ||
+        !bridge || !position || !window.map || !window.modelRenderer) return feature;
+
+    const projection = window.map.getView().getProjection();
+    const bridgeLayer = parseOsNumber(bridge.get('layer'));
+    const bridgeLevel = isFinite(bridgeLayer) ? bridgeLayer : 1;
+    const maxFeaturesDistance = 12;
+    let closestFeature = null;
+    let closestDistance = maxFeaturesDistance;
+    const layers = window.modelRenderer.getAllMapLayers(window.map.getLayers().getArray());
+
+    for (const layer of layers) {
+        const source = layer && layer.getSource && layer.getSource();
+        if (!source || !source.getFeatures) continue;
+        for (const candidate of source.getFeatures()) {
+            if (candidate === feature || isBridgeFeature(candidate) ||
+                (!getHighwayType(candidate) && !candidate.get('railway'))) continue;
+            if (isDemOnlyFeature(candidate)) continue;
+            const candidateLayer = parseOsNumber(candidate.get('layer'));
             if ((isFinite(candidateLayer) ? candidateLayer : 0) >= bridgeLevel) continue;
-            if (typeof getFeatureModelOptions === 'function' && !getFeatureModelOptions(candidate)) continue;
+            const geometry = candidate.getGeometry && candidate.getGeometry();
+            if (!geometry || !['LineString', 'MultiLineString'].includes(geometry.getType())) continue;
+
+            const crossing = getBridgeCrossingInfo(candidate, bridge, position, projection);
+            if (!crossing || crossing.distance > crossing.maxDistance) continue;
 
             let distance = Infinity;
             for (const line of getGeometryLines(geometry)) {
@@ -1056,305 +1135,72 @@ function findUnderBridgeWayFeature(areaFeature, bridge, areaCentre) {
                     const end = ol.proj.transform(line[i + 1], projection, 'EPSG:4326');
                     distance = Math.min(
                         distance,
-                        window.modelRenderer.pointToSegmentDistanceMeters(areaCentre, start, end)
+                        window.modelRenderer.pointToSegmentDistanceMeters(position, start, end)
                     );
                 }
             }
-            if (distance < closestDistance) {
+            const maxDistance = Math.min(
+                maxFeaturesDistance,
+                Math.max(6, getHighwayWidthMeters(candidate) / 2 + 3)
+            );
+            if (distance <= maxDistance && distance < closestDistance) {
                 closestFeature = candidate;
                 closestDistance = distance;
             }
         }
     }
-    return closestFeature;
+    return closestFeature || feature;
 }
 
 function getUnderBridgeSurface(feature, bridge, lonLatPosition) {
-    const bridgeKey = getFeatureKey(bridge);
+    if (!feature || !bridge || !lonLatPosition) {
+        return {
+            bridge,
+            bridgeKey: null,
+            feature,
+            height: lonLatPosition
+                ? sampleGroundElevation(lonLatPosition[0], lonLatPosition[1])
+                : 0,
+            position: lonLatPosition && lonLatPosition.slice(0, 2)
+        };
+    }
+    const bridgeId = getFeatureKey(bridge) || 'bridge';
+    const projection = window.map && window.map.getView
+        ? window.map.getView().getProjection()
+        : 'EPSG:4326';
+    const surfaceFeature = findUnderBridgeSupportFeature(feature, bridge, lonLatPosition);
+    const crossing = getBridgeCrossingInfo(surfaceFeature, bridge, lonLatPosition, projection);
+    const featureCrossing = crossing || getBridgeCrossingInfo(feature, bridge, lonLatPosition, projection);
+    const surfacePosition = featureCrossing ? featureCrossing.position : lonLatPosition;
+    const bridgeKey = bridgeId + '_' +
+        surfacePosition[0].toFixed(5) + '_' + surfacePosition[1].toFixed(5) + '_' +
+        lonLatPosition[0].toFixed(5) + '_' + lonLatPosition[1].toFixed(5);
     const cached = feature.get('underBridgeSurfaces') || {};
-    let surface = cached[bridgeKey];
-    if (!surface) {
-        if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
-            try { window.mapterhornTerrain.warmUp(lonLatPosition[0], lonLatPosition[1]); } catch (e) { /* no DEM yet */ }
-        }
-        surface = {
-            height: sampleGroundElevation(lonLatPosition[0], lonLatPosition[1]),
-            position: lonLatPosition.slice(0, 2)
-        };
-        cached[bridgeKey] = surface;
-        feature.set('underBridgeSurfaces', cached);
-    }
-    return { bridge, bridgeKey, feature, height: surface.height, position: surface.position };
-}
-
-/**
- * Calculate smooth under-bridge height avoiding DEM climb
- * Uses ground elevation at segment ends and blends to a safe height in the middle
- */
-/**
- * Get smooth under-bridge height using median ground sampling
- * Avoids DEM climbing by using median of ground points under the bridge
- * Provides smooth transition at bridge edges to avoid cliffs
- */
-function getUnderBridgeSmoothHeight(feature, bridge, lonLatPosition) {
-    const geometry = feature.getGeometry();
-    if (!geometry || !lonLatPosition) {
-        return sampleGroundElevation(lonLatPosition[0], lonLatPosition[1]);
-    }
-
-    const featureLines = getGeometryLines(geometry);
-    const bridgeLines = getGeometryLines(bridge.getGeometry());
-
-    // Find all intersection points
-    let intersectionPoints = [];
-    for (const fLine of featureLines) {
-        for (const bLine of bridgeLines) {
-            const segs = segmentsIntersect(fLine, bLine);
-            intersectionPoints = intersectionPoints.concat(segs);
+    if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
+        window.mapterhornTerrain.warmUp(lonLatPosition[0], lonLatPosition[1]);
+        if (crossing) {
+            window.mapterhornTerrain.warmUp(surfacePosition[0], surfacePosition[1]);
         }
     }
-
-    if (intersectionPoints.length < 2) {
-        return sampleGroundElevation(lonLatPosition[0], lonLatPosition[1]);
-    }
-
-    // Create or get cache for this feature-bridge pair
-    const cacheKey = `${getFeatureKey(feature)}_${getFeatureKey(bridge)}`;
-    if (!underBridgeHeightCache) underBridgeHeightCache = new Map();
-    let cacheEntry = underBridgeHeightCache.get(cacheKey);
-
-    if (!cacheEntry) {
-        // Sample ground at multiple points along intersection segment
-        const startPoint = intersectionPoints[0];
-        const endPoint = intersectionPoints[intersectionPoints.length - 1];
-        const totalLength = distanceMeters(startPoint, endPoint);
-
-        // Sample at 5 points along the segment
-        const samples = [];
-        for (let i = 0; i <= 4; i++) {
-            const t = i / 4;
-            const samplePoint = [
-                startPoint[0] + t * (endPoint[0] - startPoint[0]),
-                startPoint[1] + t * (endPoint[1] - startPoint[1])
-            ];
-            if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
-                try { window.mapterhornTerrain.warmUp(samplePoint[0], samplePoint[1]); } catch (e) {}
-            }
-            samples.push(sampleGroundElevation(samplePoint[0], samplePoint[1]));
-        }
-
-        // Calculate median ground height
-        const sortedSamples = [...samples].sort((a, b) => a - b);
-        const medianGround = sortedSamples[Math.floor(sortedSamples.length / 2)];
-
-        cacheEntry = {
-            medianGround: medianGround,
-            startPoint: startPoint,
-            endPoint: endPoint,
-            totalLength: totalLength,
-            samplePoints: samples.map((h, i) => {
-                const t = i / 4;
-                return [
-                    startPoint[0] + t * (endPoint[0] - startPoint[0]),
-                    startPoint[1] + t * (endPoint[1] - startPoint[1]),
-                    h
-                ];
-            })
-        };
-        underBridgeHeightCache.set(cacheKey, cacheEntry);
-    }
-
-    // Calculate position relative to intersection segment
-    const { medianGround, startPoint, endPoint, totalLength, samplePoints } = cacheEntry;
-    if (totalLength < 1) return medianGround;
-
-    const currentDist = distanceMeters(startPoint, lonLatPosition);
-    const t = Math.min(Math.max(currentDist / totalLength, 0), 1);
-
-    // Smooth transition with fade at edges (avoid cliff at bridge ends)
-    const edgeFade = 10; // meters to fade at each end
-    const normalizedT = t * totalLength; // distance from start
-
-    // Use linear interpolation between sample points
-    let height;
-    if (normalizedT <= samplePoints[0][2] !== undefined ? distanceMeters(startPoint, samplePoints[0]) : 0) {
-        // Near start - fade to ground
-        height = medianGround;
-    } else if (normalizedT >= totalLength - edgeFade) {
-        // Near end - fade to ground
-        height = medianGround;
-    } else {
-        // In middle - use median
-        height = medianGround;
-    }
-
-    return height;
-}
-
-// Cache for under-bridge heights to avoid re-sampling
-let underBridgeHeightCache = null;
-
-/**
- * Check if two line segments intersect
- */
-function segmentsIntersect(seg1, seg2) {
-    const intersections = [];
-    for (let i = 0; i < seg1.length - 1; i++) {
-        for (let j = 0; j < seg2.length - 1; j++) {
-            const p1 = seg1[i], p2 = seg1[i + 1];
-            const p3 = seg2[j], p4 = seg2[j + 1];
-
-            const denom = (p1[0] - p2[0]) * (p3[1] - p4[1]) - (p1[1] - p2[1]) * (p3[0] - p4[0]);
-            if (Math.abs(denom) < 1e-10) continue;
-
-            const t = ((p1[0] - p3[0]) * (p3[1] - p4[1]) - (p1[1] - p3[1]) * (p3[0] - p4[0])) / denom;
-            const u = -((p1[0] - p2[0]) * (p1[1] - p3[1]) - (p1[0] - p3[0]) * (p1[1] - p2[1])) / denom;
-
-            if (t >= 0 && t <= 1 && u >= 0 && u <= 1) {
-                intersections.push([
-                    p1[0] + t * (p2[0] - p1[0]),
-                    p1[1] + t * (p2[1] - p1[1])
-                ]);
-            }
-        }
-    }
-    return intersections;
-}
-
-/**
- * Distance between two [lon, lat] points in meters
- */
-function distanceMeters(a, b) {
-    const cartA = Cesium.Cartesian3.fromDegrees(a[0], a[1]);
-    const cartB = Cesium.Cartesian3.fromDegrees(b[0], b[1]);
-    return Cesium.Cartesian3.distance(cartA, cartB);
-}
-
-/**
- * Smooth ease-in-out curve
- */
-function easeInOutCubic(t) {
-    return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
-}
-
-/**
- * Find the nearest highway feature adjacent to the given feature
- * Used to match barrier height to the highway they run alongside
- * Returns the highway feature if found within 50 meters
- */
-function findAdjacentHighway(feature, position) {
-    // Get all features from the global features array
-    const allFeatures = window.osm3dFeatures || [];
-
-    if (!feature || !position || !allFeatures.length) return null;
-
-    let nearestHighway = null;
-    let minDistance = Infinity;
-
-    for (const candidate of allFeatures) {
-        // Skip the same feature
-        if (candidate === feature) continue;
-
-        // Check if it's a highway
-        const highway = candidate.get('highway');
-        if (!highway) continue;
-
-        // Get the highway geometry
-        const highwayGeometry = candidate.getGeometry();
-        if (!highwayGeometry) continue;
-
-        // Find the closest point on the highway to our position
-        const highwayCoords = highwayGeometry.getFlatCoordinates();
-        const highwayLayout = highwayGeometry.getLayout();
-
-        // Convert position to same coordinate system
-        const pos = [position[0], position[1]];
-
-        // Calculate minimum distance to highway geometry
-        let minDist = Infinity;
-        for (let i = 0; i < highwayCoords.length; i += highwayLayout.length) {
-            const coord = [highwayCoords[i], highwayCoords[i + 1]];
-            const dist = Cesium.Cartesian3.distance(
-                Cesium.Cartesian3.fromDegrees(pos[0], pos[1]),
-                Cesium.Cartesian3.fromDegrees(coord[0], coord[1])
-            );
-            minDist = Math.min(minDist, dist);
-        }
-
-        // Keep track of the nearest highway within 50 meters
-        if (minDist < 50 && minDist < minDistance) {
-            minDistance = minDist;
-            nearestHighway = candidate;
-        }
-    }
-
-    return nearestHighway;
-}
-
-/**
- * Get reference height from adjacent highway for barrier features
- * Barriers should match the height of the highway they run alongside
- */
-function getBarrierHeightFromHighway(feature, position) {
-    const highway = findAdjacentHighway(feature, position);
-    if (!highway || highway === feature) {
-        return null;
-    }
-
-    // Get the highway's reference height (cached from previous processing)
-    const highwayRefHeight = highway.get('bridgeRefHeight');
-    if (highwayRefHeight !== undefined && isFinite(highwayRefHeight)) {
-        return highwayRefHeight;
-    }
-
-    // If not cached, calculate it now
-    const highwayAnchor = getFeatureAnchorLonLat(highway) || position;
-    return getBridgeReferenceHeight(highway, highwayAnchor);
-}
-
-/**
- * Calculate smooth transition height between bridge and ground level
- * @param {Object} bridge - The bridge feature
- * @param {Array} position - [lon, lat] position
- * @param {Function} groundElevationFn - Function to get ground elevation
- * @returns {number} Smoothed elevation value
- */
-function getSmoothTransitionHeight(bridge, position, groundElevationFn) {
-    // Calculate distance to bridge edge
-    const bridgeGeometry = bridge.getGeometry();
-    if (!bridgeGeometry) return groundElevationFn(position[0], position[1]);
-
-    // Find closest point on bridge to our position
-    const bridgeLines = getGeometryLines(bridgeGeometry);
-    let minDistance = Infinity;
-
-    for (const line of bridgeLines) {
-        for (let i = 0; i < line.length - 1; i++) {
-            const start = line[i];
-            const end = line[i + 1];
-
-            // Calculate distance from point to line segment
-            const dist = window.modelRenderer.pointToSegmentDistanceMeters(
-                position,
-                start,
-                end
-            );
-            minDistance = Math.min(minDistance, dist);
-        }
-    }
-
-    // Get bridge height
-    const bridgeHeight = getBridgeReferenceHeight(bridge, position);
-    const groundHeight = groundElevationFn(position[0], position[1]);
-
-    // Smooth transition over 20 meters
-    const transitionDistance = 20;
-    const normalizedDist = Math.min(minDistance / transitionDistance, 1);
-
-    // Use smooth interpolation (ease-out curve)
-    const t = 1 - Math.pow(1 - normalizedDist, 2);
-
-    return bridgeHeight * t + groundHeight * (1 - t);
+    const bridgeHeight = getBridgeReferenceHeight(bridge, surfacePosition);
+    const groundHeight = sampleGroundElevation(lonLatPosition[0], lonLatPosition[1]);
+    const influence = featureCrossing ? featureCrossing.influence : 0;
+    const clearance = getUnderBridgeClearanceMeters(surfaceFeature);
+    const underBridgeHeight = groundHeight +
+        (bridgeHeight - clearance - groundHeight) * influence;
+    cached[bridgeKey] = {
+        height: underBridgeHeight,
+        position: lonLatPosition.slice(0, 2),
+        bridgePosition: surfacePosition.slice(0, 2)
+    };
+    feature.set('underBridgeSurfaces', cached);
+    return {
+        bridge,
+        bridgeKey,
+        feature,
+        height: underBridgeHeight,
+        position: lonLatPosition.slice(0, 2)
+    };
 }
 
 function getFeatureHeightOffset(feature) {
@@ -1365,12 +1211,21 @@ function getFeatureHeightOffset(feature) {
 window.modelRenderer = {
 
     loadedModels: new Map(),          // Track live primitives by stable key
+    activeOsmLayer: null,
+    activeIndoorLevel: null,
+    activeUndergroundView: false,
+    _layerFilterTerrainScene: null,
+    _layerFilterTerrainProvider: null,
+    _layerFilterFlatProvider: null,
 
     // Live primitive census, maintained by trackEntry/untrackEntry so it can
     // never drift away from loadedModels the way the old `totalModelsAdded`
     // counter did.
     liveByKind: { model: 0, repetition: 0, texture: 0 },
     liveTotal: 0,
+    _pendingAssets: 0,
+    _assetReadinessSeen: new WeakSet(),
+    _assetSessionId: 0,
     cameraUpdateTimeout: null,        // Throttle camera updates
     modelPool: new Map(),             // Pool of reusable model instances
     backgroundTasks: [],              // Background loading tasks
@@ -1417,14 +1272,50 @@ window.modelRenderer = {
             url: modelUrl,
             show: true
         }));
+        this.trackModelReadiness(newModel, modelUrl);
         
         pool.push({
             model: newModel,
-            isVisible: true
+            isVisible: true,
+            scene: cesiumScene
         });
         
         if (debugConfig.enabled) console.log(`🆕 Created new pooled model: ${modelUrl}`);
         return { model: newModel, isVisible: true };
+    },
+
+    trackModelReadiness: function(model, label) {
+        if (!model || !model.readyPromise || this._assetReadinessSeen.has(model)) return;
+        this._assetReadinessSeen.add(model);
+        const sessionId = this._session3dId;
+        this._pendingAssets++;
+        this._publishAssetReadiness();
+        const self = this;
+        model.readyPromise.then(function() {
+            self._settleModelReadiness(sessionId);
+        }, function(error) {
+            console.error('🎯 3D model failed to load (' + label + '):', error);
+            self._settleModelReadiness(sessionId);
+        });
+    },
+
+    _settleModelReadiness: function(sessionId) {
+        if (sessionId !== this._session3dId) return;
+        this._pendingAssets = Math.max(0, this._pendingAssets - 1);
+        this._publishAssetReadiness();
+    },
+
+    _publishAssetReadiness: function() {
+        if (window.loadingProgress && window.loadingProgress.assetsPending) {
+            window.loadingProgress.assetsPending(this._pendingAssets);
+        }
+        window.dispatchEvent(new CustomEvent('osm3d:modelAssetsChanged', {
+            detail: { pending: this._pendingAssets }
+        }));
+    },
+
+    getPendingAssetCount: function() {
+        return this._pendingAssets;
     },
 
     /**
@@ -1437,6 +1328,7 @@ window.modelRenderer = {
             if (pooledModel) {
                 pooledModel.isVisible = false;
                 pooledModel.model.show = false;
+                pooledModel.model._olFeature = null;
                 if (debugConfig.enabled) console.log(`♻️ Returned model to pool: ${modelUrl}`);
                 // Clean up pool periodically when returning models
                 if (Math.random() < 0.1) { // 10% chance to clean up
@@ -1468,8 +1360,16 @@ window.modelRenderer = {
                 const toRemove = Math.max(0, unusedModels.length - Math.floor(maxPoolSize / this.modelPool.size));
                 
                 for (let i = 0; i < toRemove; i++) {
-                    const index = pool.indexOf(unusedModels[i]);
+                    const pooledModel = unusedModels[i];
+                    const index = pool.indexOf(pooledModel);
                     if (index > -1) {
+                        try {
+                            if (pooledModel.scene && pooledModel.scene.primitives) {
+                                pooledModel.scene.primitives.remove(pooledModel.model);
+                            }
+                        } catch (error) {
+                            console.error('🎯 Could not destroy an unused pooled model:', error);
+                        }
                         pool.splice(index, 1);
                         if (debugConfig.enabled) console.log(`♻️ Removed unused model from pool: ${modelUrl}`);
                     }
@@ -1584,24 +1484,22 @@ window.modelRenderer = {
         this.setUndergroundEntryVisibility(entry, isUndergroundViewEnabled());
         this.setActiveLevelEntryVisibility(entry, window.indoor && window.indoor.isEnabled()
             ? window.indoor.getActiveLevel() : null);
+        // A primitive created after the last nudge pass would otherwise sit at
+        // the un-nudged spot until the camera moved again.
+        this.applyRenderOrderToEntry(entry);
         return entry;
     },
 
     setUndergroundEntryVisibility: function(entry, undergroundVisible) {
-        if (!entry || !entry.feature) return;
-        const isUnderground = isUndergroundFeature(entry.feature);
-        const items = entry.kind === 'texture'
-            ? (Array.isArray(entry.primitives) ? entry.primitives : [entry.primitives])
-            : [entry.model];
-        items.forEach(function(item) {
-            if (item) item.show = isUnderground === !!undergroundVisible;
-        });
+        this.activeUndergroundView = !!undergroundVisible;
+        this.setActiveLevelEntryVisibility(entry, this.activeIndoorLevel);
     },
 
     setUndergroundVisibility: function(undergroundVisible) {
         if (!this.loadedModels) return;
+        this.activeUndergroundView = !!undergroundVisible;
         this.loadedModels.forEach(function(entry) {
-            this.setUndergroundEntryVisibility(entry, undergroundVisible);
+            this.setActiveLevelEntryVisibility(entry, this.activeIndoorLevel);
         }, this);
         const scene = window.ol3d && window.ol3d.getCesiumScene
             ? window.ol3d.getCesiumScene()
@@ -1611,10 +1509,13 @@ window.modelRenderer = {
 
     setActiveLevelEntryVisibility: function(entry, activeLevel) {
         if (!entry || !entry.feature || typeof entry.feature.get !== 'function') return;
+        this.activeIndoorLevel = activeLevel;
         const feature = entry.feature;
         const underground = isUndergroundFeature(feature);
-        const undergroundVisible = isUndergroundViewEnabled();
-        let visible = underground === undergroundVisible;
+        const undergroundVisible = this.activeUndergroundView || isUndergroundViewEnabled();
+        let visible = this.activeOsmLayer !== null
+            ? getOsmLayer(feature) === this.activeOsmLayer
+            : underground === undergroundVisible;
         if (activeLevel !== null && activeLevel !== undefined && activeLevel !== '') {
             const levelTags = [feature.get('level'), feature.get('repeat_on')]
                 .filter(value => value !== undefined && value !== null && value !== '')
@@ -1673,6 +1574,7 @@ window.modelRenderer = {
 
     setActiveLevelVisibility: function(activeLevel) {
         if (!this.loadedModels) return;
+        this.activeIndoorLevel = activeLevel;
         this.loadedModels.forEach(function(entry) {
             this.setActiveLevelEntryVisibility(entry, activeLevel);
         }, this);
@@ -1680,6 +1582,163 @@ window.modelRenderer = {
             ? window.ol3d.getCesiumScene()
             : null;
         if (scene && scene.requestRender) scene.requestRender();
+    },
+
+    getAvailableOsmLayers: function() {
+        const values = new Set();
+        const layers = window.map && window.map.getLayers
+            ? this.getAllMapLayers(window.map.getLayers().getArray())
+            : [];
+        layers.forEach(function(layer) {
+            const source = layer.getSource && layer.getSource();
+            if (!source || typeof source.getFeatures !== 'function') return;
+            source.getFeatures().forEach(function(feature) {
+                values.add(getOsmLayer(feature));
+            });
+        });
+        if (this.loadedModels) {
+            this.loadedModels.forEach(function(entry) {
+                if (entry && entry.feature) values.add(getOsmLayer(entry.feature));
+            });
+        }
+        if (this.activeOsmLayer !== null) values.add(this.activeOsmLayer);
+        if (!values.size) values.add('0');
+        return Array.from(values).sort(function(a, b) {
+            const an = Number(a), bn = Number(b);
+            if (isFinite(an) && isFinite(bn)) return an - bn;
+            if (isFinite(an)) return -1;
+            if (isFinite(bn)) return 1;
+            return a.localeCompare(b);
+        });
+    },
+
+    setActiveOsmLayer: function(layer) {
+        this.activeOsmLayer = layer === undefined || layer === null || String(layer) === ''
+            ? null : normalizeOsmLayer(layer);
+        this.setLayerFilterTerrainVisible(this.activeOsmLayer === null);
+        if (this.loadedModels) {
+            this.loadedModels.forEach(function(entry) {
+                this.setActiveLevelEntryVisibility(entry, this.activeIndoorLevel);
+            }, this);
+        }
+        const scene = window.ol3d && window.ol3d.getCesiumScene
+            ? window.ol3d.getCesiumScene()
+            : null;
+        if (scene && scene.requestRender) scene.requestRender();
+        return this.activeOsmLayer;
+    },
+
+    setLayerFilterTerrainVisible: function(visible) {
+        const scene = window.ol3d && window.ol3d.getCesiumScene
+            ? window.ol3d.getCesiumScene()
+            : null;
+        if (!scene) return;
+
+        if (!visible) {
+            if (this._layerFilterTerrainScene !== scene) {
+                this._layerFilterTerrainScene = scene;
+                this._layerFilterTerrainProvider = scene.terrainProvider;
+                this._layerFilterFlatProvider = new Cesium.EllipsoidTerrainProvider();
+            }
+            if (scene.terrainProvider !== this._layerFilterFlatProvider) {
+                scene.terrainProvider = this._layerFilterFlatProvider;
+            }
+        } else if (this._layerFilterTerrainScene === scene) {
+            scene.terrainProvider = this._layerFilterTerrainProvider;
+            this._layerFilterTerrainScene = null;
+            this._layerFilterTerrainProvider = null;
+            this._layerFilterFlatProvider = null;
+        } else {
+            this._layerFilterTerrainScene = null;
+            this._layerFilterTerrainProvider = null;
+            this._layerFilterFlatProvider = null;
+        }
+        if (scene.requestRender) scene.requestRender();
+    },
+
+    /**
+     * Change a model's horizontal rotation without reloading its glb.
+     *
+     * Used by the 3DMR rotation handle. The feature property is updated even
+     * when the primitive has not been placed yet (it may be far away or still
+     * loading), so the next renderer pass picks the new orientation up.
+     *
+     * @returns {boolean} true when a live primitive was updated as well
+     */
+    setFeatureRotation: function(feature, rotation, cesiumScene) {
+        if (!feature || typeof feature.set !== 'function') return false;
+        const normalized = Array.isArray(rotation)
+            ? rotation.slice(0, 3).map(function (value) { return Number(value) || 0; })
+            : [0, 0, 0];
+        feature.set('modelRotation', normalized);
+
+        const key = getFeatureKey(feature);
+        const entry = key && this.loadedModels ? this.loadedModels.get(key) : null;
+        if (!entry || !entry.model || entry.kind !== 'model') return false;
+
+        try {
+            const matrix = entry.model.modelMatrix;
+            if (!matrix) return false;
+            const translation = Cesium.Matrix4.getTranslation(matrix, new Cesium.Cartesian3());
+            let base = Cesium.Transforms.eastNorthUpToFixedFrame(translation);
+            if (!entry.isTunnel && !entry.isBridge && !entry.isUnderBridge &&
+                window.mapterhornTerrain && window.mapterhornTerrain.applySlopeTilt) {
+                try {
+                    base = window.mapterhornTerrain.applySlopeTilt(base, entry.lon, entry.lat);
+                } catch (e) { /* no DEM tile yet */ }
+            }
+            entry.model.modelMatrix = applyFeatureRotationToMatrix(base, normalized);
+            const scene = cesiumScene || (window.ol3d && window.ol3d.getCesiumScene
+                ? window.ol3d.getCesiumScene() : null);
+            if (scene && scene.requestRender) scene.requestRender();
+            return true;
+        } catch (e) {
+            return false;
+        }
+    },
+
+    /**
+     * Change a placed model's vertical offset without reloading its glb.
+     * The translation is the only part of the matrix that moves; rotation and
+     * slope tilt stay untouched.
+     *
+     * @returns {boolean} true when a live primitive was updated as well
+     */
+    setFeatureHeightOffset: function(feature, offset, cesiumScene) {
+        if (!feature || typeof feature.set !== 'function') return false;
+        const next = Number(offset);
+        if (!isFinite(next)) return false;
+        const previous = Number(feature.get('modelHeightOffset')) || 0;
+        feature.set('modelHeightOffset', next);
+
+        const key = getFeatureKey(feature);
+        const entry = key && this.loadedModels ? this.loadedModels.get(key) : null;
+        if (!entry || !entry.model || entry.kind !== 'model') return false;
+
+        try {
+            const matrix = entry.model.modelMatrix;
+            if (!matrix || entry.lon === undefined || entry.lat === undefined) return false;
+            const oldOffset = entry.heightOffset !== undefined && entry.heightOffset !== null
+                ? Number(entry.heightOffset) : previous;
+            const oldHeight = Cesium.Cartographic.fromCartesian(
+                Cesium.Matrix4.getTranslation(matrix, new Cesium.Cartesian3())).height;
+            if (!isFinite(oldHeight)) return false;
+
+            const updated = Cesium.Matrix4.clone(matrix);
+            Cesium.Matrix4.setTranslation(
+                updated,
+                Cesium.Cartesian3.fromDegrees(entry.lon, entry.lat, oldHeight + (next - oldOffset)),
+                updated
+            );
+            entry.model.modelMatrix = updated;
+            entry.heightOffset = next;
+            const scene = cesiumScene || (window.ol3d && window.ol3d.getCesiumScene
+                ? window.ol3d.getCesiumScene() : null);
+            if (scene && scene.requestRender) scene.requestRender();
+            return true;
+        } catch (e) {
+            return false;
+        }
     },
 
     /** Stop counting `key` and forget it. Does NOT destroy the primitive. */
@@ -1745,10 +1804,12 @@ window.modelRenderer = {
             if (entry.kind === 'texture') {
                 const list = Array.isArray(entry.primitives) ? entry.primitives
                     : (entry.primitives ? [entry.primitives] : []);
-                if (scene && scene.primitives) {
-                    for (let i = 0; i < list.length; i++) {
-                        const p = list[i];
-                        if (p && !isPrimitiveDestroyed(p)) scene.primitives.remove(p);
+                for (let i = 0; i < list.length; i++) {
+                    const p = list[i];
+                    if (p && p.polygon && entry.entityCollection) {
+                        entry.entityCollection.remove(p);
+                    } else if (scene && scene.primitives && p && !isPrimitiveDestroyed(p)) {
+                        scene.primitives.remove(p);
                     }
                 }
                 // createAreaEntity() early-returns on this property, so it has
@@ -1799,6 +1860,14 @@ window.modelRenderer = {
         const stale = [];
         this.loadedModels.forEach(function(entry, key) {
             if (entry.lon === undefined || entry.lat === undefined) return;
+            // 3DMR is an explicitly enabled, capped (100 models) layer. Its
+            // models must not be dropped by the generic camera range cleanup:
+            // the camera flight into 3D can put a model outside unloadDistance
+            // after it has rendered, and it then vanishes without a way to
+            // place it again until the layer is refreshed. The layer itself
+            // releases models when they leave its search results or are
+            // disabled.
+            if (entry.feature && entry.feature.get && entry.feature.get('3dmr:id')) return;
             if (this._roughDistance(entry, camLon, camLat, camHeight) > memoryConfig.unloadDistance) {
                 stale.push(key);
             }
@@ -1821,6 +1890,9 @@ window.modelRenderer = {
      * overlap, so an evicted primitive is not immediately re-created.
      */
     ensureBudget: function(cesiumScene) {
+        // Every placement path calls this, so it is the one place that can
+        // install the draw-order hook without repeating the call six times.
+        this.ensureRenderOrderHook(cesiumScene);
         if (this.liveTotal < memoryConfig.maxLivePrimitives) return true;
         this.evictFarthest(cesiumScene);
         return this.liveTotal < memoryConfig.maxLivePrimitives;
@@ -1837,6 +1909,10 @@ window.modelRenderer = {
         const eligible = [];
         this.loadedModels.forEach(function(entry, key) {
             if (entry.lon === undefined || entry.lat === undefined) return;
+            // See unloadDistantModels: a user-enabled 3DMR layer stays resident
+            // across camera moves; only a 3DMR refresh or disabling the layer
+            // releases it.
+            if (entry.feature && entry.feature.get && entry.feature.get('3dmr:id')) return;
             const d = this._roughDistance(entry, camLon, camLat, camHeight);
             if (d > memoryConfig.unloadDistance) eligible.push([d, key]);
         }, this);
@@ -1959,6 +2035,119 @@ window.modelRenderer = {
     },
     
     // -----------------------------------------------------------------------
+    // Draw order against buildings, line and area repetitions
+    // (DEFAULT_RENDER_ORDER, top of file)
+    // -----------------------------------------------------------------------
+    _renderOrderScene: null,
+    _renderOrderRemove: null,
+    _renderOrderApplied: null,   // per group: the nudge already baked into the matrices
+
+    /**
+     * Change a group's draw order while the app is running.
+     *
+     *   modelRenderer.setRenderOrder({ pointModels: 0.8 })
+     *
+     * Values are metres of nudge toward the camera (0 switches the group off).
+     * Takes effect on the next rendered frame - no reload, no re-placement.
+     *
+     * @param {Object} overrides  partial map of group name → metres
+     * @returns {Object} the live config object (also window.renderOrderConfig)
+     */
+    setRenderOrder: function(overrides) {
+        if (!overrides || typeof overrides !== 'object') return renderOrderConfig;
+        RENDER_ORDER_GROUPS.forEach(function(group) {
+            if (!(group in overrides)) return;
+            const metres = Number(overrides[group]);
+            if (!isFinite(metres) || metres < 0) {
+                console.warn('🎯 setRenderOrder: ' + group +
+                    ' expects metres >= 0, got ' + overrides[group]);
+                return;
+            }
+            renderOrderConfig[group] = metres;
+        });
+        return renderOrderConfig;
+    },
+
+    /** Start nudging placed primitives on every frame (idempotent per scene). */
+    ensureRenderOrderHook: function(cesiumScene) {
+        if (!cesiumScene || cesiumScene === this._renderOrderScene || !cesiumScene.preUpdate) return;
+        if (this._renderOrderRemove) {
+            try { this._renderOrderRemove(); } catch (e) { /* previous scene gone */ }
+        }
+        this._renderOrderScene = cesiumScene;
+        this._renderOrderApplied = null;
+        const self = this;
+        this._renderOrderRemove = cesiumScene.preUpdate.addEventListener(function() {
+            self.applyRenderOrder(cesiumScene);
+        });
+    },
+
+    /**
+     * Move every participating primitive to its group's current nudge.
+     *
+     * Deltas, not absolutes: a Cesium mesh keeps its position only in its
+     * modelMatrix, so whatever is already baked in has to be subtracted before
+     * the new value goes in - otherwise a moving camera would drag every model
+     * away by the whole offset again on every frame. A delta of zero (camera
+     * still, config untouched) costs one comparison and nothing else.
+     */
+    applyRenderOrder: function(cesiumScene) {
+        const camera = cesiumScene && cesiumScene.camera;
+        if (!camera || !camera.directionWC || !this.loadedModels) return;
+
+        const scratch = renderOrderScratchState();
+        const towardCamera = horizontalTowardCamera(camera, scratch.direction);
+        if (!towardCamera) return;
+
+        const applied = this._renderOrderApplied || {};
+        let moving = false;
+        RENDER_ORDER_GROUPS.forEach(function(group) {
+            const target = scratch.targets[group];
+            const metres = renderOrderMetres(group);
+            if (metres === 0) {
+                Cesium.Cartesian3.clone(Cesium.Cartesian3.ZERO, target);
+            } else {
+                Cesium.Cartesian3.multiplyByScalar(towardCamera, metres, target);
+            }
+            const delta = scratch.deltas[group];
+            const previous = applied[group];
+            if (previous) {
+                Cesium.Cartesian3.subtract(target, previous, delta);
+            } else {
+                Cesium.Cartesian3.clone(target, delta);
+            }
+            if (Cesium.Cartesian3.magnitudeSquared(delta) > 1e-8) moving = true;
+        });
+        if (!moving) return;
+
+        this.loadedModels.forEach(function(entry) {
+            const delta = scratch.deltas[entry.orderGroup];
+            if (!delta) return;
+            // Groups that did not move are left untouched: only the ones whose
+            // metres changed pay for the matrix rewrite.
+            if (delta.x === 0 && delta.y === 0 && delta.z === 0) return;
+            nudgeModelMatrix(entry.model, delta);
+        });
+
+        const next = {};
+        RENDER_ORDER_GROUPS.forEach(function(group) {
+            next[group] = Cesium.Cartesian3.clone(scratch.targets[group], new Cesium.Cartesian3());
+        });
+        this._renderOrderApplied = next;
+        if (cesiumScene.requestRender) cesiumScene.requestRender();
+    },
+
+    /**
+     * Bake the group's current nudge into a primitive placed AFTER the last
+     * applyRenderOrder() pass - otherwise it would stay at the un-nudged spot
+     * until the camera moved again.
+     */
+    applyRenderOrderToEntry: function(entry) {
+        if (!entry || !entry.orderGroup || !this._renderOrderApplied) return;
+        nudgeModelMatrix(entry.model, this._renderOrderApplied[entry.orderGroup]);
+    },
+
+    // -----------------------------------------------------------------------
     // Pre-load panel reporting + sliced placement
     // -----------------------------------------------------------------------
     // The per-feature work below (placeFeature) is exactly what it always was.
@@ -1984,20 +2173,28 @@ window.modelRenderer = {
      * before (groups recurse, leaf layers contribute their features) — it just
      * collects instead of placing, so the total is known before any work.
      */
-    collectPlaceTasks: function(layers, cesiumScene, out) {
+    collectPlaceGroups: function(layers, cesiumScene, out) {
         const self = this;
         (layers || []).forEach(function(layer) {
             if (!layer) return;
             // A group: descend, whatever its type.
             if (typeof layer.getLayers === 'function') {
-                self.collectPlaceTasks(layer.getLayers().getArray(), cesiumScene, out);
+                self.collectPlaceGroups(layer.getLayers().getArray(), cesiumScene, out);
                 return;
             }
             if (!layer.getSource || typeof layer.getSource !== 'function') return;
             let features = null;
             try {
                 const source = layer.getSource();
-                if (source && source.getFeatures) features = source.getFeatures();
+                if (source && source.getFeaturesCollection) {
+                    const collection = source.getFeaturesCollection();
+                    if (collection && collection.getArray) {
+                        features = collection.getArray();
+                    }
+                }
+                if (!features && source && source.getFeatures) {
+                    features = source.getFeatures();
+                }
             } catch (e) {
                 // Layer source access failed. Log instead of swallowing: an
                 // empty catch here hid the failure of every model in the layer.
@@ -2006,9 +2203,7 @@ window.modelRenderer = {
             }
             if (!features) return;
             if (debugConfig.enabled) console.log(`🎯 Found ${features.length} features in layer`);
-            for (let i = 0; i < features.length; i++) {
-                out.push({ feature: features[i], fidx: i, layer: layer, cesiumScene: cesiumScene });
-            }
+            if (features.length) out.push({ features: features, layer: layer, cesiumScene: cesiumScene });
         });
         return out;
     },
@@ -2018,25 +2213,39 @@ window.modelRenderer = {
      * hand-off between slices is what lets the browser paint the progress bar
      * and keep answering clicks.
      */
-    runPlaceSlices: function(tasks) {
+    runPlaceSlices: function(groups) {
         const self = this;
-        const total = tasks.length;
+        const total = groups.reduce(function(count, group) { return count + group.features.length; }, 0);
         let index = 0;
+        let groupIndex = 0;
+        let featureIndex = 0;
         this._placing = true;
 
         function slice() {
             const started = index;
-            const end = Math.min(total, index + self.placeSliceSize);
-            for (; index < end; index++) {
-                const task = tasks[index];
+            const deadline = (window.progressive && window.progressive.nowMs
+                ? window.progressive.nowMs() : Date.now()) + 8;
+            let processed = 0;
+            while (index < total && processed < self.placeSliceSize &&
+                (window.progressive && window.progressive.nowMs
+                    ? window.progressive.nowMs() : Date.now()) < deadline) {
+                const group = groups[groupIndex];
+                const feature = group.features[featureIndex];
                 try {
                     // Isolate every feature. addPlainResult / the repetition
                     // helpers are NOT wrapped individually, so a single throw
                     // would abort the whole sweep and silently cost the rest of
                     // the layer its models.
-                    self.placeFeature(task.feature, task.fidx, task.cesiumScene, task.layer);
+                    self.placeFeature(feature, featureIndex, group.cesiumScene, group.layer);
                 } catch (featureError) {
-                    console.error(`🎯 Feature ${task.fidx} in layer "${task.layer.get('title') || 'unnamed'}" failed, skipping:`, featureError);
+                    console.error(`🎯 Feature ${featureIndex} in layer "${group.layer.get('title') || 'unnamed'}" failed, skipping:`, featureError);
+                }
+                index++;
+                featureIndex++;
+                processed++;
+                if (featureIndex >= group.features.length) {
+                    groupIndex++;
+                    featureIndex = 0;
                 }
             }
             self._progressDone = index;
@@ -2086,81 +2295,12 @@ window.modelRenderer = {
 
     /** Start a sweep over one layer (kept as the module's entry point). */
     addModelsFromLayer: function(layer, cesiumScene) {
-        poiAnchorCache = null;   // a new layer may carry new door nodes
-        const tasks = this.collectPlaceTasks([layer], cesiumScene, []);
-        this._progressTotal = tasks.length;
+        const groups = this.collectPlaceGroups([layer], cesiumScene, []);
+        this._progressTotal = groups.reduce(function(count, group) { return count + group.features.length; }, 0);
         if (window.loadingProgress && window.loadingProgress.total) {
-            window.loadingProgress.total(tasks.length);
+            window.loadingProgress.total(this._progressTotal);
         }
-        this.runPlaceSlices(tasks);
-    },
-
-    /**
-     * Show or hide every 3D sign: shop/POI name boards and house-number
-     * plaques (3D navigation panel toggle). Visibility lives on the entities,
-     * so signs created later by streaming follow the same setting.
-     */
-    setSignsVisible: function(visible) {
-        signsVisible = visible !== false;
-        if (this._poiSigns) {
-            this._poiSigns.forEach(function (entry) {
-                if (entry && entry.entity) entry.entity.show = signsVisible;
-            });
-        }
-        // House-number plaques are plain entities, so match them by their id.
-        const dataSource = this._plainDataSource;
-        if (dataSource && dataSource.entities && dataSource.entities.values) {
-            dataSource.entities.values.forEach(function (entity) {
-                if (!entity || typeof entity.id !== 'string' ||
-                    entity.id.indexOf('housenumber-') !== 0) return;
-                entity.show = signsVisible;
-                // A plaque parked beside a name board returns to its own node
-                // while the boards are hidden, so it is not left dangling.
-                const signWidthPx = houseNumberBesideSigns.get(entity);
-                if (signWidthPx && entity.billboard) {
-                    entity.billboard.pixelOffset = new Cesium.Cartesian2(
-                        signsVisible ? -houseNumberBesideSignPixelOffset(signWidthPx) : 0, 0);
-                }
-            });
-        }
-        return signsVisible;
-    },
-
-    areSignsVisible: function() {
-        return signsVisible;
-    },
-
-    // Names kept from when the toggle only hid the POI name boards.
-    setPoiSignsVisible: function(visible) {
-        return this.setSignsVisible(visible);
-    },
-
-    arePoiSignsVisible: function() {
-        return this.areSignsVisible();
-    },
-
-    /**
-     * Create the name sign for a feature exactly once per 3D session.
-     *
-     * This lives here, not in addPlainResult, because a sign is a label: a
-     * named shop/office/POI gets one whether or not the feature also carries a
-     * model, a texture or a repetition. Creating it only on the "plain" path
-     * meant a POI that had a model never reached the sign code at all.
-     */
-    addPoiSignForFeature: function(feature, cesiumScene, layer) {
-        if (!feature || !getCategoryFromFeature(feature)) return;
-        if (!this._poiSigns) this._poiSigns = new Map();
-        const tracked = this._poiSigns.get(feature);
-        if (tracked && tracked.sessionId === this._session3dId) return;
-        const geometry = feature.getGeometry && feature.getGeometry();
-        if (!geometry || !geometry.getType) return;
-        const dataSource = this.getPlainDataSource(cesiumScene);
-        if (!dataSource) return;
-        const entity = createPoiSignEntity(feature, geometry, dataSource);
-        this._poiSigns.set(feature, { entity: entity, layer: layer, sessionId: this._session3dId });
-        if (entity && debugConfig.enabled) {
-            console.log('🪧 Name sign placed: ' + feature.get('name'));
-        }
+        this.runPlaceSlices(groups);
     },
 
     /**
@@ -2176,9 +2316,22 @@ window.modelRenderer = {
         const hasLineRepetitions = !!hasRepetitions && geometry && geometry.getType &&
             (geometry.getType() === 'LineString' || geometry.getType() === 'MultiLineString');
 
-        // The name sign is independent of the model/texture/repetition choice
-        // below: every named shop/office/POI gets one, at its door when known.
-        this.addPoiSignForFeature(feature, cesiumScene, layer);
+        // Address plaques belong on every point that carries addr:housenumber,
+        // even when the point already has a model (entrance/garage doors do).
+        // This is deliberately outside the model/marker branches below, which
+        // used to be the only place a house number was ever drawn.
+        if (geometry && geometry.getType && geometry.getType() === 'Point') {
+            try { this.addHouseNumberLabel(feature, cesiumScene, layer); }
+            catch (e) { console.error('🏠 House-number label failed, skipping:', e); }
+        }
+
+        // Colored POI signs (amenity/tourism/leisure/shop/office), independent
+        // of whether the feature also has a 3D model.
+        if (geometry && geometry.getType &&
+            (geometry.getType() === 'Point' || geometry.getType() === 'Polygon' || geometry.getType() === 'MultiPolygon')) {
+            try { this.addPoiSign(feature, cesiumScene, layer); }
+            catch (e) { console.error('🏷️ POI sign failed, skipping:', e); }
+        }
 
         if (geometry && geometry.getType && (geometry.getType() === 'Polygon' || geometry.getType() === 'MultiPolygon')) {
             const hasImageModel = model && model.uri && /\.(jpg|jpeg|png|gif|bmp|tiff|tif)$/i.test(model.uri);
@@ -2306,48 +2459,26 @@ window.modelRenderer = {
         // Bridge / layer awareness:
         // - Bridge ways: keep their models at one sampled terrain height so
         //   they do not undulate along the way.
-        // - Non-bridge ways (including everything UNDER a bridge): stay at
-        //   ground level per-position DEM height, independently of the bridge.
-        // - Barriers with bridge=yes: use bridge deck height (they're ON the bridge)
-        // - Barriers without bridge tag: use ground level (they're UNDER/adjacent to bridge)
+        // - Ordinary ways follow the DEM; true underpasses use a blended
+        //   bridge clearance, shared with nearby ancillary features.
         const isTunnel = isTunnelFeature(feature);
         const isBridge = !isTunnel && isBridgeFeature(feature);
-        const isBarrier = feature.get('barrier') || feature.get('fence_type') || feature.get('wall_type') || feature.get('wall');
-
-        // Check for bridges above this feature. All features (except tunnels) check
-        // for bridge overhead. Barriers must detect bridges above them to stay
-        // on ground (not bridge deck), even if they have bridge=yes inherited.
-        const bridgeAbove = isTunnel ? null : findBridgeAboveFeature(feature, lonLat);
+        const bridgeAbove = (isBridge || isTunnel) ? null : findBridgeAboveFeature(feature, lonLat);
         const underBridge = bridgeAbove
             ? getUnderBridgeSurface(feature, bridgeAbove, lonLat)
             : null;
+        if (isFlatGroundMode() && underBridge) return;
 
         let terrainElevation;
         if (isTunnel) {
             terrainElevation = getTunnelElevation();
-        } else if (underBridge) {
-            // Feature is UNDER a bridge: use smooth blended height (not per-point DEM)
-            terrainElevation = getUnderBridgeSmoothHeight(feature, underBridge.bridge, lonLat);
-        } else if (isBarrier && !isBridge) {
-            // Barrier WITHOUT bridge tag: ATTACH to adjacent highway height
-            // This prevents climbing to bridge deck and ensures consistency
-            const adjHighwayHeight = getBarrierHeightFromHighway(feature, lonLat);
-            if (adjHighwayHeight !== null && isFinite(adjHighwayHeight)) {
-                // Use highway's reference height (cached from its own processing)
-                terrainElevation = adjHighwayHeight;
-            } else if (underBridge) {
-                // Under bridge: use median ground from cache (smooth, no cliff)
-                terrainElevation = getUnderBridgeSmoothHeight(feature, underBridge.bridge, lonLat);
-            } else {
-                // No highway nearby: use simple ground DEM
-                if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
-                    try { window.mapterhornTerrain.warmUp(lonLat[0], lonLat[1]); } catch (e) {}
-                }
-                terrainElevation = sampleGroundElevation(lonLat[0], lonLat[1]);
-            }
         } else if (isBridge) {
             terrainElevation = getBridgeReferenceHeight(feature, lonLat);
+        } else if (underBridge) {
+            terrainElevation = underBridge.height;
         } else {
+            // Non-bridge way: sample DEM at this position (ground level).
+            // Prime the DEM tile before sampling.
             if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
                 try { window.mapterhornTerrain.warmUp(lonLat[0], lonLat[1]); } catch (e) { /* no DEM yet */ }
             }
@@ -2373,23 +2504,9 @@ window.modelRenderer = {
         
         // Apply model rotation if specified
         const modelRotation = feature.get('modelRotation');
-        if (modelRotation && Array.isArray(modelRotation) && modelRotation.length >= 3) {
-            if (modelRotation[1] !== 0) {
-                const bearingRotation = Cesium.Matrix3.fromRotationZ(modelRotation[1]);
-                modelMatrix = Cesium.Matrix4.multiplyByMatrix3(modelMatrix, bearingRotation, new Cesium.Matrix4());
-            }
-            
-            if (modelRotation[0] !== 0) {
-                const xRotation = Cesium.Matrix3.fromRotationX(modelRotation[0]);
-                modelMatrix = Cesium.Matrix4.multiplyByMatrix3(modelMatrix, xRotation, new Cesium.Matrix4());
-            }
-            
-            if (modelRotation[2] !== 0) {
-                const zRotation = Cesium.Matrix3.fromRotationZ(modelRotation[2]);
-                modelMatrix = Cesium.Matrix4.multiplyByMatrix3(modelMatrix, zRotation, new Cesium.Matrix4());
-            }
-            
-            if (debugConfig.enabled) console.log(`🎯 Applied rotation to model: [${modelRotation.map(r => (r * 180 / Math.PI).toFixed(2) + '°').join(', ')}]`);
+        modelMatrix = applyFeatureRotationToMatrix(modelMatrix, modelRotation);
+        if (debugConfig.enabled && modelRotation && Array.isArray(modelRotation) && modelRotation.length >= 3) {
+            console.log(`🎯 Applied rotation to model: [${modelRotation.map(r => (r * 180 / Math.PI).toFixed(2) + '°').join(', ')}]`);
         }
         
         // IMPORTANT: no distance-based scaling. Shrinking far models made them
@@ -2403,12 +2520,19 @@ window.modelRenderer = {
         // way beneath a bridge onto the bridge surface.
         pooledModel.model.heightReference = Cesium.HeightReference.NONE;
         pooledModel.model.show = true; // Ensure it's visible
+        // Object inspector support: a Cesium.Model has no entity properties, so
+        // keep the OL feature here too. Pooled models are reassigned to a new
+        // feature on every placement, so this always reflects the visible model.
+        pooledModel.model._olFeature = feature;
 
         // Track loaded model for the current 3D session only
         this.trackEntry(featureId, {
             kind: 'model',
             model: pooledModel.model,
             feature: feature,
+            // Which draw-order group this primitive belongs to; see
+            // DEFAULT_RENDER_ORDER at the top of this file.
+            orderGroup: pointModelRenderOrderGroup(feature),
             sessionId: this._session3dId,
             // Recorded explicitly: the re-seat hook must not depend on the
             // feature property still being readable at re-seat time.
@@ -2416,6 +2540,7 @@ window.modelRenderer = {
             isBridge: isBridge,
             isUnderBridge: !!underBridge,
             underBridgeKey: underBridge && underBridge.bridgeKey,
+            bridgeFeature: underBridge && underBridge.bridge,
             surfacePosition: underBridge && underBridge.position,
             lon: lonLat[0],
             lat: lonLat[1],
@@ -2541,6 +2666,7 @@ window.modelRenderer = {
                 let surfaceHeightOffset = 0;
                 let underBridgeKey = null;
                 let underBridgeFeature = null;
+                let bridgeAbove = null;
                 if (isTunnelFeature(feature)) {
                     flatSurfaceHeight = getTunnelElevation();
                 } else if (isBridgeFeature(feature) && centre) {
@@ -2550,19 +2676,17 @@ window.modelRenderer = {
                     flatSurfaceHeight = getBridgeReferenceHeight(feature, centre);
                     flatSurfacePosition = feature.get('bridgeRefPosition');
                 } else if (centre) {
-                    const bridgeAbove = findBridgeAboveFeature(feature, centre);
+                    bridgeAbove = findBridgeAboveFeature(feature, centre);
                     if (bridgeAbove) {
                         underBridgeFeature = findUnderBridgeWayFeature(feature, bridgeAbove, centre) || feature;
-                        const surfacePosition = underBridgeFeature === feature
-                            ? centre
-                            : getFeatureAnchorLonLat(underBridgeFeature);
-                        const underBridge = getUnderBridgeSurface(underBridgeFeature, bridgeAbove, surfacePosition);
+                        const underBridge = getUnderBridgeSurface(underBridgeFeature, bridgeAbove, centre);
                         surfaceHeightOffset = getFeatureHeightOffset(underBridgeFeature);
                         flatSurfaceHeight = underBridge.height + surfaceHeightOffset;
                         flatSurfacePosition = underBridge.position;
                         underBridgeKey = underBridge.bridgeKey;
                     }
                 }
+                if (isFlatGroundMode() && underBridgeKey !== null) return;
 
                 // Area repetitions store polygon coordinates and their bearing
                 // in WGS84 when generated. Preserve that bearing instead of
@@ -2585,9 +2709,11 @@ window.modelRenderer = {
                     imageUri,
                     {
                         spacing: spacing,
+                        textureRepeatCount: repModel.textureRepeatCount,
                         rotation: textureRotation,
                         textureRotationOffsetDegrees: repModel.textureRotationOffsetDegrees,
                         scale: repModel.scale,
+                        renderOrder: repModel.renderOrder,
                         bridgeSurfaceHeight: isTunnelFeature(feature) ? null : flatSurfaceHeight,
                         fixedSurfaceHeight: isTunnelFeature(feature) ? getTunnelElevation() : null,
                         undergroundFeature: feature,
@@ -2599,16 +2725,25 @@ window.modelRenderer = {
                     },
                     cesiumScene
                 );
+                if (debugConfig.enabled) console.log(`🖼️ polygon_texture rep ${repIndex} model=${imageUri} textureRepeatCount=${repModel?.textureRepeatCount}`);
                 // addAreaTexture used to return nothing, so these primitives
                 // were unreachable: nothing could count them, destroy them, or
                 // notice a second sweep had made another one.
+                const usesOrderedGroundTexture = Number.isFinite(repModel.renderOrder) &&
+                    !isTunnelFeature(feature) &&
+                    !Number.isFinite(flatSurfaceHeight);
+                const textureDataSource = usesOrderedGroundTexture && window.areaTextureManager
+                    ? window.areaTextureManager.getDataSource()
+                    : null;
                 if (textureKey) {
                     this.trackEntry(textureKey, {
                         kind: 'texture',
                         primitives: created,
+                        entityCollection: textureDataSource ? textureDataSource.entities : null,
                         feature: feature,
                         isTunnel: isTunnelFeature(feature),
                         surfaceFeature: underBridgeFeature,
+                        bridgeFeature: underBridgeFeature && bridgeAbove,
                         sessionId: this._session3dId,
                         bridgeSurfaceHeight: isTunnelFeature(feature) ? null : flatSurfaceHeight,
                         isUnderBridge: underBridgeKey !== null,
@@ -2681,22 +2816,24 @@ window.modelRenderer = {
             return;
         }
         
-        // Keep bridge repetitions level with one sampled terrain height.
+        // Keep bridges level; ordinary repetitions follow the DEM and only
+        // true underpasses receive bridge clearance.
         const repIsTunnel = isTunnelFeature(feature);
         const repIsBridge = !repIsTunnel && isBridgeFeature(feature);
-        const repIsBarrier = feature.get('barrier') || feature.get('fence_type') || feature.get('wall_type') || feature.get('wall');
-
-        // Check for bridges above this feature. All features (except tunnels) check
-        // for bridge overhead. Barriers must detect bridges above them to stay
-        // on ground (not bridge deck), even if they have bridge=yes inherited.
-        const bridgeAbove = repIsTunnel ? null : findBridgeAboveFeature(feature, repLonLat);
+        const bridgeAbove = (repIsBridge || repIsTunnel) ? null : findBridgeAboveFeature(feature, repLonLat);
         const underBridge = bridgeAbove
             ? getUnderBridgeSurface(feature, bridgeAbove, repLonLat)
             : null;
+        if (isFlatGroundMode() && underBridge) return;
 
         // Create model matrix for repetition model - GROUND LEVEL (like footway)
-        const repHeightOffset = feature.get(`fence_repetition_${repIndex}_heightOffset`) ||
-                               feature.get(`repetition_${repIndex}_heightOffset`) || 0; // Use stored height offset instead of hardcoded 10
+        let repHeightOffset = feature.get(`fence_repetition_${repIndex}_heightOffset`) ||
+                              feature.get(`repetition_${repIndex}_heightOffset`) || 0;
+        if (underBridge) {
+            // Match the flat under-bridge texture surface; per-instance offsets
+            // would create visible steps between the repeated models and road.
+            repHeightOffset = getFeatureHeightOffset(feature);
+        }
 
         // Prime the DEM tile before sampling (see addModelForFeature): without it
         // repetitions placed early in a session are built at elevation 0.
@@ -2708,32 +2845,13 @@ window.modelRenderer = {
         // first repetition so the whole bridge stays FLAT at one elevation
         // (no undulation down mountains). Non-bridge ways sample per-position
         // (ground level) and must NOT climb up to meet the bridge.
-        // Barriers: with bridge=yes use bridge height, without use ground level.
         let repTerrainElevation;
         if (repIsTunnel) {
             repTerrainElevation = getTunnelElevation();
-        } else if (underBridge) {
-            // Feature is UNDER a bridge: use smooth blended height (not per-point DEM)
-            repTerrainElevation = getUnderBridgeSmoothHeight(feature, underBridge.bridge, repLonLat);
-        } else if (repIsBarrier && !repIsBridge) {
-            // Barrier WITHOUT bridge tag: ATTACH to adjacent highway height
-            // This prevents climbing to bridge deck and ensures consistency
-            const adjHighwayHeight = getBarrierHeightFromHighway(feature, repLonLat);
-            if (adjHighwayHeight !== null && isFinite(adjHighwayHeight)) {
-                // Use highway's reference height (cached from its own processing)
-                repTerrainElevation = adjHighwayHeight;
-            } else if (underBridge) {
-                // Under bridge: use median ground from cache (smooth, no cliff)
-                repTerrainElevation = getUnderBridgeSmoothHeight(feature, underBridge.bridge, repLonLat);
-            } else {
-                // No highway nearby: use simple ground DEM
-                if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
-                    try { window.mapterhornTerrain.warmUp(repLonLat[0], repLonLat[1]); } catch (e) {}
-                }
-                repTerrainElevation = sampleGroundElevation(repLonLat[0], repLonLat[1]);
-            }
         } else if (repIsBridge) {
             repTerrainElevation = getBridgeReferenceHeight(feature, repLonLat);
+        } else if (underBridge) {
+            repTerrainElevation = underBridge.height;
         } else {
             if (window.mapterhornTerrain && window.mapterhornTerrain.warmUp) {
                 try { window.mapterhornTerrain.warmUp(repLonLat[0], repLonLat[1]); } catch (e) { /* no DEM yet */ }
@@ -2769,6 +2887,9 @@ window.modelRenderer = {
                               feature.get(`repetition_${repIndex}_rotation`);
         }
         
+        // Note: textureRotationOffsetDegrees is already baked into the rotation field
+        // during applyAreaRepetitions/generateAreaRepetitions calculation of effectiveBearing.
+
         if (repModelRotation && Array.isArray(repModelRotation) && repModelRotation.length >= 3) {
             if (repModelRotation[1] !== 0) {
                 const bearingRotation = Cesium.Matrix3.fromRotationZ(repModelRotation[1]);
@@ -2802,6 +2923,9 @@ window.modelRenderer = {
             scale: repModel.scale || 1.0,
             show: true
         }));
+        // Each repetition is its own primitive, so it can carry its own feature.
+        repCesiumModel._olFeature = feature;
+        this.trackModelReadiness(repCesiumModel, repModel.uri);
         
         // Keep the sampled height explicit. Ground-clamping can snap an
         // under-bridge way onto the bridge surface.
@@ -2816,11 +2940,15 @@ window.modelRenderer = {
             model: repCesiumModel,
             scene: sceneToUse,
             feature: feature,
+            // Area repetitions and line repetitions can be told apart by the
+            // geometry they came from; they get their own draw order.
+            orderGroup: repetitionRenderOrderGroup(feature),
             sessionId: this._session3dId,
             heightOffset: repHeightOffset,
             isBridge: repIsBridge,
             isUnderBridge: !!underBridge,
             underBridgeKey: underBridge && underBridge.bridgeKey,
+            bridgeFeature: underBridge && underBridge.bridge,
             surfacePosition: underBridge && underBridge.position,
             lon: repLonLat[0],
             lat: repLonLat[1],
@@ -2872,12 +3000,10 @@ window.modelRenderer = {
         const underBridgeFeature = bridgeAbove
             ? (findUnderBridgeWayFeature(feature, bridgeAbove, areaCentre) || feature)
             : null;
-        const underBridgePosition = underBridgeFeature && underBridgeFeature !== feature
-            ? getFeatureAnchorLonLat(underBridgeFeature)
-            : areaCentre;
         const underBridge = bridgeAbove
-            ? getUnderBridgeSurface(underBridgeFeature, bridgeAbove, underBridgePosition)
+            ? getUnderBridgeSurface(underBridgeFeature, bridgeAbove, areaCentre)
             : null;
+        if (isFlatGroundMode() && underBridge) return;
         const underBridgeHeightOffset = underBridge
             ? getFeatureHeightOffset(underBridgeFeature)
             : 0;
@@ -2933,7 +3059,7 @@ window.modelRenderer = {
             if (areaEntity) {
                 if (debugConfig.enabled) console.log(`🎨 Successfully created area texture entity for feature ${fidx}`);
                 // createAreaEntity() does its own "already has one" early-return,
-                // so this cannot double-build; it just makes the primitive
+                // so this cannot double-build; it just makes the texture
                 // visible to the census and to the unload path.
                 //
                 // Deliberately NOT inside the surrounding try. If tracking threw,
@@ -2942,12 +3068,18 @@ window.modelRenderer = {
                 // exists to remove.
                 const key = getFeatureKey(feature);
                 if (key) {
+                    const areaEntities = Array.isArray(areaEntity) ? areaEntity : [areaEntity];
+                    const entityCollection = areaEntities.some(item => item && item.polygon)
+                        ? window.areaTextureManager.getDataSource().entities
+                        : null;
                     this.trackEntry('areatex_' + key, {
                         kind: 'texture',
                         primitives: areaEntity,
+                        entityCollection: entityCollection,
                         feature: feature,
                         isTunnel: isTunnel,
                         surfaceFeature: underBridgeFeature,
+                        bridgeFeature: underBridge && underBridge.bridge,
                         sessionId: this._session3dId,
                         bridgeSurfaceHeight: isBridgeFeature(feature)
                             ? feature.get('bridgeRefHeight')
@@ -3088,9 +3220,27 @@ window.modelRenderer = {
             if (!Number.isFinite(desiredTileSize) || desiredTileSize <= 0) {
                 throw new RangeError('Area texture tile size must be a positive number');
             }
-            const shortImageSide = Math.min(imageWidth, imageHeight);
-            const tileWidthMeters = desiredTileSize * imageWidth / shortImageSide;
-            const tileHeightMeters = desiredTileSize * imageHeight / shortImageSide;
+            const textureRepeatCount = repModel && repModel.textureRepeatCount;
+            if (imageUri.includes('i_parking_space') || (repModel && repModel.uri && repModel.uri.includes('i_parking_space'))) {
+                console.warn(`🖼️ [DEBUG] i_parking_space texture path reached: textureRepeatCount=${textureRepeatCount}, spacing=${repModel?.spacing}, scale=${repModel?.scale}, imageUri=${imageUri}`);
+            }
+            let tileWidthMeters;
+            let tileHeightMeters;
+            let textureOffset = new Cesium.Cartesian2(0, 0);
+            if (textureRepeatCount !== undefined) {
+                if (!Number.isInteger(textureRepeatCount) || textureRepeatCount < 1) {
+                    throw new RangeError('Area texture repeat count must be a positive integer');
+                }
+                tileWidthMeters = widthMeters / textureRepeatCount;
+                tileHeightMeters = heightMeters / textureRepeatCount;
+                textureOffset = new Cesium.Cartesian2(textureRepeatCount / 2, textureRepeatCount / 2);
+                console.warn(`🖼️ [DEBUG] Using textureRepeatCount ${textureRepeatCount}: bbox=${widthMeters.toFixed(2)}x${heightMeters.toFixed(2)}m → tile=${tileWidthMeters.toFixed(3)}x${tileHeightMeters.toFixed(3)}m`);
+            } else {
+                const shortImageSide = Math.min(imageWidth, imageHeight);
+                tileWidthMeters = desiredTileSize * imageWidth / shortImageSide;
+                tileHeightMeters = desiredTileSize * imageHeight / shortImageSide;
+                console.warn(`🖼️ [DEBUG] Fallback native-resolution: tileSize=${desiredTileSize}m, img=${imageWidth}x${imageHeight}px → tile=${tileWidthMeters.toFixed(2)}x${tileHeightMeters.toFixed(2)}m across ${widthMeters.toFixed(2)}x${heightMeters.toFixed(2)}m area`);
+            }
             const textureRotationOffsetDegrees = Number.isFinite(repModel.textureRotationOffsetDegrees)
                 ? repModel.textureRotationOffsetDegrees
                 : 0;
@@ -3104,6 +3254,33 @@ window.modelRenderer = {
                 (window.ol3d && window.ol3d.getCesiumScene ? window.ol3d.getCesiumScene() : null);
             if (textureScene && polygonHierarchy) {
                 try {
+                    const renderOrder = Number.isFinite(repModel && repModel.renderOrder)
+                        ? repModel.renderOrder
+                        : null;
+                    if (bridgeSurfaceHeight === null && renderOrder !== null) {
+                        if (!window.areaTextureManager ||
+                            !window.areaTextureManager.getDataSource()) {
+                            throw new Error('Area texture data source is not available');
+                        }
+                        const showTexture = !repModel.undergroundFeature ||
+                            isUndergroundFeature(repModel.undergroundFeature) === isUndergroundViewEnabled();
+                        const entity = window.areaTextureManager.createOrderedGroundTexture(
+                            polygonHierarchy,
+                            {
+                                imageUrl: imageUri,
+                                areaSizeMeters: new Cesium.Cartesian2(widthMeters, heightMeters),
+                                tileSizeMeters: new Cesium.Cartesian2(tileWidthMeters, tileHeightMeters),
+                                textureOffset,
+                                textureRotation: -finalRotation +
+                                    textureRotationOffsetDegrees * Math.PI / 180
+                            },
+                            renderOrder,
+                            showTexture
+                        );
+                        created.push(entity);
+                        return;
+                    }
+
                     const texturePrimitive = bridgeSurfaceHeight === null
                         ? Cesium.GroundPrimitive
                         : Cesium.Primitive;
@@ -3126,6 +3303,7 @@ window.modelRenderer = {
                                         image: imageUri,
                                         areaSizeMeters: new Cesium.Cartesian2(widthMeters, heightMeters),
                                         tileSizeMeters: new Cesium.Cartesian2(tileWidthMeters, tileHeightMeters),
+                                        textureOffset,
                                         textureRotation: -finalRotation +
                                             textureRotationOffsetDegrees * Math.PI / 180
                                     },
@@ -3139,7 +3317,7 @@ window.modelRenderer = {
                                                 cosine * localPosition.x - sine * localPosition.y,
                                                 sine * localPosition.x + cosine * localPosition.y
                                             );
-                                            vec2 textureSt = rotatedPosition / tileSizeMeters;
+                                            vec2 textureSt = rotatedPosition / tileSizeMeters + textureOffset;
                                             vec4 texel = texture2D(image, fract(textureSt));
                                             material.diffuse = czm_gammaCorrect(texel.rgb);
                                             material.alpha = texel.a;
@@ -3204,11 +3382,12 @@ window.modelRenderer = {
 
         const isFootwayTexture = textureName.toLowerCase().includes('i_llamborda.jpg');
         const textureTags = tagsObj || {};
+        const isStepsArea = textureName.toLowerCase().includes('w_highway_steps.glb');
         const isFootwayArea = isFootwayTexture && (
             textureTags['area:highway'] === 'footway' ||
             textureTags.highway === 'footway' ||
             textureTags.footway === 'sidewalk'
-        );
+        ) || isStepsArea;
         const isCrossingTexture = textureName.toLowerCase().includes('i_crossing.png') ||
                                 textureName.toLowerCase().includes('crossing');
         const isParkingTexture = textureName.toLowerCase().includes('i_parking');
@@ -3282,7 +3461,9 @@ window.modelRenderer = {
                     feature.get && (
                         feature.get('highway') === 'footway' ||
                         feature.get('footway') === 'sidewalk' ||
-                        feature.get('area:highway') === 'footway'
+                        feature.get('area:highway') === 'footway' ||
+                        feature.get('highway') === 'steps' ||
+                        feature.get('area:highway') === 'steps'
                     )
                 );
                 sourceWays = footwayWays;
@@ -3867,7 +4048,6 @@ window.modelRenderer = {
     // Main entry point for adding all models
     // Data source for plain (non-model) results, created on demand per scene.
     _plainDataSource: null,
-    _poiSigns: null,             // feature -> { entity, layer, sessionId }
     _plainIdSeq: 0,
 
     /**
@@ -3919,6 +4099,239 @@ window.modelRenderer = {
     },
 
     /**
+     * Put an addr:housenumber plaque exactly on the feature's point — on the
+     * door when the point is an entrance node — instead of offsetting it to
+     * one side. Called for every feature, independently of whether it also
+     * matched a 3D model, because entrance=* / door nodes carry the number
+     * too and used to lose it to the door model.
+     *
+     * Idempotent per 3D session: the entity is recorded in plainResults, which
+     * is cleared with the scene and with its layer.
+     */
+    addHouseNumberLabel: function(feature, cesiumScene, layer) {
+        const geometry = feature && feature.getGeometry && feature.getGeometry();
+        if (!geometry || !geometry.getType || geometry.getType() !== 'Point') return false;
+        const houseNumber = getHouseNumber(feature);
+        if (!houseNumber) return false;
+
+        if (!this.plainResults) this.plainResults = new Map();
+        const existing = this.plainResults.get(feature);
+        if (existing && existing.sessionId === this._session3dId) return true;
+
+        const dataSource = this.getPlainDataSource(cesiumScene);
+        if (!dataSource) return false;
+        const canvasDataUrl = createHouseNumberCanvas(houseNumber);
+        if (!canvasDataUrl) return false;
+
+        const pointCoords = geometry.getCoordinates();
+        const lonLat = ol.proj.toLonLat(pointCoords);
+
+        // One plaque per entrance. OSM commonly has an address node AND an
+        // entrance node carrying the same number a metre or two apart, and
+        // loading the same file twice produces an exact copy; both used to
+        // stack two plaques on the same door.
+        if (!this._houseNumberIndex) this._houseNumberIndex = new Map();
+        const near = this._houseNumberIndex.get(houseNumber) || [];
+        const metersPerLon = 111320 * Math.cos(lonLat[1] * Math.PI / 180);
+        const duplicate = near.some(function (placed) {
+            if (placed.sessionId !== this._session3dId) return false;
+            const dx = (placed.lon - lonLat[0]) * metersPerLon;
+            const dy = (placed.lat - lonLat[1]) * 110540;
+            return Math.hypot(dx, dy) <= HOUSE_NUMBER_CONFIG.duplicateRadiusMeters;
+        }, this);
+        if (duplicate) {
+            // Record the feature as handled so no plain marker is drawn over
+            // the existing plaque either.
+            this.plainResults.set(feature, { entities: [], layer: layer, sessionId: this._session3dId });
+            return true;
+        }
+
+        const billboardOptions = {
+            image: canvasDataUrl,
+            // NONE, not CLAMP_TO_GROUND: clamping discards the height we
+            // just computed and lays the plaque on the ground in front of
+            // the door. A free position keeps it at door height.
+            heightReference: Cesium.HeightReference.NONE,
+            scale: HOUSE_NUMBER_CONFIG.scale,
+            verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+            // Depth-tested against the models in the scene. Infinity drew the
+            // plaque over every building; 0 lets an opaque model in front of
+            // it hide the plaque (fully when behind a wall, partially when
+            // only part of the plaque is covered).
+            disableDepthTestDistance: 0,
+            // ...and a small nudge towards the camera so the plaque wins
+            // against the very wall it is mounted on (the point is on the
+            // footprint, i.e. exactly on the façade plane).
+            eyeOffset: new Cesium.Cartesian3(0, 0, -HOUSE_NUMBER_CONFIG.depthOffsetMeters),
+            // Signs and house numbers share one switch in the 3D nav panel, so
+            // one placed while they are hidden must come in hidden too.
+            show: this._signsVisible !== false
+        };
+        // Above the sign when the same feature is a POI, so the blue plaque
+        // never covers the sign's emoji, name or description.
+        const signLiftPx = houseNumberSignLiftPx(feature);
+        if (signLiftPx > 0) {
+            billboardOptions.pixelOffset = new Cesium.Cartesian2(0, -signLiftPx);
+        }
+
+        const entity = dataSource.entities.add({
+            id: `housenumber-${getFeatureKey(feature)}-${houseNumber}`,
+            position: Cesium.Cartesian3.fromDegrees(
+                lonLat[0], lonLat[1],
+                sampleGroundElevation(lonLat[0], lonLat[1]) + HOUSE_NUMBER_CONFIG.heightAboveGroundMeters
+            ),
+            billboard: billboardOptions
+        });
+        entity._olFeature = feature;
+        this.plainResults.set(feature, { entities: [entity], layer: layer, sessionId: this._session3dId });
+        const placedHere = this._houseNumberIndex.get(houseNumber) || [];
+        placedHere.push({
+            lon: lonLat[0], lat: lonLat[1], layer: layer, sessionId: this._session3dId,
+            // Kept so setSignsVisible() can reach the billboard again.
+            entity: entity
+        });
+        this._houseNumberIndex.set(houseNumber, placedHere);
+        if (debugConfig.enabled) {
+            console.log('🏠 House-number label on door: ' + houseNumber);
+        }
+        return true;
+    },
+
+    /**
+     * Add a colored POI sign (emoji + name + tag + localized description) for
+     * features of the amenity/tourism/leisure/shop/office keys.
+     *
+     * The sign is a billboard anchored on the feature: its point for nodes,
+     * the bounding-box centre for areas. Keeping this outside the model branch
+     * means POIs that also have a 3D model still get their sign.
+     */
+    // Signs and house numbers on/off, toggled from the 3D nav panel. Entities
+    // placed while hidden are created hidden (see the billboard `show`),
+    // so the flag has to be read at placement time as well.
+    _signsVisible: true,
+
+    /**
+     * Show or hide every POI sign and house-number plaque in the scene.
+     * Cheap: billboards are only flagged, nothing is rebuilt or re-placed, and
+     * signs placed later inherit the flag.
+     *
+     * @param {Boolean} visible
+     * @returns {Boolean} the state actually applied
+     */
+    setSignsVisible: function(visible) {
+        const show = visible !== false;
+        this._signsVisible = show;
+
+        const apply = function(entity) {
+            if (!entity || !entity.billboard) return;
+            try { entity.billboard.show = show; } catch (e) { /* scene already gone */ }
+        };
+
+        if (this._poiSigns) {
+            this._poiSigns.forEach(function(entry) {
+                if (entry && entry.sessionId === this._session3dId) apply(entry.entity);
+            }, this);
+        }
+        if (this._houseNumberIndex) {
+            this._houseNumberIndex.forEach(function(bucket) {
+                (bucket || []).forEach(function(placed) {
+                    if (placed && placed.sessionId === this._session3dId) apply(placed.entity);
+                }, this);
+            }, this);
+        }
+
+        const scene = window.ol3d && window.ol3d.getCesiumScene && window.ol3d.getCesiumScene();
+        if (scene && scene.requestRender) scene.requestRender();
+        return show;
+    },
+
+    /** Whether POI signs and house numbers are currently shown. */
+    areSignsVisible: function() {
+        return this._signsVisible !== false;
+    },
+
+    addPoiSign: function(feature, cesiumScene, layer) {
+        if (!window.poiSigns || typeof window.poiSigns.describe !== 'function') return false;
+        const info = window.poiSigns.describe(feature);
+        if (!info) return false;
+
+        if (!this._poiSigns) this._poiSigns = new Map();
+        const existing = this._poiSigns.get(feature);
+        if (existing && existing.sessionId === this._session3dId) return true;
+
+        const geometry = feature.getGeometry && feature.getGeometry();
+        if (!geometry || !geometry.getType) return false;
+        const type = geometry.getType();
+        let coords;
+        if (type === 'Point') {
+            coords = geometry.getCoordinates();
+        } else if (type === 'Polygon' || type === 'MultiPolygon') {
+            coords = ol.extent.getCenter(geometry.getExtent());
+        } else {
+            return false;
+        }
+        const lonLat = ol.proj.toLonLat(coords);
+
+        const dataSource = this.getPlainDataSource(cesiumScene);
+        if (!dataSource) return false;
+        const image = window.poiSigns.buildImage(info);
+        if (!image) return false;
+
+        const config = window.poiSigns.config || {};
+        const entity = dataSource.entities.add({
+            id: `poi-sign-${getFeatureKey(feature)}`,
+            position: Cesium.Cartesian3.fromDegrees(
+                lonLat[0], lonLat[1],
+                sampleGroundElevation(lonLat[0], lonLat[1]) + (config.heightMeters || 4.4)
+            ),
+            billboard: {
+                image: image.dataUrl,
+                // Free height, like the house-number plaque: clamping would
+                // lay the sign on the ground instead of at sign height.
+                heightReference: Cesium.HeightReference.NONE,
+                scale: (config.displayWidthPx || 300) / image.width,
+                verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+                // Same as the house-number plaque: respect the depth buffer so
+                // a building in front of the POI hides the sign instead of
+                // letting it shine through the walls.
+                disableDepthTestDistance: 0,
+                // ...and the same small nudge towards the camera, so a sign
+                // anchored on (or inside) its own building's footprint still
+                // shows in front of that wall.
+                eyeOffset: new Cesium.Cartesian3(0, 0, -(config.depthOffsetMeters || 4.0)),
+                // Same single switch as the house-number plaques.
+                show: this._signsVisible !== false
+            }
+        });
+        entity._olFeature = feature;
+        this._poiSigns.set(feature, { entity: entity, layer: layer, sessionId: this._session3dId });
+        if (debugConfig.enabled) {
+            console.log('🏷️ POI sign placed: ' + info.name + ' (' + info.tag + ')');
+        }
+        return true;
+    },
+
+    /**
+     * Rebuild every POI sign already in the scene — used when the language
+     * CSV for descriptions finishes loading or the user changes language.
+     */
+    refreshPoiSigns: function() {
+        if (!this._poiSigns || !window.poiSigns) return;
+        const config = window.poiSigns.config || {};
+        this._poiSigns.forEach(function (entry, feature) {
+            if (!entry || entry.sessionId !== this._session3dId || !entry.entity) return;
+            const info = window.poiSigns.describe(feature);
+            if (!info) return;
+            const image = window.poiSigns.buildImage(info);
+            if (!image) return;
+            try {
+                entry.entity.billboard.image = image.dataUrl;
+                entry.entity.billboard.scale = (config.displayWidthPx || 300) / image.width;
+            } catch (e) { /* scene already gone */ }
+        });
+    },
+
+    /**
      * Draw a query result that has neither a model nor a texture, conforming it
      * to the terrain. Called for every such feature, so it must be idempotent:
      * an entity already created for this feature in this 3D session is reused.
@@ -3953,64 +4366,14 @@ window.modelRenderer = {
         let graphics = null;
 
         if (type === 'Point') {
-            // House numbers and POI name signs come FIRST: the 2D style carries
-            // a generic marker icon for these features, and testing the style
-            // image first (as this used to) meant a named shop never reached
-            // the sign code at all.
-            const houseNumber = getHouseNumber(feature);
-            if (houseNumber) {
-                const pointCoords = geometry.getCoordinates();
-                const lonLat = ol.proj.toLonLat(pointCoords);
-                const metersPerDegreeLon = 111320 * Math.cos(lonLat[1] * Math.PI / 180);
-                const offsetLonDeg = HOUSE_NUMBER_CONFIG.offsetLeftMeters / metersPerDegreeLon;
-                const offsetLon = lonLat[0] - offsetLonDeg;
-                const canvasDataUrl = createHouseNumberCanvas(houseNumber);
-                if (canvasDataUrl) {
-                    // When the same node also carries a name board, park the
-                    // plaque right beside it instead of under it.
-                    const nameSign = this._poiSigns && this._poiSigns.get(feature);
-                    const signWidthPx = nameSign && nameSign.entity
-                        ? poiSignWidths.get(nameSign.entity) || 0 : 0;
-                    const besideNameSign = signWidthPx > 0;
-                    const entity = dataSource.entities.add({
-                        id: `housenumber-${getFeatureKey(feature)}-${houseNumber}`,
-                        show: signsVisible,
-                        position: Cesium.Cartesian3.fromDegrees(
-                            offsetLon, lonLat[1],
-                            sampleGroundElevation(lonLat[0], lonLat[1]) + HOUSE_NUMBER_CONFIG.heightAboveGroundMeters
-                        ),
-                        billboard: {
-                            image: canvasDataUrl,
-                            heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
-                            scale: HOUSE_NUMBER_CONFIG.scale,
-                            verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-                            pixelOffset: new Cesium.Cartesian2(
-                                besideNameSign ? -houseNumberBesideSignPixelOffset(signWidthPx) : 0, 0
-                            ),
-                            disableDepthTestDistance: Number.POSITIVE_INFINITY
-                        }
-                    });
-                    if (besideNameSign) houseNumberBesideSigns.set(entity, signWidthPx);
-                    this.plainResults.set(feature, { entities: [entity], layer: layer, sessionId: this._session3dId });
-                    if (debugConfig.enabled) {
-                        console.log('Plain house-number label placed: ' + houseNumber);
-                    }
-                    return;
-                }
-            }
-
-            // A name sign was already created by placeFeature. When there is
-            // one it replaces the generic 2D marker icon instead of stacking a
-            // second billboard under it.
-            const poiSign = this._poiSigns && this._poiSigns.get(feature);
-            if (poiSign && poiSign.entity) return;
-
             const image = style && style.getImage && style.getImage();
             if (image && image.src) {
                 graphics = { billboard: { image: image.src, heightReference: Cesium.HeightReference.CLAMP_TO_GROUND } };
             } else {
-                let size = PLAIN_MARKER_PIXEL_SIZE;
-                let color = PLAIN_MARKER_COLOR;
+                // addr:housenumber points are handled by addHouseNumberLabel()
+                // before this marker fallback, on their own door node.
+                let size = plainMarkerConfig.size;
+                let color = plainMarkerConfig.color;
                 if (style && style.getImage && style.getImage()) {
                     const img = style.getImage();
                     if (img.size) size = Math.max(3, Math.round(img.size[0]));
@@ -4035,7 +4398,7 @@ window.modelRenderer = {
         } else if (type === 'LineString' || type === 'MultiLineString' || type === 'LinearRing') {
             const stroke = style && style.getStroke && style.getStroke();
             let width = 3;
-            let color = PLAIN_LINE_COLOR;
+            let color = plainMarkerConfig.lineColor;
             if (stroke) {
                 if (stroke.getWidth && stroke.getWidth()) width = Math.max(1, stroke.getWidth());
                 if (stroke.getColor && stroke.getColor()) color = olColorToCesium(stroke.getColor(), color);
@@ -4048,7 +4411,7 @@ window.modelRenderer = {
             const created = [];
             paths.forEach(path => {
                 if (!path || path.length < 2) return;
-                created.push(dataSource.entities.add({
+                const entity = dataSource.entities.add({
                     id: this._nextPlainId(),
                     polyline: {
                         positions: path,
@@ -4057,7 +4420,9 @@ window.modelRenderer = {
                         // Drapes the line over hills, valleys and inclines.
                         clampToGround: true
                     }
-                }));
+                });
+                entity._olFeature = feature;
+                created.push(entity);
             });
             if (!created.length) return;
             this.plainResults.set(feature, { entities: created, layer: layer, sessionId: this._session3dId });
@@ -4075,7 +4440,7 @@ window.modelRenderer = {
                 .map(r => plainCoordsToCartesian(r));
             if (!rings.length) return;
             const fill = style && style.getFill && style.getFill();
-            let color = PLAIN_AREA_COLOR;
+            let color = plainMarkerConfig.areaColor;
             if (fill && fill.getColor && fill.getColor()) color = olColorToCesium(fill.getColor(), color);
             graphics = {
                 polygon: {
@@ -4087,13 +4452,12 @@ window.modelRenderer = {
             };
         }
 
-        const created = [dataSource.entities.add(Object.assign({
+        const entity = dataSource.entities.add(Object.assign({
             id: this._nextPlainId(),
             position: positions[0]
-        }, graphics))];
-        // The name sign for an area is created by placeFeature (once, at the
-        // entrance when one is known), so it is deliberately not added here.
-        this.plainResults.set(feature, { entities: created, layer: layer, sessionId: this._session3dId });
+        }, graphics));
+        entity._olFeature = feature;
+        this.plainResults.set(feature, { entities: [entity], layer: layer, sessionId: this._session3dId });
         if (debugConfig.enabled) console.log('➖ Plain ' + type + ' draped on ground');
     },
 
@@ -4125,8 +4489,33 @@ window.modelRenderer = {
         }
         if (this.plainResults) this.plainResults.clear();
         if (this._poiSigns) this._poiSigns.clear();
-        poiAnchorCache = null;
+        if (this._houseNumberIndex) this._houseNumberIndex.clear();
         this._plainDataSource = null;
+    },
+
+    /**
+     * Place one layer's features without waiting for an in-flight sweep.
+     *
+     * Only used for small, user-invoked layers such as 3DMR. The normal
+     * addAllModels() path is still responsible for the full pass and its
+     * progress reporting; placing already-tracked features is a no-op there.
+     */
+    placeLayerImmediately: function(layer, cesiumScene) {
+        if (!layer || !cesiumScene) return 0;
+        const groups = this.collectPlaceGroups([layer], cesiumScene, []);
+        let placed = 0;
+        groups.forEach(function(group) {
+            group.features.forEach(function(feature, index) {
+                try {
+                    this.placeFeature(feature, index, cesiumScene, group.layer);
+                    placed++;
+                } catch (error) {
+                    console.error('🎯 Priority layer feature failed, skipping:', error);
+                }
+            }, this);
+        }, this);
+        this.recountLive();
+        return placed;
     },
 
     /**
@@ -4141,10 +4530,10 @@ window.modelRenderer = {
      * @returns {number} how many entries were released
      */
     unloadPlainResultsForLayer: function(layer) {
-        if (!this.plainResults || !layer) return 0;
+        if (!layer) return 0;
         const dataSource = this._plainDataSource;
         let released = 0;
-        this.plainResults.forEach(function (entry, feature) {
+        if (this.plainResults) this.plainResults.forEach(function (entry, feature) {
             if (!entry || entry.layer !== layer) return;
             const entities = Array.isArray(entry.entities) ? entry.entities
                 : (entry.entities ? [entry.entities] : []);
@@ -4156,22 +4545,32 @@ window.modelRenderer = {
             this.plainResults.delete(feature);
             released++;
         }, this);
-        // Name signs live in the same data source but are tracked per feature.
-        if (this._poiSigns && this._poiSigns.size) {
+
+        // Forget the duplicate-number anchors of this layer: a later load of
+        // the same addresses must be able to place its plaques again.
+        if (this._houseNumberIndex) {
+            this._houseNumberIndex.forEach(function (bucket, number) {
+                const kept = bucket.filter(function (placed) { return placed.layer !== layer; });
+                if (kept.length) this._houseNumberIndex.set(number, kept);
+                else this._houseNumberIndex.delete(number);
+            }, this);
+        }
+
+        // POI signs live in their own map but in the same data source.
+        if (this._poiSigns) {
             this._poiSigns.forEach(function (entry, feature) {
                 if (!entry || entry.layer !== layer) return;
-                if (entry.entity && dataSource && dataSource.entities &&
-                    typeof dataSource.entities.remove === 'function') {
+                if (dataSource && dataSource.entities && typeof dataSource.entities.remove === 'function') {
                     try { dataSource.entities.remove(entry.entity); } catch (e) { /* already gone */ }
                 }
                 this._poiSigns.delete(feature);
+                released++;
             }, this);
         }
-        poiAnchorCache = null;   // this layer's door nodes are gone
         return released;
     },
 
-    addAllModels: function() {
+    addAllModels: function(options) {
         if (debugConfig.enabled) console.log('🎯 addAllModels: scanning layers for 3D models');
         if (!window.ol3d) {
             if (debugConfig.enabled) console.log('🎯 ol3d unavailable');
@@ -4193,6 +4592,8 @@ window.modelRenderer = {
             this._sceneRef = cesiumScene;
             this._session3dId = (this._session3dId || 0) + 1;
             this.resetLive();
+            this._pendingAssets = 0;
+            this._assetReadinessSeen = new WeakSet();
             this.modelPool.clear();
             // The camera listener is bound to the OLD scene's camera. Unhook so
             // hookCameraStreaming() re-binds to the new one; otherwise streaming
@@ -4205,6 +4606,8 @@ window.modelRenderer = {
             if (this.clearPlainResults) this.clearPlainResults();
             if (debugConfig.enabled) console.log('🎯 New 3D session ' + this._session3dId + ' — tracking reset');
         }
+
+        this.setLayerFilterTerrainVisible(this.activeOsmLayer === null);
 
         // Hook DEM tile loads once: models placed before MapTerhorn tiles were
         // decoded (elevation 0) must be re-seated on the ground when they arrive
@@ -4223,18 +4626,40 @@ window.modelRenderer = {
                 // One pass at a time: a second sweep arriving mid-pass (a new
                 // query, the +3s retry) waits for this one instead of placing
                 // the same features concurrently.
-                if (this._placing) { this._pendingSweep = true; return; }
+                if (this._placing) {
+                    // A GeoJSON file can keep a sweep busy for a long time. When
+                    // the user ticks 3DMR while that is happening, placing its
+                    // layer now is the difference between the model appearing
+                    // immediately and appearing after every GeoJSON feature.
+                    if (options && options.priorityLayer) {
+                        this.placeLayerImmediately(options.priorityLayer, cesiumScene);
+                    }
+                    this._pendingSweep = true;
+                    return;
+                }
 
                 const layers = window.map.getLayers().getArray();
-                const tasks = this.collectPlaceTasks(layers, cesiumScene, []);
+                const groups = this.collectPlaceGroups(layers, cesiumScene, []);
+                // 3DMR is a small, explicitly enabled layer. Walk it before
+                // large GeoJSON/OSM layers so its glbs are not queued behind
+                // thousands of other features or lose the primitive budget race.
+                groups.sort(function(a, b) {
+                    const aPriority = a.layer && a.layer.get && a.layer.get('is3dmr') ? 0 : 1;
+                    const bPriority = b.layer && b.layer.get && b.layer.get('is3dmr') ? 0 : 1;
+                    return aPriority - bPriority;
+                });
+                const featureTotal = groups.reduce(function(count, group) { return count + group.features.length; }, 0);
                 // Tell the panel the real total BEFORE any work starts, so the
                 // percentage it shows is a percentage of something.
-                this._progressTotal = tasks.length;
-                if (window.loadingProgress && window.loadingProgress.total) {
-                    window.loadingProgress.total(tasks.length);
+                this._progressTotal = featureTotal;
+                if (window.loadingProgress && window.loadingProgress.phase) {
+                    window.loadingProgress.phase('Placing 3D models');
                 }
-                this.runPlaceSlices(tasks);
-                if (debugConfig.enabled) console.log('🎯 Layer processing started (' + tasks.length + ' features)');
+                if (window.loadingProgress && window.loadingProgress.total) {
+                    window.loadingProgress.total(featureTotal);
+                }
+                this.runPlaceSlices(groups);
+                if (debugConfig.enabled) console.log('🎯 Layer processing started (' + featureTotal + ' features)');
             } catch (error) {
                 console.error('🎯 Model renderer error:', error);
             }
@@ -4247,6 +4672,7 @@ window.modelRenderer = {
     // Keeps the original rotation/tilt baked in the matrix and only updates the
     // translation height, so nothing flips when the elevation refines.
     repositionModelsOnDem: function() {
+        if (isFlatGroundMode()) return;
         // No DEM source at all: sampleGroundElevation would answer 0 and we
         // would actively drag every model down to sea level. Do nothing.
         const hasDem = (window.terrainManager && window.terrainManager.getElevation) ||
@@ -4267,7 +4693,14 @@ window.modelRenderer = {
                     if (typeof entry.bridgeSurfaceHeight !== 'number' ||
                         !isFinite(entry.bridgeSurfaceHeight) || !entry.surfacePosition) return;
                     const surfacePosition = entry.surfacePosition;
-                    const groundHeight = sampleGroundElevation(surfacePosition[0], surfacePosition[1]);
+                    const surfaceFeature = entry.surfaceFeature || entry.feature;
+                    const groundHeight = entry.isUnderBridge
+                        ? getUnderBridgeSurface(
+                            surfaceFeature,
+                            entry.bridgeFeature,
+                            surfacePosition
+                        ).height
+                        : sampleFeatureMedianGroundElevation(surfaceFeature, surfacePosition);
                     if (!isFinite(groundHeight)) return;
                     const refinedHeight = groundHeight + (entry.surfaceHeightOffset || 0);
                     const delta = refinedHeight - entry.bridgeSurfaceHeight;
@@ -4293,7 +4726,6 @@ window.modelRenderer = {
                     }
                     entry.bridgeSurfaceHeight = refinedHeight;
                     if (entry.isUnderBridge && entry.underBridgeKey) {
-                        const surfaceFeature = entry.surfaceFeature || entry.feature;
                         const surfaces = surfaceFeature.get('underBridgeSurfaces') || {};
                         const surface = surfaces[entry.underBridgeKey];
                         if (surface) surface.height = groundHeight;
@@ -4327,7 +4759,15 @@ window.modelRenderer = {
                     : (entry.isUnderBridge && entry.surfacePosition
                         ? entry.surfacePosition
                         : [lon, lat]);
-                const demHeight = sampleGroundElevation(referencePosition[0], referencePosition[1]);
+                const demHeight = isBridge
+                    ? sampleFeatureMedianGroundElevation(entry.feature, referencePosition)
+                    : (entry.isUnderBridge
+                        ? getUnderBridgeSurface(
+                            entry.feature,
+                            entry.bridgeFeature,
+                            referencePosition
+                        ).height
+                        : sampleGroundElevation(referencePosition[0], referencePosition[1]));
                 if (demHeight === null || demHeight === undefined || !isFinite(demHeight)) return;
                 if (isBridge) entry.feature.set('bridgeRefHeight', demHeight);
                 if (entry.isUnderBridge && entry.underBridgeKey) {
@@ -4366,6 +4806,22 @@ window.modelRenderer = {
     },
 };
 
+window.addEventListener('mapterhornFlatGroundChanged', function () {
+    const renderer = window.modelRenderer;
+    if (!renderer || !renderer.loadedModels || !window.is3d ||
+        !window.ol3d || !window.ol3d.getEnabled || !window.ol3d.getEnabled()) return;
+
+    const scene = window.ol3d.getCesiumScene && window.ol3d.getCesiumScene();
+    if (!scene) return;
+
+    // Model matrices contain absolute DEM heights; changing terrain providers
+    // alone does not move them. Recreate tracked primitives against the new datum.
+    Array.from(renderer.loadedModels.keys()).forEach(function (key) {
+        renderer.unloadEntry(key, scene);
+    });
+    renderer.addAllModels();
+});
+
 if (typeof debugConfig !== 'undefined' && debugConfig.enabled) {
     console.log('🎯 model_renderer.js loaded');
 }
@@ -4387,6 +4843,15 @@ window.addEventListener('tagOverlayLoaded', function () {
     }
 });
 
+// POI signs are built from the language CSV asynchronously: when the
+// descriptions arrive (or the language changes), redraw the signs already in
+// the scene so they show the current language instead of an empty description.
+window.addEventListener('poiSignsReady', function () {
+    if (window.modelRenderer && window.modelRenderer.refreshPoiSigns) {
+        window.modelRenderer.refreshPoiSigns();
+    }
+});
+
 // When 3D mode ends the Cesium scene is replaced on the next 3D session.
 // All tracked primitives and pooled models from the old scene are dead:
 // forget them so re-entering 3D rebuilds everything in the new scene
@@ -4394,9 +4859,21 @@ window.addEventListener('tagOverlayLoaded', function () {
 window.addEventListener('ol3dDestroyed', function () {
     if (window.modelRenderer) {
         window.modelRenderer.resetLive();
+        window.modelRenderer._session3dId = (window.modelRenderer._session3dId || 0) + 1;
+        window.modelRenderer._pendingAssets = 0;
+        window.modelRenderer._assetReadinessSeen = new WeakSet();
+        window.modelRenderer._publishAssetReadiness();
         window.modelRenderer.modelPool.clear();
         window.modelRenderer._placing = false;
         window.modelRenderer._pendingSweep = false;
+        // The draw-order hook lives on the scene's preUpdate event: detach it
+        // from the dead scene and forget the nudges that were baked into it.
+        if (window.modelRenderer._renderOrderRemove) {
+            try { window.modelRenderer._renderOrderRemove(); } catch (e) { /* already gone */ }
+        }
+        window.modelRenderer._renderOrderRemove = null;
+        window.modelRenderer._renderOrderScene = null;
+        window.modelRenderer._renderOrderApplied = null;
         if (window.modelRenderer.clearPlainResults) window.modelRenderer.clearPlainResults();
         // Forget the dead scene so the next addAllModels() starts a new session
         // even if ol-cesium hands back an equivalent object.
@@ -4421,6 +4898,11 @@ window.addEventListener('ol3dDestroyed', function () {
 // decision to make in the file rather than by typo in an address bar.
 (function applyPrimitiveBudgetOverride() {
     if (typeof window === 'undefined' || !window.location) return;
+    const deviceMemory = Number(window.navigator && window.navigator.deviceMemory) || 4;
+    const deviceBudget = deviceMemory <= 2 ? 6000 : (deviceMemory <= 4 ? 14000 : (deviceMemory <= 8 ? 24000 : 30000));
+    memoryConfig.maxLivePrimitives = Math.min(memoryConfig.maxLivePrimitives, deviceBudget);
+    console.log('🎯 primitive budget set to ' + memoryConfig.maxLivePrimitives +
+        ' for a device reporting ' + deviceMemory + ' GB of memory');
     var match = /[?&]primitives=(\d+)/.exec(window.location.search || '');
     if (!match) return;
     var requested = parseInt(match[1], 10);

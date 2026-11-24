@@ -14258,7 +14258,7 @@
                 "addr:postcode": "08800",
                 "addr:street": "Carrer d'Olèrdola",
                 "addr:housenumber": "4",
-                "entrance": "yes",
+                "entrance": "garage",
                 "source:date": "2015-03-15"
             },
             "geometry": {
@@ -24203,7 +24203,7 @@
                 "source": "Opendata Ajuntament de Vilanova i la Geltrú",
                 "addr:postcode": "08800",
                 "addr:street": "Carrer d'Olèrdola",
-                "entrance": "yes",
+                "entrance": "garage",
                 "source:date": "2015-03-15",
                 "addr:housenumber": "2"
             },

@@ -184,6 +184,13 @@ function getLayerOffsetMeters(tags) {
 // Visual extras (roof primitives / cap / dome entities) per feature
 const roofVisuals = new Map(); // feature -> [{ kind: 'primitive'|'entity', ref }]
 
+/* building=roof (https://wiki.openstreetmap.org/wiki/Key:building) means the
+ * feature IS a roof on supports: carports, canopies, petrol-station roofs,
+ * bus shelters. Extruding it as a closed box from the ground renders a solid
+ * block that does not exist. Instead keep only the top quarter of the walls —
+ * the band right under the roof — and leave the rest open. */
+const ROOF_ONLY_WALL_FRACTION = 1 / 4;  // share of the wall height that stays
+
 // Representative colours for common roof:material=* values
 const ROOF_MATERIAL_COLORS = {
     roof_tiles: 'rgb(158,74,53)',
@@ -1126,6 +1133,12 @@ function createExtrudedBuilding(feature, tags) {
         // Get building height
         let height = getBuildingHeight(tags);
 
+        // building=roof is a roof-only structure: nothing is drawn under it.
+        // Its height comes from getBuildingHeight() unchanged, so the roof
+        // stays exactly where it was; only the base ring is lifted (below).
+        const isRoofOnly = !tags['building:part'] &&
+            (tags.building || '').toString().trim().toLowerCase() === 'roof';
+
         // --- building:part conflicts (Key:building:part / Simple 3D Buildings) ---
         // A feature that already carries a 3D model keeps the model, no extrusion
         if (feature && typeof feature.get === 'function' &&
@@ -1219,6 +1232,10 @@ function createExtrudedBuilding(feature, tags) {
         const roofColorExplicit = !!(tags['roof:colour'] ||
             ROOF_MATERIAL_COLORS[(tags['roof:material'] || '').toString().trim().toLowerCase()]);
 
+        const openFloorLift = isRoofOnly
+            ? Math.max(0, (facadeTop - baseOffset) * (1 - ROOF_ONLY_WALL_FRACTION))
+            : 0;
+
         // Per-vertex DEM ground (MapTerhorn / GeoTIFF): each footprint corner
         // samples the DEM grid EXACTLY (no neighborhood averaging) — the same
         // grid the terrain provider renders from — so the base matches the
@@ -1273,6 +1290,10 @@ function createExtrudedBuilding(feature, tags) {
             positions: cesiumPositions,
             height: height,
             partKind: partKind,
+            isRoofOnly: isRoofOnly,
+            // Meters the base ring starts above the ground (roof-only
+            // structures); createBuildingEntity() raises the vertices by it.
+            openFloorLift: openFloorLift,
             baseOffset: baseOffset,
             layerOffset: layerOffset,
             outerLonLat: outerLonLat,
@@ -1338,8 +1359,23 @@ function createBuildingEntity(buildingData, container) {
 
         if (buildingLog()) console.log(`🏗️ Creating entity with ${positions.length} positions, height: ${height}m, color:`, color);
 
+        // building=roof: lift the base ring so the volume only covers the band
+        // next to the roof (open floor). The base vertices carry the sampled
+        // ground height (perPositionHeight), so raising each one by the same
+        // amount keeps the ring parallel to the terrain under the footprint.
+        // The lift must happen in cartographic space: positions are ECEF, and
+        // their z component is not height.
+        const openFloorLift = buildingData.openFloorLift || 0;
+        const basePositions = openFloorLift > 0
+            ? positions.map(function (p) {
+                const carto = Cesium.Cartographic.fromCartesian(p);
+                return Cesium.Cartesian3.fromRadians(
+                    carto.longitude, carto.latitude, carto.height + openFloorLift);
+            })
+            : positions;
+
         // Create polygon hierarchy
-        const hierarchy = new Cesium.PolygonHierarchy(positions);
+        const hierarchy = new Cesium.PolygonHierarchy(basePositions);
 
         // Create material with better appearance and texture support
         let material;
