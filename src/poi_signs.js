@@ -408,9 +408,9 @@
         const pad = 26;
         const emojiSize = 56;
         const nameSize = 40;
-        const tagSize = 24;
-        const descSize = 22;
-        const descLineHeight = 28;
+        const tagSize = 26;
+        const descSize = 30;
+        const descLineHeight = 30;
         const textX = pad + emojiSize + 18;
         const width = 720;
         const textWidth = width - textX - pad;
