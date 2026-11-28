@@ -9,6 +9,20 @@
     //scale: { tag: 'height', type: 'number', default: 1 },
    // heightOffset: { tag: 'min_height', type: 'number', default: 0 }}
 	//The same syntax works for repetition settings, such as interval, spacing, and maxModels. Numeric tag values are converted to numbers; default is used if a tag is missing or invalid. Optional types include number, string, boolean, and json.
+// GeoJSON zone override (points). Copy the default entry, keep the same tags,
+// add `geojson` and the model/scale the zone should use instead:
+//
+//   { tags: ['amenity=bench'], model: 'w_amenity_bench.gltf', geometryType: 'point',
+//     config: { scale: 1.0, heightOffset: 0.0, rotation: [0, Math.PI / 2, 0] } },
+//   { tags: ['amenity=bench'], geojson: 'limit_molivent', model: 'w_amenity_bench.gltf',
+//     geometryType: 'point', config: { scale: 2.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
+//
+// The geojson is a file in src/ (with or without '.geojson'), an array of names
+// also works. It only applies inside its polygon; a missing file logs one warning
+// and the entry without `geojson` stays in charge.
+// Test: a bench inside the polygon uses the second entry's model/scale, a bench
+// outside it uses the first; a missing file logs one warning and leaves the
+// first entry in charge.
 const nodeModelMappings = [
     { tags: ['amenity=bench'], model: 'w_amenity_bench.gltf', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, Math.PI / 2, 0] } },  // seat faces +X, so PI/2 turns it 90 deg right: the direction tag lands on the seat side (fence behind)
     { tags: ['amenity=bicycle_parking'], model: 'w_amenity_bicycle_parking.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Bicycle parking model for amenity=bicycle_parking
@@ -31,7 +45,8 @@ const nodeModelMappings = [
     { tags: ['highway=traffic_signals', 'traffic_signals=pedestrian_crossing'], model: 'w_highway_traffic_signals_pedestrian.gltf', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Traffic signals model for pedestrian crossing
     { tags: ['highway=traffic_signals'], model: 'w_highway_traffic_signals.gltf', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Traffic signals model for highway=traffic_signals
     { tags: ['man_made=pole'], model: 'w_man_made_pole.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Tree model for natural=tree
-    { tags: ['natural=tree'], model: 'w_natural_tree.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Tree model for natural=tree
+    	{ tags: ['natural=tree'], geojson: 'limit_molivent', model: 'w_highway_bus_stop.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Street lamp model for highway=street_lamp
+	{ tags: ['natural=tree'], model: 'w_natural_tree.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },  // Tree model for natural=tree
     { tags: ['playground=slide'], model: 'w_playground_slide.gltf', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // slide
     { tags: ['playground=springy'], model: 'w_playground_spring.gltf', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // slide
     { tags: ['playground=swing'], model: 'w_playground_swing.glb', geometryType: 'point', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } }, // Could use forest model
@@ -355,8 +370,119 @@ function buildMappingIndex(mappings) {
     return index;
 }
 
-function findTagMapping(mappings, tags, areaPrefixFallback = false) {
+// ---------------------------------------------------------------------------
+// Zone overrides: a mapping may name a GeoJSON it only applies inside of.
+//
+//   { tags: ['amenity=bench'], model: 'w_amenity_bench.gltf' }                       // default
+//   { tags: ['amenity=bench'], geojson: 'limit_molivent', model: 'bench_zone.glb' }  // inside that polygon
+//
+// The name is a file in src/ ("limit_molivent", "limit_molivent.geojson" or the
+// full "src/limit_molivent.geojson"); an array of names is accepted too. Inside
+// the polygon the entry with `geojson` wins; outside it, or for any tag it does
+// not cover, the entry without `geojson` is used. A file that cannot be loaded
+// is only a warning: its entries never apply.
+//
+// Containment is OpenLayers' own point-in-polygon, on the geometry parsed from
+// the file, so no custom polygon math is needed.
+// ---------------------------------------------------------------------------
+const zoneGeojsonGeometries = new Map(); // file -> ol polygon geometries ([] when failed)
+const zoneGeojsonPending = new Set();
+let zoneGeojsonScanDone = false;
+
+/** "limit_molivent", "limit_molivent.geojson" or "src/limit_molivent.geojson" -> file path. */
+function zoneGeojsonFile(name) {
+    if (typeof name !== 'string' || !name.trim()) return null;
+    let file = name.trim().replace(/^\.\//, '');
+    if (!/\.geojson$/i.test(file)) file += '.geojson';
+    if (file.indexOf('/') === -1) file = 'src/' + file;
+    return file;
+}
+
+/** GeoJSON files this mapping is limited to; [] means it always applies. */
+function mappingZoneGeojsons(mapping) {
+    if (!mapping || !mapping.geojson) return [];
+    const names = Array.isArray(mapping.geojson) ? mapping.geojson : [mapping.geojson];
+    return names.map(zoneGeojsonFile).filter(Boolean);
+}
+
+function loadZoneGeojson(file) {
+    if (!file || zoneGeojsonGeometries.has(file) || zoneGeojsonPending.has(file)) return;
+    zoneGeojsonPending.add(file);
+    Promise.resolve()
+        .then(() => {
+            if (typeof ol === 'undefined' || !ol.format || typeof fetch !== 'function') {
+                throw new Error('OpenLayers or fetch is not available');
+            }
+            return fetch(file).then(response => {
+                if (!response.ok) throw new Error('HTTP ' + response.status);
+                return response.json();
+            });
+        })
+        .then(geojson => {
+            const format = new ol.format.GeoJSON();
+            const geometries = geojson && (geojson.type === 'FeatureCollection' || geojson.type === 'Feature')
+                ? format.readFeatures(geojson).map(feature => feature.getGeometry())
+                : [format.readGeometry(geojson)];
+            const polygons = geometries.filter(geometry => geometry && (
+                geometry.getType() === 'Polygon' || geometry.getType() === 'MultiPolygon'));
+            if (!polygons.length) throw new Error('no polygon geometry');
+            zoneGeojsonGeometries.set(file, polygons);
+        })
+        .catch(error => {
+            zoneGeojsonGeometries.set(file, []);
+            console.warn(`🗺️ Zone geojson "${file}" not loaded, its model entries are ignored and the default configuration is used`, error);
+        })
+        .then(() => zoneGeojsonPending.delete(file));
+}
+
+/** Load every geojson named by a mapping, once the three mapping lists exist. */
+function loadZoneGeojsons() {
+    if (zoneGeojsonScanDone) return;
+    const sources = [nodeModelMappings];
+    if (window.lineRepetition && window.lineRepetition.getModelMappings) {
+        sources.push(window.lineRepetition.getModelMappings());
+    }
+    if (window.areaRepetition && window.areaRepetition.areaRepetitionConfigs) {
+        sources.push(window.areaRepetition.areaRepetitionConfigs);
+    }
+    if (sources.length < 3) return; // line/area modules still loading
+    zoneGeojsonScanDone = true;
+    sources.forEach(mappings => (mappings || []).forEach(mapping =>
+        mappingZoneGeojsons(mapping).forEach(loadZoneGeojson)));
+}
+
+/** True when the [lon, lat] point is inside the named zone geojson. */
+function isInsideZoneGeojson(fileOrName, lonLat) {
+    loadZoneGeojsons();
+    const file = zoneGeojsonFile(fileOrName);
+    if (!file || !lonLat) return false;
+    const geometries = zoneGeojsonGeometries.get(file);
+    if (!geometries) {
+        loadZoneGeojson(file);
+        return false;
+    }
+    return geometries.some(geometry => {
+        try { return geometry.intersectsCoordinate(lonLat); } catch (e) { return false; }
+    });
+}
+
+/** Where a feature sits, in lon/lat: the point itself, or the way node handled now. */
+function getFeatureLonLat(wayCoordinates, nodeIndex, orientationContext) {
+    if (orientationContext && Array.isArray(orientationContext.pointLonLat)) {
+        return orientationContext.pointLonLat;
+    }
+    if (Array.isArray(wayCoordinates) && wayCoordinates.length) {
+        const index = Number.isInteger(nodeIndex) && nodeIndex >= 0 && nodeIndex < wayCoordinates.length
+            ? nodeIndex
+            : 0;
+        return wayCoordinates[index];
+    }
+    return null;
+}
+
+function findTagMapping(mappings, tags, lonLat = null, areaPrefixFallback = false) {
     if (!Array.isArray(mappings) || !tags || typeof tags !== 'object') return null;
+    loadZoneGeojsons();
 
     let index = mappingIndexes.get(mappings);
     if (!index) {
@@ -377,17 +503,27 @@ function findTagMapping(mappings, tags, areaPrefixFallback = false) {
     });
     candidates.sort((a, b) => a.order - b.order);
 
+    const matchesTags = (mapping) => mapping.tags.every(tag => {
+        const [key, value] = tag.split('=');
+        let tagValue = tags[key];
+        if (tagValue === undefined && areaPrefixFallback && key.startsWith('area:') && tags.area === 'yes') {
+            tagValue = tags[key.slice(5)];
+        }
+        return value === '*' ? tagValue !== undefined : tagValue === value;
+    });
+
+    // A `geojson` entry is active only inside its polygon; it is checked first
+    // so it wins there. Entries without `geojson` stay the default everywhere.
     for (const candidate of candidates) {
-        const mapping = candidate.mapping;
-        const matches = mapping.tags.every(tag => {
-            const [key, value] = tag.split('=');
-            let tagValue = tags[key];
-            if (tagValue === undefined && areaPrefixFallback && key.startsWith('area:') && tags.area === 'yes') {
-                tagValue = tags[key.slice(5)];
-            }
-            return value === '*' ? tagValue !== undefined : tagValue === value;
-        });
-        if (matches) return mapping;
+        const files = mappingZoneGeojsons(candidate.mapping);
+        if (!files.length) continue;
+        if (files.some(file => isInsideZoneGeojson(file, lonLat)) && matchesTags(candidate.mapping)) {
+            return candidate.mapping;
+        }
+    }
+    for (const candidate of candidates) {
+        if (mappingZoneGeojsons(candidate.mapping).length) continue;
+        if (matchesTags(candidate.mapping)) return candidate.mapping;
     }
     return null;
 }
@@ -428,7 +564,8 @@ function getModelForTags(tags, wayCoordinates = null, nodeIndex = null, geometry
             : null;
     }
 
-    const mapping = findTagMapping(nodeModelMappings, tags);
+    const lonLat = getFeatureLonLat(wayCoordinates, nodeIndex, orientationContext);
+    const mapping = findTagMapping(nodeModelMappings, tags, lonLat);
     if (!mapping) return null;
     const bearing = resolveBearing(tags, wayCoordinates, nodeIndex, orientationContext);
     const resolvedMapping = resolveConfig(mapping, tags);
@@ -501,6 +638,10 @@ function getModelMaxDimension(filename) {
 window.models = {
     nodeModelMappings,
     modelMappings: nodeModelMappings,
+    getFeatureLonLat,
+    mappingZoneGeojsons,
+    isInsideZoneGeojson,
+    loadZoneGeojsons,
     getModelForTags,
     findTagMapping,
     invalidateMappingIndex,
@@ -513,5 +654,12 @@ window.models = {
     isLineStringClosed,
     getModelMaxDimension
 };
+
+// Start the zone geojson loads once the other mapping lists exist; features
+// rendered before a file arrives use the default configuration until then.
+if (typeof window !== 'undefined' && window.addEventListener) {
+    window.addEventListener('load', loadZoneGeojsons);
+}
+setTimeout(loadZoneGeojsons, 0);
 
 console.log('models.js loaded. Point model mappings:', nodeModelMappings.length);

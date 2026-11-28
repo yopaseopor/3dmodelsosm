@@ -1,0 +1,344 @@
+{
+    "type": "FeatureCollection",
+    "generator": "JOSM",
+    "bbox": [
+        1.71615730000,
+        41.21893680000,
+        1.71625930000,
+        41.21899060000
+    ],
+    "features": [
+        {
+            "type": "Feature",
+            "properties": {
+                "admin_level": "10",
+                "boundary": "administrative",
+                "name": "Sant Joan",
+                "name:ca": "Sant Joan",
+                "place": "neighbourhood",
+                "type": "boundary"
+            },
+            "geometry": {
+                "type": "MultiPolygon",
+                "coordinates": [
+                    [
+                        [
+                            [
+                                1.71451780000,
+                                41.22185960000
+                            ],
+                            [
+                                1.71423200000,
+                                41.22235030000
+                            ],
+                            [
+                                1.71301960000,
+                                41.22397230000
+                            ],
+                            [
+                                1.71122790000,
+                                41.22324600000
+                            ],
+                            [
+                                1.71115280000,
+                                41.22348000000
+                            ],
+                            [
+                                1.71102400000,
+                                41.22375440000
+                            ],
+                            [
+                                1.71086310000,
+                                41.22394810000
+                            ],
+                            [
+                                1.71045540000,
+                                41.22431120000
+                            ],
+                            [
+                                1.71700000000,
+                                41.22758740000
+                            ],
+                            [
+                                1.71988590000,
+                                41.22471460000
+                            ],
+                            [
+                                1.72064780000,
+                                41.22395620000
+                            ],
+                            [
+                                1.72184940000,
+                                41.22440810000
+                            ],
+                            [
+                                1.72258740000,
+                                41.22318070000
+                            ],
+                            [
+                                1.72358650000,
+                                41.22151910000
+                            ],
+                            [
+                                1.72378060000,
+                                41.22119630000
+                            ],
+                            [
+                                1.71761680000,
+                                41.21937720000
+                            ],
+                            [
+                                1.71620610000,
+                                41.21896090000
+                            ],
+                            [
+                                1.71480260000,
+                                41.22137060000
+                            ],
+                            [
+                                1.71451780000,
+                                41.22185960000
+                            ]
+                        ]
+                    ]
+                ]
+            }
+        },
+        {
+            "type": "Feature",
+            "properties": {
+                "admin_level": "10",
+                "boundary": "administrative"
+            },
+            "geometry": {
+                "type": "LineString",
+                "coordinates": [
+                    [
+                        1.71620610000,
+                        41.21896090000
+                    ],
+                    [
+                        1.71761680000,
+                        41.21937720000
+                    ]
+                ]
+            }
+        },
+        {
+            "type": "Feature",
+            "properties": {
+                "admin_level": "10",
+                "boundary": "administrative"
+            },
+            "geometry": {
+                "type": "LineString",
+                "coordinates": [
+                    [
+                        1.71620610000,
+                        41.21896090000
+                    ],
+                    [
+                        1.71480260000,
+                        41.22137060000
+                    ]
+                ]
+            }
+        },
+        {
+            "type": "Feature",
+            "properties": {
+                "admin_level": "10",
+                "boundary": "administrative"
+            },
+            "geometry": {
+                "type": "LineString",
+                "coordinates": [
+                    [
+                        1.70439360000,
+                        41.22094610000
+                    ],
+                    [
+                        1.70429710000,
+                        41.22084930000
+                    ]
+                ]
+            }
+        },
+        {
+            "type": "Feature",
+            "properties": {
+                "admin_level": "10",
+                "boundary": "administrative"
+            },
+            "geometry": {
+                "type": "LineString",
+                "coordinates": [
+                    [
+                        1.71988590000,
+                        41.22471460000
+                    ],
+                    [
+                        1.71700000000,
+                        41.22758740000
+                    ]
+                ]
+            }
+        },
+        {
+            "type": "Feature",
+            "properties": {
+                "admin_level": "10",
+                "boundary": "administrative"
+            },
+            "geometry": {
+                "type": "LineString",
+                "coordinates": [
+                    [
+                        1.72258740000,
+                        41.22318070000
+                    ],
+                    [
+                        1.72184940000,
+                        41.22440810000
+                    ],
+                    [
+                        1.72064780000,
+                        41.22395620000
+                    ],
+                    [
+                        1.71988590000,
+                        41.22471460000
+                    ]
+                ]
+            }
+        },
+        {
+            "type": "Feature",
+            "properties": {
+                "admin_level": "10",
+                "boundary": "administrative"
+            },
+            "geometry": {
+                "type": "LineString",
+                "coordinates": [
+                    [
+                        1.71761680000,
+                        41.21937720000
+                    ],
+                    [
+                        1.72378060000,
+                        41.22119630000
+                    ]
+                ]
+            }
+        },
+        {
+            "type": "Feature",
+            "properties": {
+                "admin_level": "10",
+                "boundary": "administrative"
+            },
+            "geometry": {
+                "type": "LineString",
+                "coordinates": [
+                    [
+                        1.72378060000,
+                        41.22119630000
+                    ],
+                    [
+                        1.72358650000,
+                        41.22151910000
+                    ],
+                    [
+                        1.72258740000,
+                        41.22318070000
+                    ]
+                ]
+            }
+        },
+        {
+            "type": "Feature",
+            "properties": {
+                "admin_level": "10",
+                "boundary": "administrative"
+            },
+            "geometry": {
+                "type": "LineString",
+                "coordinates": [
+                    [
+                        1.71451780000,
+                        41.22185960000
+                    ],
+                    [
+                        1.71423200000,
+                        41.22235030000
+                    ],
+                    [
+                        1.71301960000,
+                        41.22397230000
+                    ],
+                    [
+                        1.71122790000,
+                        41.22324600000
+                    ],
+                    [
+                        1.71115280000,
+                        41.22348000000
+                    ],
+                    [
+                        1.71102400000,
+                        41.22375440000
+                    ],
+                    [
+                        1.71086310000,
+                        41.22394810000
+                    ],
+                    [
+                        1.71045540000,
+                        41.22431120000
+                    ]
+                ]
+            }
+        },
+        {
+            "type": "Feature",
+            "properties": {
+                "admin_level": "10",
+                "boundary": "administrative"
+            },
+            "geometry": {
+                "type": "LineString",
+                "coordinates": [
+                    [
+                        1.71700000000,
+                        41.22758740000
+                    ],
+                    [
+                        1.71045540000,
+                        41.22431120000
+                    ]
+                ]
+            }
+        },
+        {
+            "type": "Feature",
+            "properties": {
+                "admin_level": "10",
+                "boundary": "administrative"
+            },
+            "geometry": {
+                "type": "LineString",
+                "coordinates": [
+                    [
+                        1.71480260000,
+                        41.22137060000
+                    ],
+                    [
+                        1.71451780000,
+                        41.22185960000
+                    ]
+                ]
+            }
+        }
+    ]
+}

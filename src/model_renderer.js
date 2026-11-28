@@ -2325,10 +2325,14 @@ window.modelRenderer = {
             catch (e) { console.error('🏠 House-number label failed, skipping:', e); }
         }
 
-        // Colored POI signs (amenity/tourism/leisure/shop/office), independent
-        // of whether the feature also has a 3D model.
+        // Colored POI signs (amenity/tourism/leisure/shop/office/highway),
+        // independent of whether the feature also has a 3D model. Roads and
+        // paths are lines, so they are offered too: describe() only accepts
+        // named or ref-bearing highway features.
         if (geometry && geometry.getType &&
-            (geometry.getType() === 'Point' || geometry.getType() === 'Polygon' || geometry.getType() === 'MultiPolygon')) {
+            (geometry.getType() === 'Point' || geometry.getType() === 'Polygon' ||
+             geometry.getType() === 'MultiPolygon' || geometry.getType() === 'LineString' ||
+             geometry.getType() === 'MultiLineString')) {
             try { this.addPoiSign(feature, cesiumScene, layer); }
             catch (e) { console.error('🏷️ POI sign failed, skipping:', e); }
         }
@@ -4267,6 +4271,18 @@ window.modelRenderer = {
             coords = geometry.getCoordinates();
         } else if (type === 'Polygon' || type === 'MultiPolygon') {
             coords = ol.extent.getCenter(geometry.getExtent());
+        } else if (type === 'LineString' || type === 'MultiLineString') {
+            // Roads and paths: sign the middle of their longest part, the same
+            // anchor poi_signs.js uses to test emoji zones.
+            const parts = type === 'LineString'
+                ? [geometry.getCoordinates()]
+                : geometry.getCoordinates();
+            let longest = null;
+            for (let i = 0; i < (parts || []).length; i++) {
+                if (parts[i] && (!longest || parts[i].length > longest.length)) longest = parts[i];
+            }
+            if (!longest || !longest.length) return false;
+            coords = longest[Math.floor(longest.length / 2)];
         } else {
             return false;
         }

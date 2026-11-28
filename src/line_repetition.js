@@ -27,6 +27,18 @@
 
 	
 	
+    // GeoJSON zone override (lines). Copy the default entry, keep the same tags,
+    // add `geojson` and the model/scale the zone should use instead:
+    //
+    //   { tags: ['highway=footway'], model: 'w_highway_footway.glb',
+    //     config: { scale: 1.0, heightOffset: 0.0, rotation: [0, -Math.PI / 4, 0] } },
+    //   { tags: ['highway=footway'], geojson: 'limit_molivent', model: 'w_highway_cycleway.glb',
+    //     config: { scale: 4.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
+    //
+    // A line uses the zonal entry when its node is inside the geojson; spacing,
+    // interval and maxModels still come from lineRepetitionConfig below.
+    // Test: a footway inside the polygon repeats the cycleway model, one outside
+    // keeps the footway model; a missing geojson keeps the default everywhere.
     const lineModelMappings = [
         { tags: ['barrier=kerb'], model: 'w_barrier_kerb.gltf', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
         { tags: ['road_markings=edge_line', 'stroke=solid'], model: 'w_stroke_solid.glb', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
@@ -43,7 +55,8 @@
         { tags: ['fence_type=chain_link'], model: 'w_barrier_fence_wood.gltf', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
         { tags: ['fence_type=wire'], model: 'w_barrier_fence_wood.gltf', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
         { tags: ['fence_type=pole'], model: 'w_barrier_fence_wood.gltf', config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
-        { tags: ['barrier=wall', 'material=brick'], model: 'w_barrier_wall_material_brick.glb', config: { scale: { tag: 'height', type: 'number', default: 1 }, heightOffset: 0.0, rotation: [0, 0, 0] } },
+        { tags: ['barrier=wall', 'material=brick'], geojson: 'limit_molivent', model: 'w_barrier_fence_wood.gltf', config: { scale: { tag: 'height', type: 'number', default: 1 }, heightOffset: 0.0, rotation: [0, 0, 0] } },
+		{ tags: ['barrier=wall', 'material=brick'], model: 'w_barrier_wall_material_brick.glb', config: { scale: { tag: 'height', type: 'number', default: 1 }, heightOffset: 0.0, rotation: [0, 0, 0] } },
 		{ tags: ['barrier=wall'], model: 'w_barrier_wall.glb', config: { scale: { tag: 'height', type: 'number', default: 1 }, heightOffset: 0.0, rotation: [0, 0, 0] } },
 		{ tags: ['barrier=retaining_wall'], model: 'w_barrier_wall.glb', config: { scale: { tag: 'height', type: 'number', default: 1 }, heightOffset: 0.0, rotation: [0, 0, 0] } },
         { tags: ['highway=cycleway'], model: 'w_highway_cycleway.glb', config: { scale: 4.0, heightOffset: 0.0, rotation: [0, 0, 0] } },
@@ -235,9 +248,14 @@
             : config;
     }
 
-    function getModelForTags(tags) {
+    // wayCoordinates/nodeIndex/orientationContext locate the line for geojson
+    // overrides: an entry with `geojson` only applies inside that polygon.
+    function getModelForTags(tags, wayCoordinates, nodeIndex, orientationContext) {
+        const lonLat = window.models && window.models.getFeatureLonLat
+            ? window.models.getFeatureLonLat(wayCoordinates, nodeIndex, orientationContext)
+            : null;
         const mapping = window.models && window.models.findTagMapping
-            ? window.models.findTagMapping(lineModelMappings, tags)
+            ? window.models.findTagMapping(lineModelMappings, tags, lonLat)
             : null;
         if (!mapping) return null;
 

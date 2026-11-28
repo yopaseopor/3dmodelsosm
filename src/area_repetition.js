@@ -23,6 +23,20 @@ const areaRepetitionDebugConfig = {
     //scale: { tag: 'height', type: 'number', default: 1 },
    // heightOffset: { tag: 'min_height', type: 'number', default: 0 }}
 	//The same syntax works for repetition settings, such as interval, spacing, and maxModels. Numeric tag values are converted to numbers; default is used if a tag is missing or invalid. Optional types include number, string, boolean, and json.
+// GeoJSON zone override (areas). Copy the default entry, keep the same tags, add
+// `geojson` and the model the zone should use instead:
+//
+//   { tags: ['amenity=parking'], model: 'i_parking.png',
+//     config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] },
+//     spacing: 3, maxModels: 10, description: 'Parking areas' },
+//   { tags: ['amenity=parking'], geojson: 'limit_molivent', model: 'i_parking_diagonal.jpg',
+//     config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] },
+//     spacing: 3, maxModels: 10, description: 'Parking areas, zone texture' },
+//
+// A polygon uses the zonal entry when its first vertex is inside the geojson;
+// the name may also be written with '.geojson' or as 'src/limit_molivent.geojson'.
+// Test: a parking polygon inside the geojson gets the diagonal texture, one
+// outside keeps i_parking.png; a missing geojson leaves the default in charge.
 const areaRepetitionConfigs = [
     {
         tags: ['natural=wood'],
@@ -206,10 +220,110 @@ const areaRepetitionConfigs = [
         spacing: 1.0, // 5 meter spacing for area-tagged residential streets
         maxModels: 10000,
         description: 'Area-tagged residential street areas'
+           },
+       {
+        tags: ['area:highway=trunk'],
+        model: 'i_asfalt.jpg',
+		render_order: 1,
+        config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] },
+        spacing: 1.0, // 5 meter spacing for area-tagged residential streets
+        maxModels: 10000,
+        description: 'Area-tagged residential street areas'
+        },
+       {
+        tags: ['area:highway=trunk_link'],
+        model: 'i_asfalt.jpg',
+		render_order: 1,
+        config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] },
+        spacing: 1.0, // 5 meter spacing for area-tagged residential streets
+        maxModels: 10000,
+        description: 'Area-tagged residential street areas'
+    },
+       {
+        tags: ['area:highway=primary'],
+        model: 'i_asfalt.jpg',
+		render_order: 1,
+        config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] },
+        spacing: 1.0, // 5 meter spacing for area-tagged residential streets
+        maxModels: 10000,
+        description: 'Area-tagged residential street areas'
+      },
+       {
+        tags: ['area:highway=primary_link'],
+        model: 'i_asfalt.jpg',
+		render_order: 1,
+        config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] },
+        spacing: 1.0, // 5 meter spacing for area-tagged residential streets
+        maxModels: 10000,
+        description: 'Area-tagged residential street areas'
+    },
+       {
+        tags: ['area:highway=secondary'],
+        model: 'i_asfalt.jpg',
+		render_order: 1,
+        config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] },
+        spacing: 1.0, // 5 meter spacing for area-tagged residential streets
+        maxModels: 10000,
+        description: 'Area-tagged residential street areas'
+    },
+       {
+        tags: ['area:highway=secondary_link'],
+        model: 'i_asfalt.jpg',
+		render_order: 1,
+        config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] },
+        spacing: 1.0, // 5 meter spacing for area-tagged residential streets
+        maxModels: 10000,
+        description: 'Area-tagged residential street areas'
+    },
+       {
+        tags: ['area:highway=tertiary'],
+        model: 'i_asfalt.jpg',
+		render_order: 1,
+        config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] },
+        spacing: 1.0, // 5 meter spacing for area-tagged residential streets
+        maxModels: 10000,
+        description: 'Area-tagged residential street areas'
+    },
+       {
+        tags: ['area:highway=tertiary_link'],
+        model: 'i_asfalt.jpg',
+		render_order: 1,
+        config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] },
+        spacing: 1.0, // 5 meter spacing for area-tagged residential streets
+        maxModels: 10000,
+        description: 'Area-tagged residential street areas'
+        },
+       {
+        tags: ['area:highway=unclassified'],
+        model: 'i_asfalt.jpg',
+		render_order: 1,
+        config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] },
+        spacing: 1.0, // 5 meter spacing for area-tagged residential streets
+        maxModels: 10000,
+        description: 'Area-tagged residential street areas'
+        },
+       {
+        tags: ['area:highway=service'],
+        model: 'i_asfalt.jpg',
+		render_order: 1,
+        config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] },
+        spacing: 1.0, // 5 meter spacing for area-tagged residential streets
+        maxModels: 10000,
+        description: 'Area-tagged residential street areas'
     },
        {
         tags: ['area:highway=residential'],
         model: 'i_asfalt.jpg',
+		render_order: 1,
+        config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] },
+        spacing: 1.0, // 5 meter spacing for area-tagged residential streets
+        maxModels: 10000,
+        description: 'Area-tagged residential street areas'
+       },
+       {
+        tags: ['area:highway=residential'],
+		geojson: 'limit_molivent',
+        model: 'i_asfalt_verd.jpg',
 		render_order: 1,
         config: { scale: 1.0, heightOffset: 0.0, rotation: [0, 0, 0] },
         spacing: 1.0, // 5 meter spacing for area-tagged residential streets
@@ -393,42 +507,61 @@ const areaRepetitionConfigs = [
 ];
 
 /**
- * Get area repetition configuration for given tags
+ * Get area repetition configuration for given tags.
+ *
+ * An entry with `geojson` only applies inside that file and wins over the
+ * plain entry with the same tags (same rule as models.js findTagMapping);
+ * everywhere else the plain entries are the default.
  * @param {object} tags - OSM tags object
+ * @param {Array<number>} [lonLat] - where the polygon is, to test the geojsons
  * @returns {object|null} Configuration object or null if no match
  */
-function getAreaRepetitionConfig(tags) {
+function getAreaRepetitionConfig(tags, lonLat = null) {
     if (areaRepetitionDebugConfig.enabled && areaRepetitionDebugConfig.logConfigMatching) console.log(`🏞️ Checking area repetition configs for tags:`, tags);
 
-    for (const config of areaRepetitionConfigs) {
-        // Skip wildcard/default config for now
-        if (config.tags[0] === '*') {
-            continue;
-        }
+    const zoneFiles = (config) => window.models && window.models.mappingZoneGeojsons
+        ? window.models.mappingZoneGeojsons(config)
+        : [];
+    const insideZone = (config) => zoneFiles(config).some(file =>
+        window.models && window.models.isInsideZoneGeojson
+            ? window.models.isInsideZoneGeojson(file, lonLat)
+            : false);
 
-        // Check if all required tags match
-        const allMatch = config.tags.every(tag => {
+    // Check if all required tags match
+    const matchesTags = (config) => {
+        // Skip wildcard/default config for now
+        if (config.tags[0] === '*') return false;
+
+        return config.tags.every(tag => {
             const [key, value] = tag.split('=');
             let tagValue = tags[key];
-            
+
             // BUG FIX: Handle Overpass returned areas which have area=yes + original tags (without area: prefix)
             // If config uses area: prefix tag, also check the original unprefixed tag when feature has area=yes
             if (tagValue === undefined && key.startsWith('area:') && tags['area'] === 'yes') {
                 const originalKey = key.substring(5); // remove 'area:' prefix
                 tagValue = tags[originalKey];
             }
-            
+
             const matches = value === '*'
                 ? tagValue !== undefined
                 : tagValue === value;
             if (areaRepetitionDebugConfig.enabled && areaRepetitionDebugConfig.logConfigMatching) console.log(`🏞️ Checking area config tag ${key}=${value}, found: ${tagValue}, matches: ${matches}`);
             return matches;
         });
+    };
 
-        if (allMatch) {
-            if (areaRepetitionDebugConfig.enabled) console.log(`🏞️ Found matching area repetition config:`, config.description);
-            return resolveConfigForTags(config, tags);
-        }
+    // Geojson-limited entries win inside their polygon...
+    for (const config of areaRepetitionConfigs) {
+        if (!zoneFiles(config).length || !insideZone(config) || !matchesTags(config)) continue;
+        if (areaRepetitionDebugConfig.enabled) console.log(`🏞️ Found matching area repetition config:`, config.description);
+        return resolveConfigForTags(config, tags);
+    }
+    // ...the plain ones are the default everywhere else.
+    for (const config of areaRepetitionConfigs) {
+        if (zoneFiles(config).length || !matchesTags(config)) continue;
+        if (areaRepetitionDebugConfig.enabled) console.log(`🏞️ Found matching area repetition config:`, config.description);
+        return resolveConfigForTags(config, tags);
     }
 
     if (areaRepetitionDebugConfig.enabled) console.log(`🏞️ No specific area repetition config found, will use default`);
@@ -449,7 +582,12 @@ function getAreaRenderOrder(tags, config) {
 }
 
 function getModelForTags(tags, wayCoordinates = null, nodeIndex = null, orientationContext = null) {
-    const areaConfig = getAreaRepetitionConfig(tags);
+    // Polygons have no way coordinates here; generateAreaRepetitions() tests
+    // the polygon itself for geojson-limited entries.
+    const lonLat = window.models && window.models.getFeatureLonLat
+        ? window.models.getFeatureLonLat(wayCoordinates, nodeIndex, orientationContext)
+        : null;
+    const areaConfig = getAreaRepetitionConfig(tags, lonLat);
     if (!areaConfig) return null;
 
     const bearing = window.models && window.models.resolveBearing
@@ -469,18 +607,6 @@ function getModelForTags(tags, wayCoordinates = null, nodeIndex = null, orientat
 }
 
 /**
- * Convert meters to degrees at a given latitude
- * @param {number} meters - Distance in meters
- * @param {number} latitude - Latitude in degrees
- * @returns {Array<number>} [lonDegrees, latDegrees]
- */
-function metersToDegrees(meters, latitude) {
-    const latDegrees = meters / 111320; // 1 degree latitude ≈ 111.32 km
-    const lonDegrees = meters / (111320 * Math.cos(latitude * Math.PI / 180)); // Adjust for longitude
-    return [lonDegrees, latDegrees];
-}
-
-/**
  * Generate area repetitions for filling a polygon with models
  * @param {Array<Array<number>>} coordinates - Array of [lon, lat] coordinates forming the polygon
  * @param {object} tags - OSM tags object
@@ -494,8 +620,9 @@ function generateAreaRepetitions(coordinates, tags, holes = []) {
         return [];
     }
 
-    // Get configuration for this area type
-    const config = getAreaRepetitionConfig(tags) || resolveConfigForTags(
+    // Get configuration for this area type. The polygon's first vertex is the
+    // point tested against the `geojson`-limited entries.
+    const config = getAreaRepetitionConfig(tags, coordinates[0]) || resolveConfigForTags(
         areaRepetitionConfigs.find(c => c.tags[0] === '*'),
         tags
     );
@@ -510,9 +637,6 @@ function generateAreaRepetitions(coordinates, tags, holes = []) {
     // model covering the polygon); when no textureRepeatCount is set the model
     // instances are placed on a fixed-rotation-meter grid.
     const isImageFile = modelFilename && /\.jpe?g$/i.test(modelFilename) || /\.png$/i.test(modelFilename);
-    const isGlbOrGltf = modelFilename && /\.(glb|gltf)$/i.test(modelFilename);
-    const hasTextureRepeatOrRot = config.textureRepeatCount !== undefined ||
-                                  config.textureRotationOffsetDegrees !== undefined;
     // NOTE: GLB/GLTF models ALWAYS use grid instancing — never the shader-tile path.
     // Shader tiles work only for image textures stretched over a single polygon.
     const needsPolygonTexture = isImageFile || tags['manhole'] === 'drain';
